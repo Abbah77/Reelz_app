@@ -142,4 +142,3 @@ Java_com_streamapp_scanner_NativeScanner_extractM3u8FromHtml(
     std::string m3u8 = extractor.extractM3u8(html);
     return env->NewStringUTF(m3u8.c_str());
 }
-
