@@ -84,4 +84,3 @@ dependencies {
     implementation(libs.palette)
     debugImplementation(libs.compose.ui.tooling)
 }
-
