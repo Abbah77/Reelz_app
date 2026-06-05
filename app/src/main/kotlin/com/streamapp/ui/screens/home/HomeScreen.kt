@@ -3,12 +3,10 @@ package com.streamapp.ui.screens.home
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
@@ -17,10 +15,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.streamapp.data.model.MediaItem
+import com.streamapp.data.repository.HomeData
 import com.streamapp.ui.components.HeroCarousel
 import com.streamapp.ui.components.MediaCard
 import com.streamapp.ui.components.MediaCardWide
@@ -39,13 +37,13 @@ fun HomeScreen(
             is HomeUiState.Loading -> {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
-                    color = Primary
+                    color = Primary,
                 )
             }
             is HomeUiState.Error -> {
                 Column(
                     modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(s.msg, color = White60, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(12.dp))
@@ -54,7 +52,11 @@ fun HomeScreen(
             }
             is HomeUiState.Success -> {
                 AnimatedVisibility(visible = true, enter = fadeIn()) {
-                    HomeContent(data = s.data, onItemClick = onItemClick, onSearchClick = onSearchClick)
+                    HomeContent(
+                        data = s.data,
+                        onItemClick = onItemClick,
+                        onSearchClick = onSearchClick,
+                    )
                 }
             }
         }
@@ -63,7 +65,7 @@ fun HomeScreen(
 
 @Composable
 private fun HomeContent(
-    data: com.streamapp.data.repository.HomeData,
+    data: HomeData,
     onItemClick: (MediaItem) -> Unit,
     onSearchClick: () -> Unit,
 ) {
@@ -71,7 +73,6 @@ private fun HomeContent(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 90.dp),
     ) {
-        // Top bar
         item {
             Row(
                 modifier = Modifier
@@ -85,15 +86,14 @@ private fun HomeContent(
                     Text("What to watch?", style = MaterialTheme.typography.headlineMedium, color = White)
                 }
                 IconButton(onClick = onSearchClick) {
-                    Icon(Icons.Filled.Search, null, tint = White, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Filled.Search, contentDescription = "Search", tint = White, modifier = Modifier.size(24.dp))
                 }
                 IconButton(onClick = {}) {
-                    Icon(Icons.Filled.Notifications, null, tint = White, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Filled.Notifications, contentDescription = "Notifications", tint = White, modifier = Modifier.size(24.dp))
                 }
             }
         }
 
-        // Hero carousel — trending
         item {
             HeroCarousel(
                 items = data.trending.take(6),
@@ -102,15 +102,9 @@ private fun HomeContent(
             )
         }
 
-        // Category pills
-        item {
-            CategoryRow()
-        }
+        item { CategoryRow() }
 
-        // Popular Movies
-        item {
-            SectionHeader("🔥 Popular Movies") {}
-        }
+        item { SectionHeader(title = "🔥 Popular Movies") }
         item {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
@@ -122,8 +116,7 @@ private fun HomeContent(
             }
         }
 
-        // Popular TV
-        item { SectionHeader("📺 Popular Series") {} }
+        item { SectionHeader(title = "📺 Popular Series") }
         item {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
@@ -135,8 +128,7 @@ private fun HomeContent(
             }
         }
 
-        // Top Rated — wide cards
-        item { SectionHeader("⭐ Top Rated") {} }
+        item { SectionHeader(title = "⭐ Top Rated") }
         item {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
@@ -168,23 +160,23 @@ private fun CategoryRow() {
                 label = { Text(cat, style = MaterialTheme.typography.labelMedium) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = Primary,
-                    selectedLabelColor = White,
-                    containerColor = Surface700,
-                    labelColor = White60,
+                    selectedLabelColor     = White,
+                    containerColor         = Surface700,
+                    labelColor             = White60,
                 ),
                 border = FilterChipDefaults.filterChipBorder(
                     enabled = true,
                     selected = cat == selected,
-                    selectedBorderColor = Color.Transparent,
-                    borderColor = Stroke,
-                )
+                    selectedBorderColor = Color.Transparent,   // Color imported at top
+                    borderColor         = Stroke,
+                ),
             )
         }
     }
 }
 
 @Composable
-private fun SectionHeader(title: String, onSeeAll: () -> Unit) {
+private fun SectionHeader(title: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -193,7 +185,7 @@ private fun SectionHeader(title: String, onSeeAll: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, style = MaterialTheme.typography.headlineSmall, color = White)
-        TextButton(onClick = onSeeAll) {
+        TextButton(onClick = {}) {
             Text("See all", style = MaterialTheme.typography.labelLarge, color = PrimaryLight)
         }
     }

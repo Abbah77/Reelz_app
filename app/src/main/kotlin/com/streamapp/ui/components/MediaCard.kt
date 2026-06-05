@@ -1,6 +1,6 @@
 package com.streamapp.ui.components
 
-import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -9,7 +9,8 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
-import androidx.compose.ui.draw.*
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.graphicsLayer
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,7 +36,6 @@ fun MediaCard(
             .clickable { onClick() }
             .aspectRatio(2f / 3f)
     ) {
-        // Poster
         AsyncImage(
             model = item.posterUrl,
             contentDescription = item.title,
@@ -43,7 +43,6 @@ fun MediaCard(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Bottom gradient + info
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -51,7 +50,6 @@ fun MediaCard(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(Color.Transparent, Black.copy(alpha = 0.9f)),
-                        startY = 0f, endY = Float.POSITIVE_INFINITY
                     )
                 )
                 .padding(horizontal = 8.dp, vertical = 8.dp)
@@ -82,15 +80,18 @@ fun MediaCard(
             }
         }
 
-        // TV badge
         if (item.mediaType == "tv") {
             Surface(
                 color = Primary.copy(alpha = 0.85f),
-                shape = RoundedCornerShape(bottomStart = 0.dp, topStart = 4.dp, topEnd = 4.dp, bottomEnd = 4.dp),
+                shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp, bottomEnd = 4.dp),
                 modifier = Modifier.padding(6.dp).align(Alignment.TopStart)
             ) {
-                Text("TV", style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp), color = White)
+                Text(
+                    "TV",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                    color = White,
+                )
             }
         }
     }
@@ -116,24 +117,31 @@ fun MediaCardWide(
             modifier = Modifier.fillMaxSize(),
         )
         Box(
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(Color.Transparent, Black.copy(alpha = 0.85f))
                     )
                 )
         )
-        Column(
-            modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)
-        ) {
-            Text(item.title, style = MaterialTheme.typography.labelMedium, color = White,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)) {
+            Text(
+                item.title,
+                style = MaterialTheme.typography.labelMedium,
+                color = White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             if (item.voteAverage > 0) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Star, null, tint = Gold, modifier = Modifier.size(9.dp))
                     Spacer(Modifier.width(2.dp))
-                    Text("%.1f".format(item.voteAverage),
-                        style = MaterialTheme.typography.labelSmall, color = White60)
+                    Text(
+                        "%.1f".format(item.voteAverage),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = White60,
+                    )
                 }
             }
         }
