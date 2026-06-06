@@ -1,23 +1,45 @@
-# Gradle
-.gradle/
-build/
-**/build/
-local.properties
-*.iml
-.idea/
-*.keystore
-*.jks
-*.aab
+# Android build outputs
 *.apk
+*.aab
+*.ap_
+*.dex
 
-# OS
+# Build directories
+build/
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# Keystore files (NEVER commit these)
+*.jks
+*.keystore
+*.p12
+
+# IDE
+.idea/
+*.iml
+*.iws
 .DS_Store
 Thumbs.db
 
 # NDK
 *.so
-*.o
-*.a
+obj/
 
-# Codemagic secrets
-codemagic_secrets/
+# Logs
+*.log
+
+# Proguard
+proguard/
+
+# Android Studio navigation editor temp files
+.navigation/
+
+# Codemagic artifacts
+app/build/
+
+# Credentials (never commit)
+google-services.json
+GoogleService-Info.plist

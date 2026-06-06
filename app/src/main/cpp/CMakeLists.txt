@@ -4,34 +4,26 @@ project("reelz_native" CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Optimisation flags for release builds
+add_compile_options(
+    -O3
+    -ffast-math
+    -funroll-loops
+    -fvectorize
+    -DNDEBUG
+)
+
 add_library(
     reelz_native
     SHARED
-    reelz_native.cpp
-    url_builder.cpp
+    reelz_jni.cpp
     m3u8_parser.cpp
     header_forge.cpp
 )
 
 find_library(log-lib log)
-find_library(android-lib android)
 
 target_link_libraries(
     reelz_native
     ${log-lib}
-    ${android-lib}
-)
-
-target_compile_options(reelz_native PRIVATE
-    -O3
-    -ffast-math
-    -fvisibility=hidden
-    -ffunction-sections
-    -fdata-sections
-    -DNDEBUG
-)
-
-target_link_options(reelz_native PRIVATE
-    -Wl,--gc-sections
-    -Wl,--strip-all
 )

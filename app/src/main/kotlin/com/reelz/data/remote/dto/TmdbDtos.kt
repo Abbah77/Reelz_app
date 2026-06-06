@@ -1,227 +1,146 @@
 package com.reelz.data.remote.dto
 
 import com.google.gson.annotations.SerializedName
-import com.reelz.data.model.*
 
-// ── TMDB API DTOs ─────────────────────────────────────────────────────────────
-
-data class TmdbPagedResponse<T>(
-    @SerializedName("page")         val page: Int,
-    @SerializedName("results")      val results: List<T>,
-    @SerializedName("total_pages")  val totalPages: Int,
-    @SerializedName("total_results")val totalResults: Int,
+data class TmdbPageDto<T>(
+    val page: Int = 1,
+    val results: List<T> = emptyList(),
+    @SerializedName("total_pages")   val totalPages: Int = 1,
+    @SerializedName("total_results") val totalResults: Int = 0,
 )
 
-data class TmdbMediaDto(
-    @SerializedName("id")            val id: Int,
-    @SerializedName("title")         val title: String?,
-    @SerializedName("name")          val name: String?,
-    @SerializedName("overview")      val overview: String?,
-    @SerializedName("poster_path")   val posterPath: String?,
-    @SerializedName("backdrop_path") val backdropPath: String?,
-    @SerializedName("release_date")  val releaseDate: String?,
-    @SerializedName("first_air_date")val firstAirDate: String?,
-    @SerializedName("vote_average")  val voteAverage: Double,
-    @SerializedName("vote_count")    val voteCount: Int,
-    @SerializedName("popularity")    val popularity: Double,
-    @SerializedName("genre_ids")     val genreIds: List<Int>?,
-    @SerializedName("media_type")    val mediaType: String?,
-    @SerializedName("adult")         val adult: Boolean = false,
-) {
-    fun toDomain(forcedType: MediaType? = null): Media {
-        val resolvedType = forcedType ?: when (mediaType?.lowercase()) {
-            "tv"    -> MediaType.TV
-            "movie" -> MediaType.MOVIE
-            else    -> if (name != null) MediaType.TV else MediaType.MOVIE
-        }
-        return Media(
-            id           = id,
-            tmdbId       = id,
-            title        = title ?: name ?: "Unknown",
-            overview     = overview ?: "",
-            posterPath   = posterPath,
-            backdropPath = backdropPath,
-            releaseDate  = releaseDate ?: firstAirDate,
-            voteAverage  = voteAverage,
-            voteCount    = voteCount,
-            popularity   = popularity,
-            genreIds     = genreIds ?: emptyList(),
-            mediaType    = resolvedType,
-            adult        = adult,
-        )
-    }
-}
+data class TmdbMovieDto(
+    val id: Int = 0,
+    val title: String = "",
+    val overview: String = "",
+    @SerializedName("poster_path")   val posterPath: String? = null,
+    @SerializedName("backdrop_path") val backdropPath: String? = null,
+    @SerializedName("release_date")  val releaseDate: String? = null,
+    @SerializedName("vote_average")  val voteAverage: Double = 0.0,
+    @SerializedName("vote_count")    val voteCount: Int = 0,
+    val popularity: Double = 0.0,
+    @SerializedName("genre_ids")     val genreIds: List<Int> = emptyList(),
+    val adult: Boolean = false,
+    @SerializedName("original_language") val originalLanguage: String = "en",
+)
+
+data class TmdbTvDto(
+    val id: Int = 0,
+    val name: String = "",
+    val overview: String = "",
+    @SerializedName("poster_path")    val posterPath: String? = null,
+    @SerializedName("backdrop_path")  val backdropPath: String? = null,
+    @SerializedName("first_air_date") val firstAirDate: String? = null,
+    @SerializedName("vote_average")   val voteAverage: Double = 0.0,
+    @SerializedName("vote_count")     val voteCount: Int = 0,
+    val popularity: Double = 0.0,
+    @SerializedName("genre_ids")      val genreIds: List<Int> = emptyList(),
+    @SerializedName("original_language") val originalLanguage: String = "en",
+)
 
 data class TmdbMovieDetailDto(
-    @SerializedName("id")             val id: Int,
-    @SerializedName("title")          val title: String,
-    @SerializedName("overview")       val overview: String?,
-    @SerializedName("poster_path")    val posterPath: String?,
-    @SerializedName("backdrop_path")  val backdropPath: String?,
-    @SerializedName("release_date")   val releaseDate: String?,
-    @SerializedName("vote_average")   val voteAverage: Double,
-    @SerializedName("vote_count")     val voteCount: Int,
-    @SerializedName("runtime")        val runtime: Int?,
-    @SerializedName("genres")         val genres: List<TmdbGenreDto>?,
-    @SerializedName("status")         val status: String?,
-    @SerializedName("tagline")        val tagline: String?,
-    @SerializedName("imdb_id")        val imdbId: String?,
-    @SerializedName("credits")        val credits: TmdbCreditsDto?,
-    @SerializedName("videos")         val videos: TmdbVideosDto?,
-) {
-    fun toDomain(): MediaDetail = MediaDetail(
-        id               = id,
-        tmdbId           = id,
-        title            = title,
-        overview         = overview ?: "",
-        posterPath       = posterPath,
-        backdropPath     = backdropPath,
-        releaseDate      = releaseDate,
-        voteAverage      = voteAverage,
-        voteCount        = voteCount,
-        runtime          = runtime,
-        genres           = genres?.map { Genre(it.id, it.name) } ?: emptyList(),
-        mediaType        = MediaType.MOVIE,
-        status           = status,
-        tagline          = tagline,
-        imdbId           = imdbId,
-        cast             = credits?.cast?.take(20)?.map { it.toDomain() } ?: emptyList(),
-        trailerKey       = videos?.results
-            ?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }?.key,
-    )
-}
+    val id: Int = 0,
+    val title: String = "",
+    val overview: String = "",
+    @SerializedName("poster_path")    val posterPath: String? = null,
+    @SerializedName("backdrop_path")  val backdropPath: String? = null,
+    @SerializedName("release_date")   val releaseDate: String? = null,
+    @SerializedName("vote_average")   val voteAverage: Double = 0.0,
+    @SerializedName("vote_count")     val voteCount: Int = 0,
+    val runtime: Int? = null,
+    val genres: List<TmdbGenreDto> = emptyList(),
+    val status: String? = null,
+    val tagline: String? = null,
+    val budget: Long = 0,
+    val revenue: Long = 0,
+    @SerializedName("imdb_id") val imdbId: String? = null,
+    val credits: TmdbCreditsDto? = null,
+    val videos: TmdbVideosDto? = null,
+    @SerializedName("spoken_languages") val spokenLanguages: List<TmdbLanguageDto> = emptyList(),
+    @SerializedName("production_countries") val productionCountries: List<TmdbCountryDto> = emptyList(),
+    val similar: TmdbPageDto<TmdbMovieDto>? = null,
+)
 
 data class TmdbTvDetailDto(
-    @SerializedName("id")               val id: Int,
-    @SerializedName("name")             val name: String,
-    @SerializedName("overview")         val overview: String?,
-    @SerializedName("poster_path")      val posterPath: String?,
-    @SerializedName("backdrop_path")    val backdropPath: String?,
-    @SerializedName("first_air_date")   val firstAirDate: String?,
-    @SerializedName("vote_average")     val voteAverage: Double,
-    @SerializedName("vote_count")       val voteCount: Int,
-    @SerializedName("genres")           val genres: List<TmdbGenreDto>?,
-    @SerializedName("status")           val status: String?,
-    @SerializedName("tagline")          val tagline: String?,
-    @SerializedName("number_of_seasons")    val numberOfSeasons: Int,
-    @SerializedName("number_of_episodes")   val numberOfEpisodes: Int,
-    @SerializedName("seasons")          val seasons: List<TmdbSeasonDto>?,
-    @SerializedName("credits")          val credits: TmdbCreditsDto?,
-    @SerializedName("videos")           val videos: TmdbVideosDto?,
-    @SerializedName("external_ids")     val externalIds: TmdbExternalIdsDto?,
-) {
-    fun toDomain(): MediaDetail = MediaDetail(
-        id               = id,
-        tmdbId           = id,
-        title            = name,
-        overview         = overview ?: "",
-        posterPath       = posterPath,
-        backdropPath     = backdropPath,
-        releaseDate      = firstAirDate,
-        voteAverage      = voteAverage,
-        voteCount        = voteCount,
-        runtime          = null,
-        genres           = genres?.map { Genre(it.id, it.name) } ?: emptyList(),
-        mediaType        = MediaType.TV,
-        status           = status,
-        tagline          = tagline,
-        numberOfSeasons  = numberOfSeasons,
-        numberOfEpisodes = numberOfEpisodes,
-        seasons          = seasons?.filter { it.seasonNumber > 0 }
-                                   ?.map { it.toDomain() } ?: emptyList(),
-        cast             = credits?.cast?.take(20)?.map { it.toDomain() } ?: emptyList(),
-        trailerKey       = videos?.results
-            ?.firstOrNull { it.type == "Trailer" && it.site == "YouTube" }?.key,
-        imdbId           = externalIds?.imdbId,
-    )
-}
+    val id: Int = 0,
+    val name: String = "",
+    val overview: String = "",
+    @SerializedName("poster_path")    val posterPath: String? = null,
+    @SerializedName("backdrop_path")  val backdropPath: String? = null,
+    @SerializedName("first_air_date") val firstAirDate: String? = null,
+    @SerializedName("vote_average")   val voteAverage: Double = 0.0,
+    @SerializedName("vote_count")     val voteCount: Int = 0,
+    val genres: List<TmdbGenreDto> = emptyList(),
+    val status: String? = null,
+    val tagline: String? = null,
+    val seasons: List<TmdbSeasonDto> = emptyList(),
+    @SerializedName("number_of_seasons")  val numberOfSeasons: Int = 0,
+    @SerializedName("number_of_episodes") val numberOfEpisodes: Int = 0,
+    val credits: TmdbCreditsDto? = null,
+    val videos: TmdbVideosDto? = null,
+    @SerializedName("external_ids") val externalIds: TmdbExternalIds? = null,
+    val similar: TmdbPageDto<TmdbTvDto>? = null,
+)
 
-data class TmdbSeasonDetailDto(
-    @SerializedName("id")          val id: Int,
-    @SerializedName("name")        val name: String,
-    @SerializedName("season_number") val seasonNumber: Int,
-    @SerializedName("episodes")    val episodes: List<TmdbEpisodeDto>?,
+data class TmdbGenreDto(val id: Int = 0, val name: String = "")
+
+data class TmdbSeasonDto(
+    val id: Int = 0,
+    @SerializedName("season_number") val seasonNumber: Int = 0,
+    val name: String = "",
+    @SerializedName("episode_count") val episodeCount: Int = 0,
+    @SerializedName("poster_path")   val posterPath: String? = null,
+    val overview: String? = null,
+    @SerializedName("air_date")      val airDate: String? = null,
 )
 
 data class TmdbEpisodeDto(
-    @SerializedName("id")               val id: Int,
-    @SerializedName("episode_number")   val episodeNumber: Int,
-    @SerializedName("season_number")    val seasonNumber: Int,
-    @SerializedName("name")             val name: String,
-    @SerializedName("overview")         val overview: String?,
-    @SerializedName("still_path")       val stillPath: String?,
-    @SerializedName("air_date")         val airDate: String?,
-    @SerializedName("runtime")          val runtime: Int?,
-    @SerializedName("vote_average")     val voteAverage: Double,
-) {
-    fun toDomain() = Episode(
-        id            = id,
-        episodeNumber = episodeNumber,
-        seasonNumber  = seasonNumber,
-        name          = name,
-        overview      = overview ?: "",
-        stillPath     = stillPath,
-        airDate       = airDate,
-        runtime       = runtime,
-        voteAverage   = voteAverage,
-    )
-}
-
-data class TmdbGenreDto(
-    @SerializedName("id")   val id: Int,
-    @SerializedName("name") val name: String,
+    val id: Int = 0,
+    @SerializedName("episode_number") val episodeNumber: Int = 0,
+    @SerializedName("season_number")  val seasonNumber: Int = 0,
+    val name: String = "",
+    val overview: String = "",
+    @SerializedName("still_path")    val stillPath: String? = null,
+    @SerializedName("air_date")      val airDate: String? = null,
+    val runtime: Int? = null,
+    @SerializedName("vote_average")  val voteAverage: Double = 0.0,
 )
 
-data class TmdbSeasonDto(
-    @SerializedName("id")            val id: Int,
-    @SerializedName("season_number") val seasonNumber: Int,
-    @SerializedName("name")          val name: String,
-    @SerializedName("episode_count") val episodeCount: Int,
-    @SerializedName("poster_path")   val posterPath: String?,
-    @SerializedName("overview")      val overview: String?,
-    @SerializedName("air_date")      val airDate: String?,
-) {
-    fun toDomain() = Season(
-        id           = id,
-        seasonNumber = seasonNumber,
-        name         = name,
-        episodeCount = episodeCount,
-        posterPath   = posterPath,
-        overview     = overview,
-        airDate      = airDate,
-    )
-}
+data class TmdbSeasonDetailDto(
+    val id: Int = 0,
+    val episodes: List<TmdbEpisodeDto> = emptyList(),
+)
 
 data class TmdbCreditsDto(
-    @SerializedName("cast") val cast: List<TmdbCastDto>?,
+    val cast: List<TmdbCastDto> = emptyList(),
 )
 
 data class TmdbCastDto(
-    @SerializedName("id")           val id: Int,
-    @SerializedName("name")         val name: String,
-    @SerializedName("character")    val character: String?,
-    @SerializedName("profile_path") val profilePath: String?,
-    @SerializedName("order")        val order: Int,
-) {
-    fun toDomain() = CastMember(
-        id          = id,
-        name        = name,
-        character   = character ?: "",
-        profilePath = profilePath,
-        order       = order,
-    )
-}
-
-data class TmdbVideosDto(
-    @SerializedName("results") val results: List<TmdbVideoDto>?,
+    val id: Int = 0,
+    val name: String = "",
+    val character: String = "",
+    @SerializedName("profile_path") val profilePath: String? = null,
+    val order: Int = 0,
 )
+
+data class TmdbVideosDto(val results: List<TmdbVideoDto> = emptyList())
 
 data class TmdbVideoDto(
-    @SerializedName("key")  val key: String,
-    @SerializedName("type") val type: String,
-    @SerializedName("site") val site: String,
+    val id: String = "",
+    val key: String = "",
+    val site: String = "",
+    val type: String = "",
+    val official: Boolean = false,
 )
 
-data class TmdbExternalIdsDto(
-    @SerializedName("imdb_id") val imdbId: String?,
+data class TmdbExternalIds(@SerializedName("imdb_id") val imdbId: String? = null)
+
+data class TmdbLanguageDto(
+    @SerializedName("english_name") val englishName: String = "",
 )
+
+data class TmdbCountryDto(
+    val name: String = "",
+)
+
+data class TmdbGenreListDto(val genres: List<TmdbGenreDto> = emptyList())

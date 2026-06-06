@@ -1,65 +1,59 @@
-# ── Reelz ProGuard Rules ──────────────────────────────────────────────────────
+# ── Kotlin ────────────────────────────────────────────────────────────────────
+-keepattributes *Annotation*, InnerClasses, EnclosingMethod, Signature, Exceptions
+-keepattributes SourceFile,LineNumberTable
+-keep class kotlin.** { *; }
+-keep class kotlinx.** { *; }
 
-# Keep app entry points
--keep class com.reelz.MainActivity { *; }
--keep class com.reelz.ReelzApp { *; }
--keep class com.reelz.ui.screens.player.PlayerActivity { *; }
--keep class com.reelz.service.ReelzPlaybackService { *; }
+# ── Hilt ──────────────────────────────────────────────────────────────────────
+-keep class dagger.hilt.** { *; }
+-keep class javax.inject.** { *; }
+-keepclassmembers class * { @javax.inject.Inject <fields>; }
+-keepclassmembers class * { @dagger.hilt.android.lifecycle.HiltViewModel <init>(...); }
 
-# Keep JNI bridge
--keep class com.reelz.scanner.NativeBridge { *; }
--keepclasseswithmembernames class com.reelz.scanner.NativeBridge {
-    native <methods>;
+# ── Room ──────────────────────────────────────────────────────────────────────
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
+-keep @androidx.room.Dao class *
+-keepclassmembers class * { @androidx.room.* <methods>; }
+
+# ── Retrofit / OkHttp ─────────────────────────────────────────────────────────
+-dontwarn okhttp3.**
+-dontwarn retrofit2.**
+-keep class retrofit2.** { *; }
+-keepclassmembers,allowshrinking,allowobfuscation interface * {
+    @retrofit2.http.* <methods>;
 }
 
-# Keep JavascriptInterface methods (WebView bridge)
+# ── Gson / data models ────────────────────────────────────────────────────────
+-keep class com.google.gson.** { *; }
+-keep class com.reelz.data.model.** { *; }
+-keep class com.reelz.data.remote.dto.** { *; }
+-keepclassmembers class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+
+# ── Media3 / ExoPlayer ────────────────────────────────────────────────────────
+-keep class androidx.media3.** { *; }
+-dontwarn androidx.media3.**
+
+# ── Coil ──────────────────────────────────────────────────────────────────────
+-keep class coil.** { *; }
+-dontwarn coil.**
+
+# ── Google Auth / Credentials ─────────────────────────────────────────────────
+-keep class com.google.android.libraries.identity.** { *; }
+-keep class androidx.credentials.** { *; }
+
+# ── Native JNI ────────────────────────────────────────────────────────────────
+-keep class com.reelz.scanner.NativeBridge { *; }
+-keepclasseswithmembernames class * { native <methods>; }
+
+# ── WebView JS interfaces ─────────────────────────────────────────────────────
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
 
-# Hilt
--keep class dagger.hilt.** { *; }
--keep class javax.inject.** { *; }
--keepclasseswithmembers class * { @dagger.hilt.* <methods>; }
-
-# Retrofit + OkHttp + Gson
--keepattributes Signature
--keepattributes *Annotation*
--keep class retrofit2.** { *; }
--keep interface retrofit2.** { *; }
--keep class okhttp3.** { *; }
--keep interface okhttp3.** { *; }
--keep class com.google.gson.** { *; }
--keep class * implements com.google.gson.TypeAdapterFactory { *; }
--keep class * implements com.google.gson.JsonSerializer { *; }
--keep class * implements com.google.gson.JsonDeserializer { *; }
-
-# Keep all DTOs (Gson needs field names)
--keep class com.reelz.data.remote.dto.** { *; }
--keep class com.reelz.data.model.** { *; }
-
-# Media3 / ExoPlayer
--keep class androidx.media3.** { *; }
--keep interface androidx.media3.** { *; }
--dontwarn androidx.media3.**
-
-# Coroutines
--keep class kotlinx.coroutines.** { *; }
--dontwarn kotlinx.coroutines.**
-
-# Room
--keep class androidx.room.** { *; }
--keep @androidx.room.Entity class * { *; }
--keep @androidx.room.Dao class * { *; }
--keep @androidx.room.Database class * { *; }
-
-# Coil
--keep class coil.** { *; }
--dontwarn coil.**
-
-# Remove logging in release
--assumenosideeffects class android.util.Log {
-    public static int v(...);
-    public static int d(...);
-    public static int i(...);
-}
+# ── Suppress common warnings ──────────────────────────────────────────────────
+-dontwarn com.google.errorprone.**
+-dontwarn sun.misc.**
+-dontwarn javax.annotation.**

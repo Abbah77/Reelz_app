@@ -2,11 +2,18 @@ package com.reelz.data.model
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.TypeConverter
+import androidx.room.TypeConverters
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
-// ── Media type ────────────────────────────────────────────────────────────────
-enum class MediaType { MOVIE, TV }
+// ── Enums ─────────────────────────────────────────────────────────────────────
+enum class MediaType   { MOVIE, TV }
+enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
+enum class TransferStatus { IDLE, CONNECTING, TRANSFERRING, DONE, ERROR }
+enum class TransferDirection { SEND, RECEIVE }
 
-// ── Core domain model ─────────────────────────────────────────────────────────
+// ── Core domain models ────────────────────────────────────────────────────────
 data class Media(
     val id: Int,
     val tmdbId: Int,
@@ -18,9 +25,10 @@ data class Media(
     val voteAverage: Double,
     val voteCount: Int,
     val popularity: Double,
-    val genreIds: List<Int>,
+    val genreIds: List<Int> = emptyList(),
     val mediaType: MediaType,
     val adult: Boolean = false,
+    val originalLanguage: String = "en",
 )
 
 data class MediaDetail(
@@ -33,17 +41,22 @@ data class MediaDetail(
     val releaseDate: String?,
     val voteAverage: Double,
     val voteCount: Int,
-    val runtime: Int?,                          // minutes for movies
+    val runtime: Int?,
     val genres: List<Genre>,
     val mediaType: MediaType,
     val status: String?,
     val tagline: String?,
-    val seasons: List<Season> = emptyList(),    // TV only
+    val seasons: List<Season> = emptyList(),
     val numberOfSeasons: Int = 0,
     val numberOfEpisodes: Int = 0,
     val cast: List<CastMember> = emptyList(),
     val trailerKey: String? = null,
     val imdbId: String? = null,
+    val spokenLanguages: List<String> = emptyList(),
+    val productionCountries: List<String> = emptyList(),
+    val budget: Long = 0,
+    val revenue: Long = 0,
+    val similar: List<Media> = emptyList(),
 )
 
 data class Genre(val id: Int, val name: String)
@@ -66,7 +79,7 @@ data class Episode(
     val overview: String,
     val stillPath: String?,
     val airDate: String?,
-    val runtime: Int?,        // minutes — used for pre-buffering calculation
+    val runtime: Int?,
     val voteAverage: Double,
 )
 
@@ -78,51 +91,118 @@ data class CastMember(
     val order: Int,
 )
 
-// ── Stream result ─────────────────────────────────────────────────────────────
+data class HomeSection(val title: String, val items: List<Media>)
+
+// ── Stream ────────────────────────────────────────────────────────────────────
 data class StreamResult(
-    val url: String,                  // .m3u8 or .mp4
-    val isHls: Boolean,               // true = HLS, false = direct MP4
-    val quality: String = "Auto",     // "1080p", "720p", "Auto" etc.
+    val url: String,
+    val isHls: Boolean,
+    val quality: String = "Auto",
     val headers: Map<String, String> = emptyMap(),
     val referer: String = "",
     val origin: String = "",
     val sourceName: String = "",
     val subtitles: List<Subtitle> = emptyList(),
+    val qualities: List<QualityTrack> = emptyList(),
 )
 
-data class Subtitle(
-    val url: String,
-    val language: String,
-    val label: String,
-)
+data class Subtitle(val url: String, val language: String, val label: String)
 
-// ── Watchlist Room entity ─────────────────────────────────────────────────────
+data class QualityTrack(val label: String, val url: String, val bandwidth: Long = 0)
+
+// ── Room entities ─────────────────────────────────────────────────────────────
 @Entity(tableName = "watchlist")
 data class WatchlistItem(
     @PrimaryKey val tmdbId: Int,
     val title: String,
     val posterPath: String?,
-    val mediaType: String,     // "MOVIE" | "TV"
+    val mediaType: String,
     val addedAt: Long = System.currentTimeMillis(),
 )
 
-// ── Watch history Room entity ─────────────────────────────────────────────────
 @Entity(tableName = "watch_history")
 data class WatchHistory(
-    @PrimaryKey val key: String,          // "{tmdbId}_{season}_{episode}"
+    @PrimaryKey val key: String,  // "{tmdbId}_{season}_{episode}"
     val tmdbId: Int,
     val title: String,
     val posterPath: String?,
     val mediaType: String,
     val season: Int = 0,
     val episode: Int = 0,
-    val positionMs: Long = 0,             // resume position
+    val positionMs: Long = 0,
     val durationMs: Long = 0,
     val watchedAt: Long = System.currentTimeMillis(),
 )
 
-// ── Homepage sections ─────────────────────────────────────────────────────────
-data class HomeSection(
+@Entity(tableName = "liked_media")
+data class LikedItem(
+    @PrimaryKey val tmdbId: Int,
     val title: String,
-    val items: List<Media>,
+    val posterPath: String?,
+    val mediaType: String,
+    val likedAt: Long = System.currentTimeMillis(),
 )
+
+@Entity(tableName = "cached_media")
+@TypeConverters(MediaConverters::class)
+data class CachedMedia(
+    @PrimaryKey val tmdbId: Int,
+    val title: String,
+    val overview: String,
+    val posterPath: String?,
+    val backdropPath: String?,
+    val releaseDate: String?,
+    val voteAverage: Double,
+    val popularity: Double,
+    val genreIds: String = "[]",  // JSON list
+    val mediaType: String,
+    val cachedAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(tableName = "downloads")
+@TypeConverters(MediaConverters::class)
+data class DownloadItem(
+    @PrimaryKey val id: String,  // UUID
+    val tmdbId: Int,
+    val title: String,
+    val posterPath: String?,
+    val mediaType: String,
+    val season: Int = 0,
+    val episode: Int = 0,
+    val episodeName: String = "",
+    val quality: String = "720p",
+    val filePath: String = "",
+    val sizeBytes: Long = 0,
+    val downloadedBytes: Long = 0,
+    val status: String = DownloadStatus.QUEUED.name,
+    val streamUrl: String = "",
+    val headers: String = "{}",  // JSON map
+    val createdAt: Long = System.currentTimeMillis(),
+    val completedAt: Long = 0,
+)
+
+@Entity(tableName = "transfer_history")
+data class TransferRecord(
+    @PrimaryKey val id: String,
+    val fileName: String,
+    val filePath: String,
+    val sizeBytes: Long,
+    val direction: String,  // SEND / RECEIVE
+    val peerName: String,
+    val peerIp: String,
+    val status: String,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+// ── Type converters ───────────────────────────────────────────────────────────
+class MediaConverters {
+    private val gson = Gson()
+    @TypeConverter fun fromIntList(v: List<Int>?): String = gson.toJson(v ?: emptyList<Int>())
+    @TypeConverter fun toIntList(v: String?): List<Int> =
+        if (v.isNullOrBlank()) emptyList()
+        else gson.fromJson(v, object : TypeToken<List<Int>>() {}.type)
+    @TypeConverter fun fromMap(v: Map<String, String>?): String = gson.toJson(v ?: emptyMap<String,String>())
+    @TypeConverter fun toMap(v: String?): Map<String, String> =
+        if (v.isNullOrBlank()) emptyMap()
+        else gson.fromJson(v, object : TypeToken<Map<String, String>>() {}.type)
+}

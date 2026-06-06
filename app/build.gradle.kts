@@ -7,19 +7,25 @@ plugins {
 }
 
 android {
-    namespace = "com.reelz"
-    compileSdk = 35
+    namespace   = "com.reelz"
+    compileSdk  = 35
 
     defaultConfig {
-        applicationId = "com.reelz"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        applicationId  = "com.reelz"
+        minSdk         = 26
+        targetSdk      = 35
+        versionCode    = 2
+        versionName    = "2.0.0"
 
-        buildConfigField("String", "TMDB_KEY", "\"1eef1496d59aa06f62e201ddce2741b4\"")
-        buildConfigField("String", "TMDB_IMG_W500", "\"https://image.tmdb.org/t/p/w500\"")
-        buildConfigField("String", "TMDB_IMG_ORIGINAL", "\"https://image.tmdb.org/t/p/original\"")
+        buildConfigField("String", "TMDB_KEY",           "\"1eef1496d59aa06f62e201ddce2741b4\"")
+        buildConfigField("String", "TMDB_IMG_W500",      "\"https://image.tmdb.org/t/p/w500\"")
+        buildConfigField("String", "TMDB_IMG_W342",      "\"https://image.tmdb.org/t/p/w342\"")
+        buildConfigField("String", "TMDB_IMG_ORIGINAL",  "\"https://image.tmdb.org/t/p/original\"")
+        // ── Ad placeholders — swap in your real IDs ──────────────────────────
+        buildConfigField("String", "AD_BANNER_ID",       "\"ca-app-pub-3940256099942544/6300978111\"")
+        buildConfigField("String", "AD_INTERSTITIAL_ID", "\"ca-app-pub-3940256099942544/1033173712\"")
+        buildConfigField("String", "AD_REWARDED_ID",     "\"ca-app-pub-3940256099942544/5224354917\"")
+        buildConfigField("String", "AD_NATIVE_ID",       "\"ca-app-pub-3940256099942544/2247696110\"")
 
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
@@ -32,24 +38,23 @@ android {
 
     externalNativeBuild {
         cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
+            path    = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
     }
 
     buildTypes {
         debug {
-            isDebuggable = true
+            isDebuggable    = true
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled   = true
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug") // replace with release signing for production
         }
     }
 
@@ -64,53 +69,88 @@ android {
             "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
             "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
             "-opt-in=androidx.compose.animation.ExperimentalAnimationApi",
-            "-opt-in=androidx.media3.common.util.UnstableApi"
+            "-opt-in=androidx.media3.common.util.UnstableApi",
+            "-opt-in=kotlinx.coroutines.ExperimentalCoroutinesApi",
         )
     }
 
     buildFeatures {
-        compose = true
+        compose     = true
         buildConfig = true
     }
 
     packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
+        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     }
 }
 
 dependencies {
+    // Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.splashscreen)
+    implementation(libs.androidx.work.runtime)
+
+    // Compose BOM
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.animation)
     implementation(libs.navigation.compose)
+
+    // DI
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.hilt.navigation.compose)
+    implementation(libs.hilt.work)
+    ksp(libs.hilt.compiler.androidx)
+
+    // Media3 / ExoPlayer
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
     implementation(libs.media3.datasource.okhttp)
+    implementation(libs.media3.transformer)
+
+    // Database
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+
+    // Network
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp.core)
     implementation(libs.okhttp.logging)
+
+    // Image
     implementation(libs.coil.compose)
-    implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.androidx.datastore)
+    implementation(libs.coil.video)
+
+    // Async
+    implementation(libs.coroutines.android)
+
+    // Storage / Prefs
+    implementation(libs.datastore)
+    implementation(libs.gson)
     implementation(libs.palette)
-    implementation(libs.androidx.splashscreen)
+
+    // Auth
+    implementation(libs.google.auth)
+    implementation(libs.credentials)
+    implementation(libs.credentials.play)
+    implementation(libs.googleid)
+
+    // Permissions
+    implementation(libs.accompanist.permissions)
+
     debugImplementation(libs.compose.ui.tooling)
 }

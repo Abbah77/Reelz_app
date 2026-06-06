@@ -1,16 +1,17 @@
 package com.reelz.ui.screens.detail
 
 import android.content.Intent
+import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -19,67 +20,140 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.reelz.BuildConfig
 import com.reelz.data.model.*
-import com.reelz.ui.screens.home.MediaCard
-import com.reelz.ui.screens.home.RatingChip
-import com.reelz.ui.screens.home.SectionHeader
+import com.reelz.data.repository.MediaRepository
+import com.reelz.ui.components.*
 import com.reelz.ui.screens.player.PlayerActivity
 import com.reelz.ui.theme.*
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
+// ── ViewModel ─────────────────────────────────────────────────────────────────
+@HiltViewModel
+class DetailViewModel @Inject constructor(
+    private val repo: MediaRepository,
+) : ViewModel() {
+
+    data class UiState(
+        val isLoading: Boolean = true,
+        val error: String? = null,
+        val detail: MediaDetail? = null,
+        val episodes: List<Episode> = emptyList(),
+        val selectedSeason: Int = 1,
+        val isInWatchlist: Boolean = false,
+        val isLiked: Boolean = false,
+        val isEpisodesLoading: Boolean = false,
+    )
+
+    private val _ui = MutableStateFlow(UiState())
+    val ui: StateFlow<UiState> = _ui.asStateFlow()
+
+    private var currentMedia: Media? = null
+
+    fun load(tmdbId: Int, mediaType: MediaType) {
+        viewModelScope.launch {
+            _ui.update { it.copy(isLoading = true, error = null) }
+            try {
+                val detail      = repo.getDetail(tmdbId, mediaType)
+                val inWatchlist = repo.isInWatchlist(tmdbId)
+                val liked       = repo.isLiked(tmdbId)
+                currentMedia = Media(
+                    id = detail.tmdbId, tmdbId = detail.tmdbId, title = detail.title,
+                    overview = detail.overview, posterPath = detail.posterPath,
+                    backdropPath = detail.backdropPath, releaseDate = detail.releaseDate,
+                    voteAverage = detail.voteAverage, voteCount = detail.voteCount,
+                    popularity = 0.0, mediaType = mediaType,
+                )
+                _ui.update { it.copy(isLoading = false, detail = detail, isInWatchlist = inWatchlist, isLiked = liked) }
+                // Auto-load first season episodes for TV
+                if (mediaType == MediaType.TV && detail.seasons.isNotEmpty()) {
+                    loadEpisodes(tmdbId, 1)
+                }
+            } catch (e: Exception) {
+                _ui.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") }
+            }
+        }
+    }
+
+    fun selectSeason(tmdbId: Int, season: Int) {
+        _ui.update { it.copy(selectedSeason = season) }
+        loadEpisodes(tmdbId, season)
+    }
+
+    private fun loadEpisodes(tmdbId: Int, season: Int) {
+        viewModelScope.launch {
+            _ui.update { it.copy(isEpisodesLoading = true) }
+            try {
+                val eps = repo.getSeasonEpisodes(tmdbId, season)
+                _ui.update { it.copy(episodes = eps, isEpisodesLoading = false) }
+            } catch (_: Exception) {
+                _ui.update { it.copy(isEpisodesLoading = false) }
+            }
+        }
+    }
+
+    fun toggleWatchlist() {
+        val m = currentMedia ?: return
+        viewModelScope.launch {
+            val now = repo.toggleWatchlist(m)
+            _ui.update { it.copy(isInWatchlist = now) }
+        }
+    }
+
+    fun toggleLike() {
+        val m = currentMedia ?: return
+        viewModelScope.launch {
+            val now = repo.toggleLike(m)
+            _ui.update { it.copy(isLiked = now) }
+        }
+    }
+}
+
+// ── Screen ────────────────────────────────────────────────────────────────────
 @Composable
 fun DetailScreen(
     tmdbId: Int,
     mediaType: MediaType,
-    onBack: () -> Unit,
-    onMediaClick: (Int, MediaType) -> Unit,
+    nav: NavController,
     vm: DetailViewModel = hiltViewModel(),
 ) {
-    val ui by vm.ui.collectAsState()
-    val context = LocalContext.current
+    val ui  by vm.ui.collectAsState()
+    val ctx = LocalContext.current
 
     LaunchedEffect(tmdbId) { vm.load(tmdbId, mediaType) }
 
-    fun launchPlayer(season: Int = 0, episode: Int = 0) {
-        val detail = ui.detail ?: return
-        context.startActivity(
-            Intent(context, PlayerActivity::class.java).apply {
-                putExtra("tmdbId",     detail.tmdbId)
-                putExtra("mediaType",  detail.mediaType.name)
-                putExtra("season",     season)
-                putExtra("episode",    episode)
-                putExtra("title",      detail.title)
-                putExtra("posterPath", detail.posterPath)
-            }
-        )
+    fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
+        val d = ui.detail ?: return
+        ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
+            putExtra("tmdbId",     d.tmdbId)
+            putExtra("mediaType",  d.mediaType.name)
+            putExtra("season",     season)
+            putExtra("episode",    episode)
+            putExtra("title",      if (epName.isNotBlank()) epName else d.title)
+            putExtra("posterPath", d.posterPath)
+        })
     }
 
-    Box(Modifier.fillMaxSize().background(Surface900)) {
+    Box(Modifier.fillMaxSize().background(Bg)) {
         when {
-            ui.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Primary)
-            }
-            ui.error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text(ui.error!!, color = White60)
-                    Button(
-                        onClick = { vm.load(tmdbId, mediaType) },
-                        colors  = ButtonDefaults.buttonColors(containerColor = Primary),
-                    ) { Text("Retry") }
-                }
-            }
+            ui.isLoading -> FullScreenLoader()
+            ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.load(tmdbId, mediaType) })
             ui.detail != null -> DetailContent(
-                ui            = ui,
-                onBack        = onBack,
-                onMediaClick  = onMediaClick,
-                onPlayMovie   = { launchPlayer() },
-                onPlayEpisode = { s, e -> launchPlayer(s, e) },
+                ui          = ui,
+                onBack      = { nav.popBackStack() },
+                onPlayMovie = { launchPlayer() },
+                onPlayEpisode = { s, e, name -> launchPlayer(s, e, name) },
                 onSeasonSelect = { vm.selectSeason(tmdbId, it) },
-                onWatchlist   = vm::toggleWatchlist,
+                onWatchlist = { vm.toggleWatchlist() },
+                onLike      = { vm.toggleLike() },
+                onSimilarClick = { id, type -> nav.navigate(com.reelz.ui.Route.Detail.go(id, type)) },
             )
         }
     }
@@ -87,20 +161,21 @@ fun DetailScreen(
 
 @Composable
 private fun DetailContent(
-    ui: DetailUiState,
+    ui: DetailViewModel.UiState,
     onBack: () -> Unit,
-    onMediaClick: (Int, MediaType) -> Unit,
     onPlayMovie: () -> Unit,
-    onPlayEpisode: (Int, Int) -> Unit,
+    onPlayEpisode: (Int, Int, String) -> Unit,
     onSeasonSelect: (Int) -> Unit,
     onWatchlist: () -> Unit,
+    onLike: () -> Unit,
+    onSimilarClick: (Int, MediaType) -> Unit,
 ) {
-    val detail = ui.detail!!
+    val detail  = ui.detail!!
     val isMovie = detail.mediaType == MediaType.MOVIE
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 80.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 90.dp)) {
 
-        // ── Backdrop + hero ────────────────────────────────────────────────────
+        // ── Backdrop hero ──────────────────────────────────────────────────
         item {
             Box(Modifier.fillMaxWidth().height(420.dp)) {
                 AsyncImage(
@@ -110,59 +185,43 @@ private fun DetailContent(
                     modifier = Modifier.fillMaxSize(),
                 )
                 Box(Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(listOf(Color.Black.copy(.4f), Surface900))
+                    Brush.verticalGradient(listOf(Color.Black.copy(.45f), Bg))
                 ))
+                // Back button
                 IconButton(
-                    onClick  = onBack,
-                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                    onClick = onBack,
+                    modifier = Modifier.statusBarsPadding().padding(8.dp)
                         .clip(CircleShape).background(Color.Black.copy(.5f))
-                ) {
-                    Icon(Icons.Default.ArrowBack, "Back", tint = White)
-                }
+                ) { Icon(Icons.Default.ArrowBack, null, tint = White) }
+
+                // Poster + meta
                 Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
+                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         AsyncImage(
-                            model = BuildConfig.TMDB_IMG_W500 + detail.posterPath,
+                            model = BuildConfig.TMDB_IMG_W342 + detail.posterPath,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .width(90.dp).height(134.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Surface700),
+                            modifier = Modifier.width(90.dp).height(134.dp)
+                                .clip(RoundedCornerShape(12.dp)).background(BgRaised),
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text(detail.title, color = White, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 2)
+                            Text(detail.title, color = White, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             if (!detail.tagline.isNullOrBlank())
-                                Text(detail.tagline, color = White60, fontSize = 12.sp, fontStyle = FontStyle.Italic, maxLines = 1)
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
+                                Text(detail.tagline, color = White60, fontSize = 12.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                                 RatingChip(detail.voteAverage)
                                 Text("•", color = White40)
                                 Text(detail.releaseDate?.take(4) ?: "", color = White60, fontSize = 13.sp)
-                                if (detail.runtime != null) {
-                                    Text("•", color = White40)
-                                    Text(formatRuntime(detail.runtime), color = White60, fontSize = 13.sp)
-                                }
-                                if (!isMovie) {
-                                    Text("•", color = White40)
-                                    Text("${detail.numberOfSeasons}S", color = White60, fontSize = 13.sp)
-                                }
+                                if (detail.runtime != null) { Text("•", color = White40); Text(formatRuntime(detail.runtime), color = White60, fontSize = 13.sp) }
+                                if (!isMovie) { Text("•", color = White40); Text("${detail.numberOfSeasons}S", color = White60, fontSize = 13.sp) }
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 detail.genres.take(3).forEach { g ->
-                                    Surface(color = Surface600, shape = RoundedCornerShape(4.dp)) {
-                                        Text(
-                                            g.name,
-                                            color = White60,
-                                            fontSize = 11.sp,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                        )
-                                    }
+                                    Box(
+                                        Modifier.clip(RoundedCornerShape(5.dp)).background(BgSurface)
+                                            .border(1.dp, GlassBorderMd, RoundedCornerShape(5.dp))
+                                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                                    ) { Text(g.name, color = White60, fontSize = 11.sp) }
                                 }
                             }
                         }
@@ -171,129 +230,157 @@ private fun DetailContent(
             }
         }
 
-        // ── Action buttons ─────────────────────────────────────────────────────
+        // ── Action row ─────────────────────────────────────────────────────
         item {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (isMovie) {
-                    Button(
+                    BrandButton(
+                        text     = "Watch Now",
                         onClick  = onPlayMovie,
-                        colors   = ButtonDefaults.buttonColors(containerColor = Primary),
-                        shape    = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f).height(48.dp),
-                    ) {
-                        Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(22.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Watch Now", fontWeight = FontWeight.Bold)
-                    }
+                        modifier = Modifier.weight(1f),
+                        icon     = { Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(20.dp)) },
+                    )
                 }
+                // Watchlist button
                 OutlinedButton(
                     onClick  = onWatchlist,
-                    shape    = RoundedCornerShape(8.dp),
+                    shape    = RoundedCornerShape(100.dp),
+                    border   = BorderStroke(1.dp, if (ui.isInWatchlist) Brand else GlassBorderMd),
                     modifier = Modifier.height(48.dp).let { if (isMovie) it else it.weight(1f) },
-                    border   = BorderStroke(1.dp, if (ui.isInWatchlist) Primary else Stroke),
                 ) {
                     Icon(
                         if (ui.isInWatchlist) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                         null,
-                        tint     = if (ui.isInWatchlist) Primary else White60,
-                        modifier = Modifier.size(20.dp),
+                        tint = if (ui.isInWatchlist) Brand else White60,
+                        modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (ui.isInWatchlist) "Saved" else "Watchlist",
-                        color = if (ui.isInWatchlist) Primary else White60,
+                    Text(if (ui.isInWatchlist) "Saved" else "Save", color = if (ui.isInWatchlist) Brand else White60)
+                }
+                // Like button
+                OutlinedButton(
+                    onClick = onLike,
+                    shape   = RoundedCornerShape(100.dp),
+                    border  = BorderStroke(1.dp, if (ui.isLiked) Like else GlassBorderMd),
+                    modifier = Modifier.height(48.dp),
+                ) {
+                    Icon(
+                        if (ui.isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        null,
+                        tint = if (ui.isLiked) Like else White60,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
             }
         }
 
-        // ── Overview ───────────────────────────────────────────────────────────
+        // ── Overview ───────────────────────────────────────────────────────
         item {
             var expanded by remember { mutableStateOf(false) }
-            Column(Modifier.padding(horizontal = 16.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Text("Overview", color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(
                     detail.overview,
-                    color    = White60,
+                    color = White60,
                     fontSize = 13.sp,
                     lineHeight = 20.sp,
-                    maxLines = if (expanded) Int.MAX_VALUE else 4,
+                    maxLines = if (expanded) Int.MAX_VALUE else 3,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (detail.overview.length > 200) {
-                    TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) {
-                        Text(if (expanded) "Show less" else "Read more", color = Primary, fontSize = 13.sp)
-                    }
+                if (detail.overview.length > 150) {
+                    Text(
+                        if (expanded) "Show less" else "Show more",
+                        color = Brand,
+                        fontSize = 12.sp,
+                        modifier = Modifier.clickable { expanded = !expanded }.padding(top = 4.dp),
+                    )
                 }
             }
         }
 
-        // ── TV: Season selector ────────────────────────────────────────────────
+        // ── Movie metadata ─────────────────────────────────────────────────
+        if (isMovie && (detail.runtime != null || detail.status != null)) {
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    detail.runtime?.let { MetaChip("Runtime", formatRuntime(it)) }
+                    detail.status?.let   { MetaChip("Status", it) }
+                    if (detail.voteCount > 0) MetaChip("Votes", "${detail.voteCount}")
+                }
+            }
+        }
+
+        // ── TV: Season selector + episodes ─────────────────────────────────
         if (!isMovie && detail.seasons.isNotEmpty()) {
             item {
-                SectionHeader("Seasons")
+                SectionHeader("Episodes")
+                // Season tabs
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(detail.seasons, key = { it.seasonNumber }) { season ->
-                        val sel = season.seasonNumber == ui.selectedSeason
-                        FilterChip(
-                            selected = sel,
-                            onClick  = { onSeasonSelect(season.seasonNumber) },
-                            label    = { Text("Season ${season.seasonNumber}") },
-                            colors   = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Primary,
-                                selectedLabelColor     = White,
-                            ),
-                        )
+                    items(detail.seasons) { s ->
+                        val sel = ui.selectedSeason == s.seasonNumber
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(100.dp))
+                                .background(if (sel) Brand else GlassMd)
+                                .border(1.dp, if (sel) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(100.dp))
+                                .clickable { onSeasonSelect(s.seasonNumber) }
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            Text(
+                                "S${s.seasonNumber}",
+                                color = if (sel) Color.White else White60,
+                                fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 13.sp,
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        // ── TV: Episodes ───────────────────────────────────────────────────────
-        if (!isMovie) {
-            if (ui.episodes.isEmpty()) {
-                item {
-                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Primary, modifier = Modifier.size(28.dp))
-                    }
-                }
+            if (ui.isEpisodesLoading) {
+                item { Box(Modifier.fillMaxWidth().height(120.dp), Alignment.Center) { CircularProgressIndicator(color = Brand) } }
             } else {
                 items(ui.episodes, key = { it.id }) { ep ->
-                    EpisodeRow(ep, onClick = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber) })
-                    HorizontalDivider(color = Stroke.copy(.3f), modifier = Modifier.padding(start = 148.dp, end = 16.dp))
+                    EpisodeRow(
+                        episode = ep,
+                        onClick = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                    )
                 }
             }
         }
 
-        // ── Cast ───────────────────────────────────────────────────────────────
+        // ── Cast ───────────────────────────────────────────────────────────
         if (detail.cast.isNotEmpty()) {
+            item { SectionHeader("Cast") }
             item {
-                SectionHeader("Cast")
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(detail.cast, key = { it.id }) { member -> CastCard(member) }
+                    items(detail.cast, key = { it.id }) { c ->
+                        CastCard(c)
+                    }
                 }
             }
         }
 
-        // ── Recommendations ────────────────────────────────────────────────────
-        if (ui.recommendations.isNotEmpty()) {
-            item { SectionHeader("You May Also Like") }
+        // ── Similar ────────────────────────────────────────────────────────
+        if (detail.similar.isNotEmpty()) {
+            item { SectionHeader("More Like This") }
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(ui.recommendations, key = { it.tmdbId }) { m -> MediaCard(m, onMediaClick) }
+                    items(detail.similar, key = { it.tmdbId }) { m ->
+                        com.reelz.ui.components.MediaRowCard(m) { onSimilarClick(m.tmdbId, m.mediaType) }
+                    }
                 }
             }
         }
@@ -302,63 +389,76 @@ private fun DetailContent(
 
 // ── Episode row ───────────────────────────────────────────────────────────────
 @Composable
-private fun EpisodeRow(ep: Episode, onClick: () -> Unit) {
+fun EpisodeRow(episode: Episode, onClick: () -> Unit) {
     Row(
-        modifier = Modifier
+        Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment     = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier
-                .width(120.dp).height(68.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Surface700),
-            contentAlignment = Alignment.Center,
+            Modifier.width(110.dp).height(64.dp).clip(RoundedCornerShape(8.dp)).background(BgRaised),
         ) {
-            if (ep.stillPath != null) {
+            if (episode.stillPath != null) {
                 AsyncImage(
-                    model = BuildConfig.TMDB_IMG_W500 + ep.stillPath,
+                    model = BuildConfig.TMDB_IMG_W342 + episode.stillPath,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            Icon(Icons.Default.PlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(28.dp))
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
+                Icon(Icons.Default.PlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(26.dp))
+            }
         }
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("E${ep.episodeNumber}", color = White40, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                if (ep.runtime != null) Text("  ${ep.runtime}m", color = White40, fontSize = 11.sp)
+            Text("E${episode.episodeNumber} · ${episode.name}", color = White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(3.dp))
+            Text(episode.overview.ifBlank { "No description." }, color = White60, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
+            episode.runtime?.let {
+                Spacer(Modifier.height(3.dp))
+                Text("${it}m", color = White40, fontSize = 10.sp)
             }
-            Text(ep.name, color = White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(ep.overview, color = White60, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
         }
+        Icon(Icons.Default.PlayArrow, null, tint = Brand, modifier = Modifier.size(20.dp))
     }
+    Divider(color = GlassBorder, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 16.dp))
 }
 
 // ── Cast card ─────────────────────────────────────────────────────────────────
 @Composable
-private fun CastCard(member: CastMember) {
-    Column(
-        modifier = Modifier.width(72.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        AsyncImage(
-            model = BuildConfig.TMDB_IMG_W500 + member.profilePath,
-            contentDescription = member.name,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.size(56.dp).clip(CircleShape).background(Surface700),
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(member.name,      color = White80, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(member.character, color = White40, fontSize = 9.sp,  maxLines = 1, overflow = TextOverflow.Ellipsis)
+fun CastCard(cast: CastMember) {
+    Column(Modifier.width(72.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(64.dp).clip(CircleShape).background(BgRaised)) {
+            if (cast.profilePath != null) {
+                AsyncImage(
+                    model = BuildConfig.TMDB_IMG_W342 + cast.profilePath,
+                    contentDescription = cast.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(Icons.Default.Person, null, tint = White40, modifier = Modifier.fillMaxSize().padding(12.dp))
+            }
+        }
+        Spacer(Modifier.height(5.dp))
+        Text(cast.name, color = White80, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 13.sp)
+        Text(cast.character, color = White40, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 
-private fun formatRuntime(minutes: Int): String {
+// ── Meta chip ─────────────────────────────────────────────────────────────────
+@Composable
+fun MetaChip(label: String, value: String) {
+    Column {
+        Text(label, color = White40, fontSize = 10.sp)
+        Text(value, color = White80, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+fun formatRuntime(minutes: Int): String {
     val h = minutes / 60; val m = minutes % 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
 }

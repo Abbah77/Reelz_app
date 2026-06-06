@@ -1,59 +1,72 @@
 package com.reelz.scanner
 
-import javax.inject.Inject
-import javax.inject.Singleton
+import com.reelz.data.model.QualityTrack
+import com.reelz.data.model.Subtitle
 
 /**
- * Kotlin wrapper around the C++ native layer (reelz_native.so).
- * Exposes fast, low-level URL building, M3U8 parsing, and header construction.
+ * Kotlin wrapper around the C++ JNI bridge (reelz_native.so).
+ * All heavy parsing is done natively for maximum speed.
  */
-@Singleton
-class NativeBridge @Inject constructor() {
+object NativeBridge {
 
     init {
         System.loadLibrary("reelz_native")
     }
 
-    /** Build an embed URL from base + TMDB ID. mediaType: 0=movie, 1=tv */
-    external fun buildEmbedUrl(
-        baseUrl:   String,
-        tmdbId:    Int,
-        mediaType: Int,
-        season:    Int,
-        episode:   Int,
-    ): String
+    // ── Raw JNI declarations ──────────────────────────────────────────────────
+    private external fun parseBestVariantUrl(content: String, baseUrl: String): String
+    private external fun parseSegmentUrls(content: String, baseUrl: String): String
+    private external fun parseVariants(content: String, baseUrl: String): String
+    private external fun parseSubtitles(content: String, baseUrl: String): String
+    external fun forgeHeaders(referer: String, origin: String, mobile: Boolean, isXhr: Boolean): String
+    external fun getUserAgent(mobile: Boolean): String
 
-    /**
-     * Parse an HLS master playlist and return the highest-quality variant URL.
-     * Returns empty string if already a media playlist (pass-through to ExoPlayer).
-     */
-    external fun extractBestVariant(m3u8Content: String): String
+    // ── Public Kotlin-friendly API ────────────────────────────────────────────
 
-    /**
-     * Forge a pipe-delimited header string for the given source.
-     * Format: "Referer|<val>||Origin|<val>||User-Agent|<val>"
-     */
-    external fun forgeHeaders(referer: String, origin: String, userAgent: String): String
+    /** Returns the best (highest bandwidth) variant URL from a master playlist. */
+    fun bestVariant(m3u8Content: String, baseUrl: String): String =
+        parseBestVariantUrl(m3u8Content, baseUrl)
 
-    /**
-     * Estimate total byte size needed to pre-buffer N episodes.
-     * Based on avg ~4.5 min/episode × avgBitrateKbps.
-     */
-    external fun estimateBufferBytes(episodeCount: Int, avgBitrateKbps: Int): Long
+    /** Returns all segment URLs (for media playlists). */
+    fun segments(m3u8Content: String, baseUrl: String): List<String> =
+        parseSegmentUrls(m3u8Content, baseUrl)
+            .trim().lines().filter { it.isNotBlank() }
 
-    /**
-     * Parse the pipe-delimited header string from [forgeHeaders] into a map.
-     */
-    fun parseHeaderString(raw: String): Map<String, String> {
-        if (raw.isBlank()) return emptyMap()
-        return raw.split("||").mapNotNull { pair ->
-            val parts = pair.split("|")
-            if (parts.size == 2) parts[0] to parts[1] else null
-        }.toMap()
-    }
+    /** Returns all quality variants, sorted highest first. */
+    fun variants(m3u8Content: String, baseUrl: String): List<QualityTrack> =
+        parseVariants(m3u8Content, baseUrl)
+            .trim().lines()
+            .filter { it.isNotBlank() }
+            .mapNotNull { line ->
+                val parts = line.split("|")
+                if (parts.size < 4) return@mapNotNull null
+                val url       = parts[0]
+                val bandwidth = parts[1].toLongOrNull() ?: 0L
+                val res       = parts[2]
+                val height    = parts[3].toIntOrNull() ?: 0
+                val label     = if (height > 0) "${height}p" else if (res.isNotBlank()) res else "Auto"
+                QualityTrack(label, url, bandwidth)
+            }
 
-    companion object {
-        const val MEDIA_MOVIE = 0
-        const val MEDIA_TV    = 1
+    /** Returns subtitle tracks from a master playlist. */
+    fun subtitles(m3u8Content: String, baseUrl: String): List<Subtitle> =
+        parseSubtitles(m3u8Content, baseUrl)
+            .trim().lines()
+            .filter { it.isNotBlank() }
+            .mapNotNull { line ->
+                val parts = line.split("|")
+                if (parts.size < 3) return@mapNotNull null
+                Subtitle(url = parts[0], language = parts[1], label = parts[2])
+            }
+
+    /** Parse raw "Key: Value\r\n" header string into a map. */
+    fun parseForgedHeaders(referer: String, origin: String, mobile: Boolean = true): Map<String, String> {
+        val raw = forgeHeaders(referer, origin, mobile, false)
+        return raw.lines()
+            .filter { it.contains(": ") }
+            .associate { line ->
+                val idx = line.indexOf(": ")
+                line.substring(0, idx) to line.substring(idx + 2).trimEnd()
+            }
     }
 }

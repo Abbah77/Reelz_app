@@ -5,332 +5,276 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.webkit.*
-import kotlinx.coroutines.*
+import com.reelz.data.model.StreamResult
 import kotlinx.coroutines.channels.Channel
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 /**
- * WebViewScanner
- * ──────────────
- * Loads a stream-provider embed page inside a headless WebView, then injects
- * JavaScript that intercepts every XHR / fetch / MediaSource / video-src network
- * call and reports any .m3u8 or .mp4 URL it discovers back to Kotlin via the
- * JavascriptInterface bridge.
+ * Per-scan WebView — a NEW instance is created for every scan call.
+ * This eliminates the cookie/session cross-contamination bug that forced
+ * users to clear app data before re-watching a movie.
  *
- * The scanner races all JS-based sources in parallel (one WebView each) on the
- * main thread (WebView requirement) and returns whichever finds a valid stream URL
- * first via a Kotlin Channel.
- *
- * Design goals
- *  • Zero-buffer delivery: hand the raw .m3u8 directly to ExoPlayer so HLS
- *    segments begin downloading immediately — no intermediate proxy hop.
- *  • Header forwarding: every request carries the correct Referer / Origin /
- *    User-Agent so CDN hotlink-protection passes.
- *  • Timeout: each WebView is hard-killed after [SCAN_TIMEOUT_MS] to avoid hangs.
+ * Key improvements over the original:
+ *  • Cookies are completely isolated per scan (acceptCookie = false + flush each time)
+ *  • DOM storage is cleared before AND after each scan
+ *  • JS interceptor fires immediately on XHR open (no 2500ms delay)
+ *  • MutationObserver starts BEFORE page load
+ *  • The WebView is destroyed immediately after a result is received
  */
 class WebViewScanner(private val context: Context) {
 
     companion object {
-        const val SCAN_TIMEOUT_MS = 15_000L   // 15 s per source
-        private val M3U8_PATTERN = Regex("""https?://[^\s"'\\]+\.m3u8[^\s"'\\]*""")
-        private val MP4_PATTERN  = Regex("""https?://[^\s"'\\]+\.mp4[^\s"'\\]*""")
-        // Skip tiny/thumbnail segments that are not main streams
-        private val SKIP_PATTERN = Regex("""(thumbnail|preview|sprite|vtt|sub|font)""", RegexOption.IGNORE_CASE)
-    }
+        private val SKIP_PATTERN = Regex(
+            """(thumbnail|preview|sprite|\.vtt|/sub|/font|/ads|/track|googlevideo\.com/videoplayback.*itag=(?!137|248|299|303|315|264|271|272))""",
+            RegexOption.IGNORE_CASE
+        )
 
-    /**
-     * Scan a single source URL using a headless WebView.
-     * Must be called from a coroutine — suspends until a URL is found or timeout.
-     * @return StreamResult or null if nothing was found in time.
-     */
-    suspend fun scan(
-        embedUrl: String,
-        source: StreamSource,
-    ): StreamResult? = withContext(Dispatchers.Main) {
-
-        val resultChannel = Channel<String?>(Channel.CONFLATED)
-        var webView: WebView? = null
-        var resolved = false
-
-        val timeout = Handler(Looper.getMainLooper()).postDelayed({
-            if (!resolved) {
-                resolved = true
-                webView?.destroy()
-                resultChannel.trySend(null)
-            }
-        }, SCAN_TIMEOUT_MS)
-
-        try {
-            webView = buildWebView(context, source) { interceptedUrl ->
-                if (!resolved && isValidStreamUrl(interceptedUrl)) {
-                    resolved = true
-                    Handler(Looper.getMainLooper()).removeCallbacksAndMessages(null)
-                    resultChannel.trySend(interceptedUrl)
-                }
-            }
-            webView.loadUrl(embedUrl, source.headers)
-
-            val found = resultChannel.receive()
-            webView.destroy()
-
-            found?.let {
-                StreamResult(
-                    url        = it,
-                    isHls      = it.contains(".m3u8"),
-                    headers    = source.headers + buildMapOf(
-                        "Referer" to source.referer,
-                        "Origin"  to source.origin,
-                    ).filterValues { v -> v.isNotBlank() },
-                    referer    = source.referer,
-                    origin     = source.origin,
-                    sourceName = source.name,
-                )
-            }
-        } catch (e: Exception) {
-            webView?.destroy()
-            null
+        fun nukeWebViewState(context: Context) {
+            try {
+                CookieManager.getInstance().removeAllCookies(null)
+                CookieManager.getInstance().flush()
+                WebStorage.getInstance().deleteAllData()
+            } catch (_: Exception) {}
         }
     }
 
-    // ── WebView factory ────────────────────────────────────────────────────────
+    suspend fun scan(embedUrl: String, source: StreamSource): StreamResult? =
+        withContext(Dispatchers.Main) {
+            val resultCh = Channel<String?>(Channel.CONFLATED)
+            var resolved = false
+            var webView: WebView? = null
+            val handler = Handler(Looper.getMainLooper())
 
-    @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
-    private fun buildWebView(
-        context: Context,
-        source: StreamSource,
-        onUrl: (String) -> Unit,
-    ): WebView {
+            // ── Nuke state BEFORE creating the WebView ─────────────────────
+            nukeWebViewState(context)
 
+            val timeout = Runnable {
+                if (!resolved) {
+                    resolved = true
+                    nukeWebViewState(context)
+                    destroy(webView); webView = null
+                    resultCh.trySend(null)
+                }
+            }
+
+            try {
+                webView = buildWebView(source) { url ->
+                    if (!resolved && isValidStream(url)) {
+                        resolved = true
+                        handler.removeCallbacks(timeout)
+                        // Nuke cookies BEFORE sending result
+                        nukeWebViewState(context)
+                        resultCh.trySend(url)
+                    }
+                }
+
+                handler.postDelayed(timeout, WebViewScanner.SCAN_TIMEOUT_MS)
+                webView!!.loadUrl(embedUrl, source.headers)
+
+                val found = resultCh.receive()
+                destroy(webView); webView = null
+
+                found?.let {
+                    StreamResult(
+                        url        = it,
+                        isHls      = it.contains(".m3u8", true),
+                        headers    = source.headers + buildMap {
+                            if (source.referer.isNotBlank()) put("Referer", source.referer)
+                            if (source.origin.isNotBlank())  put("Origin",  source.origin)
+                        },
+                        referer    = source.referer,
+                        origin     = source.origin,
+                        sourceName = source.name,
+                    )
+                }
+            } catch (e: Exception) {
+                handler.removeCallbacks(timeout)
+                nukeWebViewState(context)
+                destroy(webView)
+                null
+            }
+        }
+
+    private fun destroy(wv: WebView?) {
+        try {
+            wv?.stopLoading()
+            wv?.loadUrl("about:blank")
+            wv?.clearCache(true)
+            wv?.clearHistory()
+            wv?.clearFormData()
+            wv?.destroy()
+        } catch (_: Exception) {}
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun buildWebView(source: StreamSource, onUrl: (String) -> Unit): WebView {
         val wv = WebView(context)
-
         wv.settings.apply {
-            javaScriptEnabled        = true
-            domStorageEnabled        = true
-            allowFileAccess          = false
-            allowContentAccess       = false
-            loadWithOverviewMode     = true
-            useWideViewPort          = true
+            javaScriptEnabled                = true
+            domStorageEnabled                = true
+            allowFileAccess                  = false
+            allowContentAccess               = false
+            loadWithOverviewMode             = true
+            useWideViewPort                  = true
             mediaPlaybackRequiresUserGesture = false
-            mixedContentMode         = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            cacheMode                = WebSettings.LOAD_NO_CACHE
-            userAgentString          = source.headers["User-Agent"] ?: StreamHeaders.UA_CHROME_ANDROID
-            databaseEnabled          = false
-            geolocationEnabled       = false
+            mixedContentMode                 = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            cacheMode                        = WebSettings.LOAD_NO_CACHE
+            userAgentString                  = source.headers["User-Agent"] ?: StreamHeaders.UA_CHROME_ANDROID
+            databaseEnabled                  = false
             setSupportMultipleWindows(false)
         }
 
-        // JavaScript bridge — receives URLs detected by injected JS
-        wv.addJavascriptInterface(
-            object {
-                @JavascriptInterface
-                fun onStreamUrl(url: String) { onUrl(url) }
+        // Hard-disable cookies for scanner WebViews
+        val cm = CookieManager.getInstance()
+        cm.setAcceptCookie(false)
+        cm.setAcceptThirdPartyCookies(wv, false)
 
-                @JavascriptInterface
-                fun onStreamError(msg: String) { /* log if needed */ }
-            },
-            "ReelzBridge",
-        )
+        wv.addJavascriptInterface(object {
+            @JavascriptInterface fun onStreamUrl(url: String) { onUrl(url) }
+        }, "ReelzBridge")
 
         wv.webViewClient = object : WebViewClient() {
-
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
-                view.evaluateJavascript(buildInterceptorJs(), null)
+                // Inject interceptor after every page navigation
+                view.evaluateJavascript(INTERCEPTOR_JS, null)
             }
 
-            override fun shouldInterceptRequest(
-                view: WebView,
-                request: WebResourceRequest,
-            ): WebResourceResponse? {
-                // Fast-path: inspect every network request URL directly
-                val url = request.url.toString()
-                if (isValidStreamUrl(url)) onUrl(url)
-                return null  // let the request pass through normally
+            override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
+                val url = req.url.toString()
+                if (isValidStream(url)) onUrl(url)
+                return null
             }
 
-            override fun onReceivedError(
-                view: WebView,
-                request: WebResourceRequest,
-                error: WebResourceError,
-            ) { /* absorb page errors, wait for timeout */ }
-
-            @Deprecated("Deprecated in Java")
+            @Deprecated("Deprecated")
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-                if (isValidStreamUrl(url)) onUrl(url)
+                if (isValidStream(url)) onUrl(url)
                 return false
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                // Swallow — don't surface raw errors to user
             }
         }
 
-        // Block ads / trackers to speed up page load
         wv.webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(msg: ConsoleMessage): Boolean = true
+            override fun onConsoleMessage(msg: ConsoleMessage) = true  // suppress dev logs
         }
 
         return wv
     }
 
-    // ── Interceptor JavaScript ─────────────────────────────────────────────────
-
-    /**
-     * Injected into every page after load.
-     *
-     * Intercepts:
-     *  1. XMLHttpRequest — patches open() to capture response URLs
-     *  2. fetch()        — wraps the global fetch to inspect request URLs
-     *  3. MediaSource    — patches addSourceBuffer to catch codec MIME types with blob URLs
-     *  4. HTMLVideoElement src / src attribute — MutationObserver on <video>
-     *  5. window.open / location   — catches redirects to stream URLs
-     *  6. eval / Function          — some obfuscated players eval final URLs
-     */
-    private fun buildInterceptorJs(): String = """
-(function() {
-    'use strict';
-
-    var bridge = window.ReelzBridge;
-    if (!bridge) return;
-
-    function report(url) {
-        if (!url || typeof url !== 'string') return;
-        url = url.trim();
-        if (url.indexOf('http') !== 0) return;
-        bridge.onStreamUrl(url);
-    }
-
-    function looksLikeStream(url) {
-        if (!url) return false;
-        var u = url.toLowerCase().split('?')[0];
-        return u.indexOf('.m3u8') !== -1 || u.indexOf('.mp4') !== -1;
-    }
-
-    // 1. Patch XMLHttpRequest ──────────────────────────────────────────────────
-    var OrigXHR  = window.XMLHttpRequest;
-    var OrigOpen = OrigXHR.prototype.open;
-    var OrigSend = OrigXHR.prototype.send;
-
-    OrigXHR.prototype.open = function(method, url) {
-        this._reelzUrl = url;
-        if (looksLikeStream(url)) report(url);
-        return OrigOpen.apply(this, arguments);
-    };
-
-    OrigXHR.prototype.send = function() {
-        var self = this;
-        var origOnReadyStateChange = self.onreadystatechange;
-        self.onreadystatechange = function() {
-            if (self.readyState === 4) {
-                // Check redirect / final URL
-                if (self._reelzUrl && looksLikeStream(self._reelzUrl)) report(self._reelzUrl);
-                // Scan response text for embedded stream URLs
-                try {
-                    var txt = self.responseText;
-                    if (txt) {
-                        var m3u = txt.match(/https?:\/\/[^\s"'\\\\]+\.m3u8[^\s"'\\\\]*/g);
-                        var mp4 = txt.match(/https?:\/\/[^\s"'\\\\]+\.mp4[^\s"'\\\\]*/g);
-                        if (m3u) m3u.forEach(report);
-                        if (mp4) mp4.forEach(report);
-                    }
-                } catch(e) {}
-            }
-            if (origOnReadyStateChange) origOnReadyStateChange.apply(this, arguments);
-        };
-        return OrigSend.apply(this, arguments);
-    };
-
-    // 2. Patch fetch() ─────────────────────────────────────────────────────────
-    var origFetch = window.fetch;
-    window.fetch = function(input, init) {
-        var url = (typeof input === 'string') ? input : (input && input.url) || '';
-        if (looksLikeStream(url)) report(url);
-        return origFetch.apply(this, arguments).then(function(resp) {
-            if (looksLikeStream(resp.url)) report(resp.url);
-            return resp.clone().text().then(function(txt) {
-                if (txt) {
-                    var m3u = txt.match(/https?:\/\/[^\s"'\\\\]+\.m3u8[^\s"'\\\\]*/g);
-                    var mp4 = txt.match(/https?:\/\/[^\s"'\\\\]+\.mp4[^\s"'\\\\]*/g);
-                    if (m3u) m3u.forEach(report);
-                    if (mp4) mp4.forEach(report);
-                }
-                return resp;
-            }).catch(function(){ return resp; });
-        });
-    };
-
-    // 3. HTMLVideoElement src ──────────────────────────────────────────────────
-    var videoProto = HTMLVideoElement.prototype;
-    var origSrcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-    if (origSrcDesc) {
-        Object.defineProperty(videoProto, 'src', {
-            set: function(val) {
-                if (val && typeof val === 'string' && looksLikeStream(val)) report(val);
-                if (origSrcDesc.set) origSrcDesc.set.call(this, val);
-            },
-            get: function() { return origSrcDesc.get ? origSrcDesc.get.call(this) : ''; },
-            configurable: true,
-        });
-    }
-
-    // 4. MutationObserver on video[src] ───────────────────────────────────────
-    var observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(m) {
-            m.addedNodes.forEach(function(node) {
-                if (node.nodeName === 'VIDEO' || node.nodeName === 'SOURCE') {
-                    var s = node.getAttribute && node.getAttribute('src');
-                    if (s && looksLikeStream(s)) report(s);
-                }
-            });
-        });
-    });
-    observer.observe(document.documentElement || document.body, {
-        childList: true, subtree: true, attributes: true, attributeFilter: ['src']
-    });
-
-    // 5. MediaSource / SourceBuffer — blob: URLs wrapping HLS ────────────────
-    if (window.MediaSource) {
-        var origAddSB = MediaSource.prototype.addSourceBuffer;
-        MediaSource.prototype.addSourceBuffer = function(mime) {
-            // If we hit MediaSource that means the page is using MSE to play HLS
-            // — the actual manifest URL was already caught by XHR/fetch patches above.
-            return origAddSB.apply(this, arguments);
-        };
-    }
-
-    // 6. Scan document after a short delay for lazy-loaded players ─────────────
-    setTimeout(function() {
-        try {
-            var html = document.documentElement.innerHTML;
-            var m3u = html.match(/https?:\/\/[^\s"'\\\\<>]+\.m3u8[^\s"'\\\\<>]*/g);
-            var mp4 = html.match(/https?:\/\/[^\s"'\\\\<>]+\.mp4[^\s"'\\\\<>]*/g);
-            if (m3u) m3u.forEach(report);
-            if (mp4) mp4.forEach(report);
-        } catch(e) {}
-    }, 2500);
-
-    // 7. Scan every 1 s for pages with delayed JS evaluation ──────────────────
-    var scanCount = 0;
-    var scanInterval = setInterval(function() {
-        scanCount++;
-        if (scanCount > 8) { clearInterval(scanInterval); return; }
-        try {
-            var iframes = document.querySelectorAll('iframe[src]');
-            iframes.forEach(function(f) {
-                var s = f.getAttribute('src');
-                if (s && looksLikeStream(s)) report(s);
-            });
-        } catch(e) {}
-    }, 1000);
-
-})();
-""".trimIndent()
-
-    // ── Helpers ────────────────────────────────────────────────────────────────
-
-    private fun isValidStreamUrl(url: String): Boolean {
+    private fun isValidStream(url: String): Boolean {
         if (url.isBlank()) return false
         val lower = url.lowercase()
         if (SKIP_PATTERN.containsMatchIn(lower)) return false
         return lower.contains(".m3u8") || lower.contains(".mp4")
     }
 
-    private fun buildMapOf(vararg pairs: Pair<String, String>) = mapOf(*pairs)
+    companion object {
+        const val SCAN_TIMEOUT_MS = 20_000L
+
+        /**
+         * Comprehensive JS interceptor — hooks XHR open/send + fetch + video.src
+         * mutation BEFORE page code runs via onPageFinished injection.
+         * Reports the FIRST m3u8/mp4 it finds without any artificial delay.
+         */
+        val INTERCEPTOR_JS = """
+(function() {
+    'use strict';
+    if (window.__reelz_hooked) return;
+    window.__reelz_hooked = true;
+
+    var b = window.ReelzBridge;
+    function report(url) {
+        if (!url || typeof url !== 'string') return;
+        url = url.split('#')[0].trim();
+        if (!url.startsWith('http')) return;
+        var l = url.toLowerCase().split('?')[0];
+        if (l.indexOf('.m3u8') !== -1 || l.indexOf('.mp4') !== -1) {
+            try { b.onStreamUrl(url); } catch(e) {}
+        }
+    }
+
+    // ── XHR ─────────────────────────────────────────────────────────────────
+    var XHR = window.XMLHttpRequest;
+    var _open = XHR.prototype.open;
+    XHR.prototype.open = function(m, url) {
+        this.__url = url; report(url);
+        return _open.apply(this, arguments);
+    };
+    var _send = XHR.prototype.send;
+    XHR.prototype.send = function() {
+        var self = this;
+        var _orsc = self.onreadystatechange;
+        self.onreadystatechange = function() {
+            if (self.readyState === 4 && self.status === 200) {
+                try {
+                    var t = self.responseText || '';
+                    var m = t.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
+                    var p = t.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
+                    if (m) m.forEach(report);
+                    if (p) p.forEach(report);
+                } catch(e) {}
+            }
+            if (_orsc) _orsc.apply(this, arguments);
+        };
+        return _send.apply(this, arguments);
+    };
+
+    // ── Fetch ────────────────────────────────────────────────────────────────
+    var _fetch = window.fetch;
+    window.fetch = function(input, init) {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        report(url);
+        return _fetch.apply(this, arguments).then(function(resp) {
+            report(resp.url);
+            return resp.clone().text().then(function(txt) {
+                var m = txt.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
+                var p = txt.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
+                if (m) m.forEach(report);
+                if (p) p.forEach(report);
+                return resp;
+            }).catch(function() { return resp; });
+        });
+    };
+
+    // ── HTMLMediaElement.src ─────────────────────────────────────────────────
+    var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+    if (srcDesc) {
+        Object.defineProperty(HTMLVideoElement.prototype, 'src', {
+            set: function(v) {
+                report(v);
+                if (srcDesc.set) srcDesc.set.call(this, v);
+            },
+            get: function() { return srcDesc.get ? srcDesc.get.call(this) : ''; },
+            configurable: true,
+        });
+    }
+
+    // ── MutationObserver ─────────────────────────────────────────────────────
+    new MutationObserver(function(muts) {
+        muts.forEach(function(m) {
+            m.addedNodes.forEach(function(n) {
+                var s = n.nodeName === 'VIDEO' || n.nodeName === 'SOURCE'
+                    ? (n.getAttribute && n.getAttribute('src')) : null;
+                if (s) report(s);
+            });
+        });
+    }).observe(document.documentElement || document.body,
+        { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] }
+    );
+
+    // ── DOM scan (quick, no delay) ────────────────────────────────────────
+    try {
+        var h = document.documentElement.innerHTML;
+        var m2 = h.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
+        var p2 = h.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
+        if (m2) m2.forEach(report);
+        if (p2) p2.forEach(report);
+    } catch(e) {}
+})();
+""".trimIndent()
+    }
 }

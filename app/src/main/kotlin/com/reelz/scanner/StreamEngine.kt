@@ -5,37 +5,18 @@ import com.reelz.data.model.MediaType
 import com.reelz.data.model.StreamResult
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * StreamEngine
- * ────────────
- * Races ALL sources in parallel and returns the FIRST valid StreamResult.
- *
- * Flow:
- *  1. Sort sources by priority (lowest first).
- *  2. Fire every source concurrently via async{}.
- *  3. Use select{} style via Channel — whichever async job emits first wins.
- *  4. Cancel all other in-flight jobs immediately → zero wasted time.
- *  5. Return the winning StreamResult to the player.
- *
- * JS-based sources  → WebViewScanner (runs on Main thread as required by WebView)
- * Direct sources    → DirectScanner  (runs on IO thread via OkHttp)
- */
 @Singleton
 class StreamEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val directScanner: DirectScanner,
 ) {
-
     /**
-     * Resolve a stream for the given media.
-     * @param tmdbId    TMDB ID
-     * @param mediaType MOVIE or TV
-     * @param season    season number (TV only, ignored for movies)
-     * @param episode   episode number (TV only, ignored for movies)
-     * @return first StreamResult found, or null if all sources failed/timed out
+     * Race all sources in parallel — return the FIRST successful result.
+     * This is the key fix for slow loading: we no longer wait sequentially.
      */
     suspend fun resolve(
         tmdbId: Int,
@@ -43,53 +24,53 @@ class StreamEngine @Inject constructor(
         season: Int = 0,
         episode: Int = 0,
     ): StreamResult? = coroutineScope {
-
         val sources = SourceRegistry.sorted()
         if (sources.isEmpty()) return@coroutineScope null
 
-        // Channel receives the FIRST successful result then closes
-        val resultChannel = kotlinx.coroutines.channels.Channel<StreamResult>(
-            kotlinx.coroutines.channels.Channel.CONFLATED
-        )
+        val resultChannel = Channel<StreamResult?>(Channel.CONFLATED)
+        val jobs = mutableListOf<Job>()
 
-        val jobs = sources.map { source ->
-            async(if (source.requiresJs) Dispatchers.Main else Dispatchers.IO) {
+        sources.forEachIndexed { index, source ->
+            val job = launch {
+                // Stagger start by priority to avoid all hitting network at once
+                if (index > 0) delay(index * 200L)
                 try {
                     val url = source.buildUrl(tmdbId, mediaType, season, episode)
-                    val result = if (source.requiresJs) {
-                        WebViewScanner(context).scan(url, source)
-                    } else {
-                        directScanner.scan(url, source)
+                    val result = withTimeoutOrNull(18_000L) {
+                        if (source.requiresJs) {
+                            withContext(Dispatchers.Main) {
+                                // Each WebView gets its own clean instance
+                                WebViewScanner(context).scan(url, source)
+                            }
+                        } else {
+                            withContext(Dispatchers.IO) {
+                                directScanner.scan(url, source)
+                            }
+                        }
                     }
-                    if (result != null) {
+                    if (result != null && isActive) {
                         resultChannel.trySend(result)
                     }
-                } catch (_: Exception) { /* source failed silently */ }
+                } catch (_: Exception) {}
             }
+            jobs.add(job)
         }
 
-        // Await first result with global timeout
-        val winner = withTimeoutOrNull(20_000L) {
-            // Poll until one job sends to channel or all jobs complete
-            var found: StreamResult? = null
-            while (found == null && jobs.any { it.isActive }) {
-                found = resultChannel.tryReceive().getOrNull()
-                if (found == null) delay(50)
-            }
-            found ?: resultChannel.tryReceive().getOrNull()
+        // Overall timeout
+        val timeoutJob = launch {
+            delay(25_000L)
+            resultChannel.trySend(null)
         }
 
-        // Cancel all remaining in-flight jobs
+        val result = resultChannel.receive()
+        // Cancel all remaining work once we have a result
         jobs.forEach { it.cancel() }
-        resultChannel.close()
-
-        winner
+        timeoutJob.cancel()
+        result
     }
 
     /**
-     * Resolve with fallback — tries primary resolve, then retries with next
-     * available sources if the first result turns out to be unplayable.
-     * Called by the player when ExoPlayer reports a playback error.
+     * Fallback: try all sources except the failed one, sequentially.
      */
     suspend fun resolveWithFallback(
         tmdbId: Int,
@@ -102,13 +83,11 @@ class StreamEngine @Inject constructor(
         for (source in sources) {
             try {
                 val url = source.buildUrl(tmdbId, mediaType, season, episode)
-                val result = if (source.requiresJs) {
-                    withContext(Dispatchers.Main) {
-                        WebViewScanner(context).scan(url, source)
-                    }
-                } else {
-                    withContext(Dispatchers.IO) {
-                        directScanner.scan(url, source)
+                val result = withTimeoutOrNull(18_000L) {
+                    if (source.requiresJs) {
+                        withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source) }
+                    } else {
+                        withContext(Dispatchers.IO)   { directScanner.scan(url, source) }
                     }
                 }
                 if (result != null) return result

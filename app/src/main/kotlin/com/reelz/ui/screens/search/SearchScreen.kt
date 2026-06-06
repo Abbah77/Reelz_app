@@ -1,144 +1,148 @@
 package com.reelz.ui.screens.search
 
+import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.shape.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.*
 import androidx.hilt.navigation.compose.hiltViewModel
-import coil.compose.AsyncImage
-import com.reelz.BuildConfig
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.navigation.NavController
 import com.reelz.data.model.*
+import com.reelz.data.repository.MediaRepository
+import com.reelz.ui.components.*
 import com.reelz.ui.theme.*
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import javax.inject.Inject
+
+@HiltViewModel
+class SearchViewModel @Inject constructor(private val repo: MediaRepository) : ViewModel() {
+    data class UiState(
+        val query: String = "",
+        val results: List<Media> = emptyList(),
+        val isLoading: Boolean = false,
+        val error: String? = null,
+        val hasSearched: Boolean = false,
+    )
+    private val _ui = MutableStateFlow(UiState())
+    val ui: StateFlow<UiState> = _ui.asStateFlow()
+    private var searchJob: Job? = null
+
+    fun onQuery(q: String) {
+        _ui.update { it.copy(query = q) }
+        searchJob?.cancel()
+        if (q.isBlank()) { _ui.update { it.copy(results = emptyList(), hasSearched = false) }; return }
+        searchJob = viewModelScope.launch {
+            delay(400)  // debounce
+            _ui.update { it.copy(isLoading = true, error = null) }
+            try {
+                val results = repo.search(q)
+                _ui.update { it.copy(results = results, isLoading = false, hasSearched = true) }
+            } catch (e: Exception) {
+                _ui.update { it.copy(isLoading = false, error = e.message, hasSearched = true) }
+            }
+        }
+    }
+    fun clear() { searchJob?.cancel(); _ui.update { UiState() } }
+}
 
 @Composable
-fun SearchScreen(
-    onMediaClick: (Int, MediaType) -> Unit,
-    vm: SearchViewModel = hiltViewModel(),
-) {
+fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsState()
+    val focusReq = remember { FocusRequester() }
 
-    Column(Modifier.fillMaxSize().background(Surface900)) {
+    LaunchedEffect(Unit) { focusReq.requestFocus() }
 
-        Spacer(Modifier.height(52.dp))
-        Text(
-            "Search",
-            color = White,
-            fontWeight = FontWeight.Black,
-            fontSize = 24.sp,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-
-        // Search bar
-        OutlinedTextField(
-            value = ui.query,
-            onValueChange = vm::onQueryChange,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            placeholder = { Text("Movies, TV shows…", color = White40) },
-            leadingIcon  = { Icon(Icons.Default.Search, null, tint = White60) },
-            trailingIcon = {
-                if (ui.query.isNotEmpty())
-                    IconButton(onClick = vm::clearQuery) {
-                        Icon(Icons.Default.Close, null, tint = White60)
-                    }
-            },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor   = Primary,
-                unfocusedBorderColor = Stroke,
-                cursorColor          = Primary,
-                focusedTextColor     = White,
-                unfocusedTextColor   = White,
-            ),
-            shape = RoundedCornerShape(12.dp),
-            singleLine = true,
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        when {
-            ui.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Primary, modifier = Modifier.size(36.dp))
+    Column(Modifier.fillMaxSize().background(Bg).statusBarsPadding()) {
+        // ── Search bar ─────────────────────────────────────────────────
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                    .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp)),
+            ) {
+                TextField(
+                    value = ui.query,
+                    onValueChange = vm::onQuery,
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusReq),
+                    placeholder = { Text("Search movies, TV shows…", color = White40) },
+                    leadingIcon = { Icon(Icons.Default.Search, null, tint = White40) },
+                    trailingIcon = {
+                        if (ui.query.isNotBlank()) {
+                            IconButton(onClick = vm::clear) { Icon(Icons.Default.Close, null, tint = White40) }
+                        }
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { vm.onQuery(ui.query) }),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor   = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedTextColor        = White,
+                        unfocusedTextColor      = White,
+                        cursorColor             = Brand,
+                        focusedIndicatorColor   = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                    ),
+                )
             }
-            ui.query.length >= 2 && ui.results.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            TextButton(onClick = { nav.popBackStack() }) {
+                Text("Cancel", color = Brand)
+            }
+        }
+
+        // ── Results ────────────────────────────────────────────────────
+        when {
+            ui.isLoading -> FullScreenLoader()
+            ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.onQuery(ui.query) })
+            ui.results.isEmpty() && ui.hasSearched -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.SearchOff, null, tint = White40, modifier = Modifier.size(56.dp))
-                    Spacer(Modifier.height(8.dp))
+                    Icon(Icons.Default.SearchOff, null, tint = White40, modifier = Modifier.size(52.dp))
+                    Spacer(Modifier.height(12.dp))
                     Text("No results for \"${ui.query}\"", color = White60)
                 }
             }
-            ui.results.isNotEmpty() -> LazyColumn(
-                contentPadding = PaddingValues(bottom = 80.dp, top = 4.dp),
+            ui.results.isNotEmpty() -> LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement   = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize(),
             ) {
-                items(ui.results) { media ->
-                    SearchResultRow(media, onMediaClick)
-                }
-            }
-            else -> SearchHint()
-        }
-    }
-}
-
-@Composable
-private fun SearchResultRow(media: Media, onClick: (Int, MediaType) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick(media.tmdbId, media.mediaType) }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AsyncImage(
-            model = BuildConfig.TMDB_IMG_W500 + media.posterPath,
-            contentDescription = media.title,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.width(56.dp).height(80.dp)
-                .background(Surface700, RoundedCornerShape(8.dp))
-                .run { this },
-        )
-        Column(Modifier.weight(1f)) {
-            Text(media.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(3.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Surface(color = if (media.mediaType == MediaType.TV) Surface700 else Primary.copy(.15f), shape = RoundedCornerShape(4.dp)) {
-                    Text(
-                        if (media.mediaType == MediaType.TV) "TV" else "Movie",
-                        color = if (media.mediaType == MediaType.TV) White60 else Primary,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                items(ui.results, key = { it.tmdbId }) { m ->
+                    MediaPosterCard(
+                        media   = m,
+                        onClick = { nav.navigate(com.reelz.ui.Route.Detail.go(m.tmdbId, m.mediaType)) },
+                        modifier = Modifier.aspectRatio(0.65f),
                     )
                 }
-                Text(media.releaseDate?.take(4) ?: "", color = White40, fontSize = 12.sp)
             }
-            Spacer(Modifier.height(3.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Star, null, tint = Gold, modifier = Modifier.size(12.dp))
-                Spacer(Modifier.width(3.dp))
-                Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = 12.sp)
+            else -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Movie, null, tint = White20, modifier = Modifier.size(64.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Text("Search for anything", color = White40, fontSize = 15.sp)
+                }
             }
-            Text(media.overview, color = White40, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 15.sp)
-        }
-        Icon(Icons.Default.ChevronRight, null, tint = White40)
-    }
-    Divider(color = Stroke.copy(.25f), modifier = Modifier.padding(start = 84.dp, end = 16.dp))
-}
-
-@Composable
-private fun SearchHint() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Default.Search, null, tint = White20, modifier = Modifier.size(64.dp))
-            Text("Search for movies & TV shows", color = White40, fontSize = 14.sp)
         }
     }
 }

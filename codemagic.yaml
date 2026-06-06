@@ -2,41 +2,65 @@ workflows:
   android-release:
     name: Reelz Android Release
     max_build_duration: 60
+    instance_type: mac_mini_m2
+
     environment:
       android_signing:
-        - reelz_keystore
+        - reelz_keystore          # Add your keystore in Codemagic → Code signing
       groups:
-        - reelz_env
+        - reelz_env               # Add env var group in Codemagic settings
       vars:
         PACKAGE_NAME: "com.reelz"
       java: 17
+
     scripts:
       - name: Set up local.properties
         script: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/local.properties"
 
       - name: Make gradlew executable
-        script: chmod +x gradlew
-
-      - name: Build release APK + AAB
         script: |
-          ./gradlew bundleRelease assembleRelease \
-            --no-daemon \
-            --stacktrace
+          chmod +x gradlew
+
+      - name: Build Release APK + AAB
+        script: |
+          ./gradlew assembleRelease bundleRelease \
+            -Pandroid.injected.signing.store.file=$CM_KEYSTORE_PATH \
+            -Pandroid.injected.signing.store.password=$CM_KEYSTORE_PASSWORD \
+            -Pandroid.injected.signing.key.alias=$CM_KEY_ALIAS \
+            -Pandroid.injected.signing.key.password=$CM_KEY_PASSWORD
 
     artifacts:
-      - app/build/outputs/bundle/release/*.aab
       - app/build/outputs/apk/release/*.apk
+      - app/build/outputs/bundle/release/*.aab
       - app/build/outputs/mapping/release/mapping.txt
 
     publishing:
       google_play:
         credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
-        track: internal
+        track: internal            # Change to: alpha / beta / production
         submit_as_draft: true
-      email:
-        recipients:
-          - $DEVELOPER_EMAIL
-        notify:
-          success: true
-          failure: true
+
+  android-debug:
+    name: Reelz Android Debug
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+
+    environment:
+      java: 17
+
+    scripts:
+      - name: Set up local.properties
+        script: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/local.properties"
+
+      - name: Make gradlew executable
+        script: |
+          chmod +x gradlew
+
+      - name: Build Debug APK
+        script: |
+          ./gradlew assembleDebug
+
+    artifacts:
+      - app/build/outputs/apk/debug/*.apk
