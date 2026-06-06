@@ -7,33 +7,49 @@ plugins {
 }
 
 android {
-    namespace = "com.streamapp"
+    namespace = "com.reelz"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.streamapp"
+        applicationId = "com.reelz"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+
         buildConfigField("String", "TMDB_KEY", "\"1eef1496d59aa06f62e201ddce2741b4\"")
         buildConfigField("String", "TMDB_IMG_W500", "\"https://image.tmdb.org/t/p/w500\"")
         buildConfigField("String", "TMDB_IMG_ORIGINAL", "\"https://image.tmdb.org/t/p/original\"")
+
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
-            cmake { cppFlags += listOf("-std=c++20", "-O3", "-DNDEBUG") }
+            cmake {
+                cppFlags += listOf("-std=c++20", "-O3", "-DNDEBUG", "-ffast-math")
+                arguments += listOf("-DANDROID_STL=c++_shared")
+            }
         }
     }
 
     externalNativeBuild {
-        cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {
+        debug {
+            isDebuggable = true
+            isMinifyEnabled = false
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.getByName("debug") // replace with release signing for production
         }
     }
 
@@ -41,15 +57,27 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
     kotlinOptions {
         jvmTarget = "17"
         freeCompilerArgs += listOf(
             "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
             "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
-            "-opt-in=androidx.compose.animation.ExperimentalAnimationApi"
+            "-opt-in=androidx.compose.animation.ExperimentalAnimationApi",
+            "-opt-in=androidx.media3.common.util.UnstableApi"
         )
     }
-    buildFeatures { compose = true; buildConfig = true }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
 }
 
 dependencies {
@@ -71,6 +99,7 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
+    implementation(libs.media3.datasource.okhttp)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
@@ -82,5 +111,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore)
     implementation(libs.palette)
+    implementation(libs.androidx.splashscreen)
     debugImplementation(libs.compose.ui.tooling)
 }

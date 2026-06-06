@@ -1,14 +1,37 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(streamscanner VERSION 1.0.0 LANGUAGES CXX)
+project("reelz_native" CXX)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-add_library(streamscanner SHARED
-    scanner.cpp
+
+add_library(
+    reelz_native
+    SHARED
+    reelz_native.cpp
+    url_builder.cpp
     m3u8_parser.cpp
-    url_extractor.cpp
+    header_forge.cpp
 )
+
 find_library(log-lib log)
 find_library(android-lib android)
-target_link_libraries(streamscanner ${log-lib} ${android-lib})
-target_compile_options(streamscanner PRIVATE -O3 -fvisibility=hidden -ffunction-sections -fdata-sections)
-target_link_options(streamscanner PRIVATE -Wl,--gc-sections)
+
+target_link_libraries(
+    reelz_native
+    ${log-lib}
+    ${android-lib}
+)
+
+target_compile_options(reelz_native PRIVATE
+    -O3
+    -ffast-math
+    -fvisibility=hidden
+    -ffunction-sections
+    -fdata-sections
+    -DNDEBUG
+)
+
+target_link_options(reelz_native PRIVATE
+    -Wl,--gc-sections
+    -Wl,--strip-all
+)

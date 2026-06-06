@@ -1,17 +1,10 @@
 #pragma once
 #include <string>
-#include <vector>
 
-struct StreamVariant {
-    std::string url;
-    int bandwidth = 0;
-    int width = 0;
-    int height = 0;
-    std::string codecs;
-};
+namespace reelz {
+    // Parses an HLS master playlist and returns the URL of the highest-bandwidth variant.
+    std::string extractBestVariant(const std::string& m3u8Content);
 
-class M3u8Parser {
-public:
-    std::vector<StreamVariant> parse(const std::string& content);
-    std::string selectBestQuality(const std::vector<StreamVariant>& variants);
-};
+    // Returns true if the string looks like a valid HLS manifest.
+    bool isValidM3u8(const std::string& content);
+}

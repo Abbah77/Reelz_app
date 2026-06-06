@@ -1,0 +1,23 @@
+# Gradle
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+*.keystore
+*.jks
+*.aab
+*.apk
+
+# OS
+.DS_Store
+Thumbs.db
+
+# NDK
+*.so
+*.o
+*.a
+
+# Codemagic secrets
+codemagic_secrets/

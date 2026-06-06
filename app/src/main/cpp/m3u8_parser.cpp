@@ -1,62 +1,69 @@
 #include "m3u8_parser.h"
 #include <sstream>
+#include <vector>
 #include <algorithm>
 #include <regex>
 
-std::vector<StreamVariant> M3u8Parser::parse(const std::string& content) {
-    std::vector<StreamVariant> variants;
+namespace reelz {
+
+struct Variant {
+    long long bandwidth = 0;
+    std::string uri;
+};
+
+bool isValidM3u8(const std::string& content) {
+    return content.find("#EXTM3U") != std::string::npos;
+}
+
+/**
+ * Parse HLS master playlist.
+ * Picks variant with highest BANDWIDTH — that's the best quality stream.
+ * If only media segments (#EXTINF) are found, it's already a media playlist
+ * and we return empty to signal ExoPlayer should use the URL directly.
+ */
+std::string extractBestVariant(const std::string& content) {
+    if (!isValidM3u8(content)) return "";
+
+    // If it's a media playlist (not master), signal pass-through
+    if (content.find("#EXTINF") != std::string::npos &&
+        content.find("#EXT-X-STREAM-INF") == std::string::npos) {
+        return "";  // caller uses original URL
+    }
+
+    std::vector<Variant> variants;
     std::istringstream stream(content);
     std::string line;
-    StreamVariant current;
-    bool expectUrl = false;
 
     while (std::getline(stream, line)) {
-        if (line.empty()) continue;
-        // Remove \r
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-
-        if (line.rfind("#EXT-X-STREAM-INF:", 0) == 0) {
-            current = StreamVariant{};
-            expectUrl = true;
-            // Parse BANDWIDTH
-            std::regex bwRe("BANDWIDTH=(\\d+)");
-            std::smatch m;
-            if (std::regex_search(line, m, bwRe)) current.bandwidth = std::stoi(m[1]);
-            // Parse RESOLUTION
-            std::regex resRe("RESOLUTION=(\\d+)x(\\d+)");
-            if (std::regex_search(line, m, resRe)) {
-                current.width = std::stoi(m[1]);
-                current.height = std::stoi(m[2]);
+        if (line.rfind("#EXT-X-STREAM-INF", 0) == 0) {
+            Variant v;
+            // Extract BANDWIDTH=
+            auto bwPos = line.find("BANDWIDTH=");
+            if (bwPos != std::string::npos) {
+                bwPos += 10;
+                auto end = line.find(',', bwPos);
+                std::string bwStr = line.substr(bwPos, end == std::string::npos ? end : end - bwPos);
+                try { v.bandwidth = std::stoll(bwStr); } catch (...) {}
             }
-            // Parse CODECS
-            std::regex codecRe("CODECS=\"([^\"]+)\"");
-            if (std::regex_search(line, m, codecRe)) current.codecs = m[1];
-        } else if (expectUrl && line[0] != '#') {
-            current.url = line;
-            variants.push_back(current);
-            expectUrl = false;
+            // Next non-empty line is the URI
+            while (std::getline(stream, line)) {
+                if (!line.empty() && line[0] != '#') {
+                    v.uri = line;
+                    break;
+                }
+            }
+            if (!v.uri.empty()) variants.push_back(v);
         }
     }
 
-    // If no variants (direct m3u8 segments), return content itself
-    if (variants.empty() && content.find("#EXTINF") != std::string::npos) {
-        variants.push_back({"__self__", 0, 0, 0, ""});
-    }
-
-    return variants;
-}
-
-std::string M3u8Parser::selectBestQuality(const std::vector<StreamVariant>& variants) {
     if (variants.empty()) return "";
-    if (variants.size() == 1) return variants[0].url;
 
-    // Sort by bandwidth descending, pick highest under 1080p first
-    auto it = std::max_element(variants.begin(), variants.end(),
-        [](const StreamVariant& a, const StreamVariant& b) {
-            // Prefer 1080p or best available
-            if (a.height <= 1080 && b.height > 1080) return false;
-            if (a.height > 1080 && b.height <= 1080) return true;
-            return a.bandwidth < b.bandwidth;
-        });
-    return it->url;
+    // Sort descending by bandwidth — highest quality first
+    std::sort(variants.begin(), variants.end(), [](const Variant& a, const Variant& b) {
+        return a.bandwidth > b.bandwidth;
+    });
+
+    return variants.front().uri;
 }
+
+} // namespace reelz
