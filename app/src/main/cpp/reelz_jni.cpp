@@ -1,8 +1,8 @@
 #include <jni.h>
 #include <string>
 #include <android/log.h>
-#include "m3u8_parser.cpp"
-#include "header_forge.cpp"
+#include "m3u8_parser.h"
+#include "header_forge.h"
 
 #define TAG "ReelzNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)

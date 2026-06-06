@@ -1,4 +1,4 @@
-#pragma once
+#include "header_forge.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -9,8 +9,6 @@
  * Forge HTTP request headers that look like a real Chrome browser.
  * Helps bypass naive bot-detection on embed sources.
  */
-
-using Headers = std::unordered_map<std::string, std::string>;
 
 // Chrome versions to rotate through
 static const std::vector<std::string> CHROME_VERSIONS = {
