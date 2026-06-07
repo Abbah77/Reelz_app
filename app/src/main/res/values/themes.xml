@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Base app theme -->
-    <style name="Theme.Reelz" parent="android:Theme.Material.NoTitleBar.Fullscreen">
+    <style name="Theme.Reelz" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowFullscreen">true</item>
     </style>
 
     <!-- Splash screen theme (core-splashscreen) -->
@@ -18,12 +19,13 @@
     </style>
 
     <!-- Player theme: fully immersive black -->
-    <style name="Theme.Reelz.Player" parent="android:Theme.Material.NoTitleBar.Fullscreen">
+    <style name="Theme.Reelz.Player" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowFullscreen">true</item>
     </style>
 </resources>

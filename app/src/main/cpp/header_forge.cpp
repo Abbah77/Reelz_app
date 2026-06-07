@@ -34,7 +34,7 @@ static inline std::string randomPick(const std::vector<std::string>& v) {
     return v[randomInt(0, static_cast<int>(v.size()) - 1)];
 }
 
-static inline std::string buildUserAgent(bool mobile = true) {
+std::string buildUserAgent(bool mobile) {
     const auto& chrome  = randomPick(CHROME_VERSIONS);
     if (mobile) {
         const auto& device = randomPick(ANDROID_DEVICES);
@@ -51,8 +51,8 @@ static inline std::string buildUserAgent(bool mobile = true) {
 Headers forgeHeaders(
     const std::string& referer,
     const std::string& origin,
-    bool               mobile = true,
-    bool               isXhr  = false
+    bool               mobile,
+    bool               isXhr
 ) {
     Headers h;
     h["User-Agent"]      = buildUserAgent(mobile);
