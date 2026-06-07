@@ -2,6 +2,7 @@ package com.reelz.ui.screens.downloads
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -27,6 +28,7 @@ import coil.compose.AsyncImage
 import com.reelz.BuildConfig
 import com.reelz.data.local.DownloadDao
 import com.reelz.data.model.*
+import com.reelz.data.repository.DownloadRepository
 import com.reelz.service.DownloadService
 import com.reelz.ui.components.*
 import com.reelz.ui.screens.player.PlayerActivity
@@ -41,34 +43,24 @@ import javax.inject.Inject
 @HiltViewModel
 class DownloadsViewModel @Inject constructor(
     private val dao: DownloadDao,
+    private val repo: DownloadRepository,
 ) : ViewModel() {
     val downloads: StateFlow<List<DownloadItem>> = dao.getAll()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     fun delete(item: DownloadItem, ctx: Context) {
         viewModelScope.launch {
-            if (item.filePath.isNotBlank()) File(item.filePath).delete()
-            dao.delete(item.id)
+            repo.delete(ctx, item)
         }
     }
 
-    fun enqueue(
-        ctx: Context,
-        tmdbId: Int, title: String, posterPath: String?,
-        mediaType: MediaType, season: Int, episode: Int,
-        episodeName: String, quality: String,
-        streamUrl: String, headers: Map<String, String>,
-    ) {
+    /**
+     * BUG 1 fix: Use repo.resume() which sets resolveRequired=true so the service
+     * re-resolves the stream URL (CDN tokens expire — reusing old URL → 403 → PAUSED loop).
+     */
+    fun resume(ctx: Context, item: DownloadItem) {
         viewModelScope.launch {
-            val id = UUID.randomUUID().toString()
-            dao.insert(DownloadItem(
-                id = id, tmdbId = tmdbId, title = title, posterPath = posterPath,
-                mediaType = mediaType.name, season = season, episode = episode,
-                episodeName = episodeName, quality = quality,
-                streamUrl = streamUrl,
-                headers = com.google.gson.Gson().toJson(headers),
-            ))
-            DownloadService.start(ctx, id)
+            repo.resume(ctx, item)
         }
     }
 }
@@ -86,16 +78,24 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Downloads", style = MaterialTheme.typography.headlineMedium.copy(color = White, fontWeight = FontWeight.Black))
+            Text(
+                "Downloads",
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    color = White, fontWeight = FontWeight.Black
+                )
+            )
             Spacer(Modifier.weight(1f))
             Text(
-                "${downloads.count { it.status == DownloadStatus.DONE.name }} files",
+                "${downloads.count { it.status == DownloadStatus.DONE.name }} ready",
                 color = White40, fontSize = 12.sp,
             )
         }
 
         // ── Tab filter ─────────────────────────────────────────────────
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             listOf("All", "Movies", "TV Shows").forEachIndexed { i, label ->
                 GenrePill(label, tab == i) { tab = i }
             }
@@ -120,27 +120,15 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp, ),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(filtered, key = { it.id }) { dl ->
                     DownloadCard(
-                        item    = dl,
-                        onPlay  = {
-                            if (dl.status == DownloadStatus.DONE.name && dl.filePath.isNotBlank()) {
-                                ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
-                                    putExtra("tmdbId",     dl.tmdbId)
-                                    putExtra("mediaType",  dl.mediaType)
-                                    putExtra("season",     dl.season)
-                                    putExtra("episode",    dl.episode)
-                                    putExtra("title",      dl.title)
-                                    putExtra("posterPath", dl.posterPath)
-                                    // Pass local file path via data URI
-                                    data = android.net.Uri.fromFile(File(dl.filePath))
-                                })
-                            }
-                        },
+                        item     = dl,
+                        onPlay   = { playDownload(ctx, dl) },
                         onDelete = { vm.delete(dl, ctx) },
+                        onResume = { vm.resume(ctx, dl) },
                     )
                 }
                 item { Spacer(Modifier.height(80.dp)) }
@@ -149,51 +137,199 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
     }
 }
 
+/** Launch player for a completed or partially downloaded item. */
+private fun playDownload(ctx: Context, dl: DownloadItem) {
+    val intent = Intent(ctx, PlayerActivity::class.java).apply {
+        putExtra("tmdbId",     dl.tmdbId)
+        putExtra("mediaType",  dl.mediaType)
+        putExtra("season",     dl.season)
+        putExtra("episode",    dl.episode)
+        putExtra("title",      dl.title)
+        putExtra("posterPath", dl.posterPath)
+    }
+    when {
+        // Fully merged MP4
+        dl.status == DownloadStatus.DONE.name && dl.filePath.isNotBlank() -> {
+            intent.data = Uri.fromFile(File(dl.filePath))
+        }
+        // Partial HLS — point at local playlist for partial offline play
+        dl.localPlaylistPath.isNotBlank() -> {
+            intent.data = Uri.fromFile(File(dl.localPlaylistPath))
+            intent.putExtra("isLocalHls", true)
+        }
+        else -> return
+    }
+    ctx.startActivity(intent)
+}
+
 @Composable
-fun DownloadCard(item: DownloadItem, onPlay: () -> Unit, onDelete: () -> Unit) {
+fun DownloadCard(
+    item: DownloadItem,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit,
+    onResume: () -> Unit,
+) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
+    val isDownloading = item.status == DownloadStatus.DOWNLOADING.name
+    val isDone        = item.status == DownloadStatus.DONE.name
+    val isPaused      = item.status == DownloadStatus.PAUSED.name
+    val isError       = item.status == DownloadStatus.ERROR.name
+    val canPlayPartial = item.localPlaylistPath.isNotBlank()
+    val canPlay       = isDone || canPlayPartial
+
+    // Progress fraction
+    val pct = when {
+        item.totalSegments > 0 -> item.segmentsDone.toFloat() / item.totalSegments
+        item.sizeBytes > 0     -> (item.downloadedBytes.toFloat() / item.sizeBytes).coerceIn(0f, 1f)
+        else                   -> 0f
+    }
+    val pctInt = (pct * 100).toInt()
+
     Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BgCard)
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(BgCard)
             .border(1.dp, GlassBorder, RoundedCornerShape(14.dp))
     ) {
-        Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Poster
-            Box(Modifier.width(60.dp).height(84.dp).clip(RoundedCornerShape(8.dp)).background(BgRaised)) {
-                AsyncImage(
-                    model = BuildConfig.TMDB_IMG_W342 + item.posterPath,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                // Play overlay if done
-                if (item.status == DownloadStatus.DONE.name) {
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(.3f)).clickable(onClick = onPlay), Alignment.Center) {
-                        Icon(Icons.Default.PlayArrow, null, tint = White, modifier = Modifier.size(24.dp))
+        Column {
+            Row(
+                Modifier.padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Poster
+                Box(Modifier.width(60.dp).height(84.dp).clip(RoundedCornerShape(8.dp)).background(BgRaised)) {
+                    AsyncImage(
+                        model = BuildConfig.TMDB_IMG_W342 + item.posterPath,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    // Play overlay
+                    if (canPlay) {
+                        Box(
+                            Modifier.fillMaxSize().background(Color.Black.copy(.3f)).clickable(onClick = onPlay),
+                            Alignment.Center,
+                        ) {
+                            Icon(Icons.Default.PlayArrow, null, tint = White, modifier = Modifier.size(24.dp))
+                        }
                     }
                 }
-            }
 
-            Column(Modifier.weight(1f)) {
-                Text(item.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (item.season > 0) Text("S${item.season} E${item.episode} · ${item.episodeName}", color = White60, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusBadge(item.status)
-                    Text(item.quality, color = White40, fontSize = 11.sp)
-                    if (item.sizeBytes > 0) Text(formatSize(item.sizeBytes), color = White40, fontSize = 11.sp)
-                }
-                // Progress bar while downloading
-                if (item.status == DownloadStatus.DOWNLOADING.name && item.sizeBytes > 0) {
-                    Spacer(Modifier.height(6.dp))
-                    val pct = (item.downloadedBytes.toFloat() / item.sizeBytes).coerceIn(0f, 1f)
-                    LinearProgressIndicator(progress = { pct }, modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)), color = Brand, trackColor = GlassMd)
-                }
-            }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        item.title, color = White, fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    if (item.season > 0) {
+                        Text(
+                            "S${item.season} E${item.episode} · ${item.episodeName}",
+                            color = White60, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
 
-            // Delete button
-            IconButton(onClick = { showDeleteDialog = true }) {
-                Icon(Icons.Default.Delete, null, tint = White40, modifier = Modifier.size(20.dp))
+                    // Status row
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        StatusBadge(item.status)
+                        // Quality label
+                        QualityBadge(item.quality)
+                        // Size info
+                        if (item.sizeBytes > 0) {
+                            Text(formatSize(item.sizeBytes), color = White40, fontSize = 11.sp)
+                        }
+                    }
+
+                    // Downloading: progress bar + speed + segment count
+                    if (isDownloading) {
+                        Spacer(Modifier.height(6.dp))
+                        LinearProgressIndicator(
+                            progress = { pct },
+                            modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
+                            color = Brand,
+                            trackColor = GlassMd,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            // Segments or bytes progress
+                            val progressLabel = when {
+                                item.totalSegments > 0 ->
+                                    "${item.segmentsDone}/${item.totalSegments} segments ($pctInt%)"
+                                item.sizeBytes > 0 ->
+                                    "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)} ($pctInt%)"
+                                else -> "$pctInt%"
+                            }
+                            Text(progressLabel, color = White40, fontSize = 10.sp)
+                            // Network speed
+                            if (item.networkSpeedBps > 0) {
+                                Text(formatSpeed(item.networkSpeedBps), color = Brand, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Partial-play hint
+                        if (canPlayPartial && pct >= 0.05f) {
+                            Spacer(Modifier.height(4.dp))
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Brand.copy(.12f))
+                                    .clickable(onClick = onPlay)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(Icons.Default.PlayCircle, null, tint = Brand, modifier = Modifier.size(12.dp))
+                                Text("Watch ${pctInt}% now", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+
+                    // Paused / Error → resume button
+                    if (isPaused || isError) {
+                        Spacer(Modifier.height(6.dp))
+                        if (pct > 0f) {
+                            LinearProgressIndicator(
+                                progress = { pct },
+                                modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
+                                color = White40,
+                                trackColor = GlassMd,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (isPaused) "Paused · will auto-resume" else "Failed",
+                                color = if (isPaused) White40 else Error,
+                                fontSize = 10.sp,
+                            )
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Brand.copy(.15f))
+                                    .clickable(onClick = onResume)
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Text("Resume", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+
+                // Delete button
+                IconButton(onClick = { showDeleteDialog = true }) {
+                    Icon(Icons.Default.Delete, null, tint = White40, modifier = Modifier.size(20.dp))
+                }
             }
         }
     }
@@ -233,9 +369,25 @@ fun StatusBadge(status: String) {
     ) { Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
 }
 
+@Composable
+fun QualityBadge(quality: String) {
+    if (quality.isBlank()) return
+    Box(
+        Modifier.clip(RoundedCornerShape(4.dp)).background(White.copy(.06f))
+            .border(1.dp, GlassBorder, RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) { Text(quality, color = White60, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
+}
+
 fun formatSize(bytes: Long): String = when {
     bytes >= 1_073_741_824L -> "%.1f GB".format(bytes / 1_073_741_824.0)
     bytes >= 1_048_576L     -> "%.1f MB".format(bytes / 1_048_576.0)
     bytes >= 1024L          -> "%.1f KB".format(bytes / 1024.0)
     else                    -> "$bytes B"
+}
+
+fun formatSpeed(bps: Long): String = when {
+    bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
+    bps >= 1_000     -> "%.0f KB/s".format(bps / 1_000.0)
+    else             -> "$bps B/s"
 }

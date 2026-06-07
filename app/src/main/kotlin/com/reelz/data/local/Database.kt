@@ -1,6 +1,8 @@
 package com.reelz.data.local
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.reelz.data.model.*
 import kotlinx.coroutines.flow.Flow
 
@@ -55,16 +57,81 @@ interface CachedMediaDao {
 interface DownloadDao {
     @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
     fun getAll(): Flow<List<DownloadItem>>
+
     @Query("SELECT * FROM downloads WHERE id = :id LIMIT 1")
     suspend fun get(id: String): DownloadItem?
+
     @Query("SELECT * FROM downloads WHERE status = :status")
     suspend fun getByStatus(status: String): List<DownloadItem>
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(i: DownloadItem)
-    @Query("UPDATE downloads SET status = :status, downloadedBytes = :bytes WHERE id = :id")
-    suspend fun updateProgress(id: String, status: String, bytes: Long)
-    @Query("UPDATE downloads SET status = :status, filePath = :path, completedAt = :at WHERE id = :id")
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(i: DownloadItem)
+
+    @Query("""
+        UPDATE downloads
+        SET status = :status,
+            downloadedBytes = :bytes,
+            networkSpeedBps = :speedBps,
+            segmentsDone = :segsDone,
+            totalSegments = :segsTotal,
+            localPlaylistPath = :localPlaylist
+        WHERE id = :id
+    """)
+    suspend fun updateProgress(
+        id: String,
+        status: String,
+        bytes: Long,
+        speedBps: Long = 0,
+        segsDone: Int = 0,
+        segsTotal: Int = 0,
+        localPlaylist: String = "",
+    )
+
+    @Query("""
+        UPDATE downloads
+        SET status = :status,
+            sizeBytes = :totalBytes,
+            segmentDir = :segDir
+        WHERE id = :id
+    """)
+    suspend fun updateMetadata(id: String, status: String, totalBytes: Long, segDir: String = "")
+
+    @Query("""
+        UPDATE downloads
+        SET status = :status,
+            filePath = :path,
+            completedAt = :at,
+            networkSpeedBps = 0,
+            segmentDir = '',
+            localPlaylistPath = '',
+            resolveRequired = 0
+        WHERE id = :id
+    """)
     suspend fun markDone(id: String, status: String, path: String, at: Long)
-    @Query("DELETE FROM downloads WHERE id = :id") suspend fun delete(id: String)
+
+    /**
+     * When a download is paused (error or manual), mark resolveRequired = true
+     * so the next resume re-resolves the CDN URL (CDN tokens expire).
+     */
+    @Query("""
+        UPDATE downloads
+        SET status = :status,
+            resolveRequired = 1
+        WHERE id = :id
+    """)
+    suspend fun markPaused(id: String, status: String = DownloadStatus.PAUSED.name)
+
+    @Query("""
+        UPDATE downloads
+        SET streamUrl = :url,
+            headers = :headersJson,
+            resolveRequired = 0
+        WHERE id = :id
+    """)
+    suspend fun updateStreamUrl(id: String, url: String, headersJson: String)
+
+    @Query("DELETE FROM downloads WHERE id = :id")
+    suspend fun delete(id: String)
 }
 
 // ── Transfer history ──────────────────────────────────────────────────────────
@@ -74,6 +141,26 @@ interface TransferDao {
     fun getAll(): Flow<List<TransferRecord>>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(r: TransferRecord)
     @Query("DELETE FROM transfer_history WHERE id = :id") suspend fun delete(id: String)
+}
+
+// ── Migration v1 → v2 ─────────────────────────────────────────────────────────
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE downloads ADD COLUMN networkSpeedBps INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN segmentsDone INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN totalSegments INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN segmentDir TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN localPlaylistPath TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+// ── Migration v2 → v3: qualityTracksJson + resolveRequired ────────────────────
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE downloads ADD COLUMN qualityTracksJson TEXT NOT NULL DEFAULT '[]'")
+        // resolveRequired = 1 (true) for all existing rows — safest default
+        db.execSQL("ALTER TABLE downloads ADD COLUMN resolveRequired INTEGER NOT NULL DEFAULT 1")
+    }
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
@@ -86,7 +173,7 @@ interface TransferDao {
         DownloadItem::class,
         TransferRecord::class,
     ],
-    version = 1,
+    version = 3,          // bumped from 2 → 3
     exportSchema = false,
 )
 @TypeConverters(com.reelz.data.model.MediaConverters::class)

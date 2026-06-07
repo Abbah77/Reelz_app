@@ -1,8 +1,9 @@
 # ── Kotlin ────────────────────────────────────────────────────────────────────
 -keepattributes *Annotation*, InnerClasses, EnclosingMethod, Signature, Exceptions
 -keepattributes SourceFile,LineNumberTable
--keep class kotlin.** { *; }
--keep class kotlinx.** { *; }
+-keep class kotlin.Metadata { *; }
+-keep class kotlin.reflect.** { *; }
+-keepclassmembers class kotlinx.** { *; }
 
 # ── Hilt ──────────────────────────────────────────────────────────────────────
 -keep class dagger.hilt.** { *; }

@@ -129,7 +129,7 @@ fun ShortsCard(media: Media, onWatch: () -> Unit, onDetail: () -> Unit) {
                 Box(
                     Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)).background(BgRaised)
                 ) {
-                    AsyncImage(BuildConfig.TMDB_IMG_W342 + media.posterPath, null, ContentScale.Crop, Modifier.fillMaxSize())
+                    AsyncImage(model = BuildConfig.TMDB_IMG_W342 + media.posterPath, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 }
                 Column {
                     Text(media.title, color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

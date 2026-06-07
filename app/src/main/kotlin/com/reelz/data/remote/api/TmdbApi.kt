@@ -8,9 +8,6 @@ import retrofit2.http.Query
 interface TmdbApi {
 
     // ── Movies ─────────────────────────────────────────────────────────────────
-    @GET("movie/trending/all/week") // use trending for better quality results
-    suspend fun getTrending(@Query("page") page: Int = 1): TmdbPageDto<TmdbMovieDto>
-
     @GET("trending/movie/week")
     suspend fun getTrendingMovies(@Query("page") page: Int = 1): TmdbPageDto<TmdbMovieDto>
 
@@ -63,17 +60,17 @@ interface TmdbApi {
     // ── Discover / Genre ───────────────────────────────────────────────────────
     @GET("discover/movie")
     suspend fun discoverMovies(
-        @Query("with_genres")       genreId: Int? = null,
-        @Query("sort_by")           sortBy: String = "popularity.desc",
-        @Query("page")              page: Int = 1,
+        @Query("with_genres")            genreId: Int? = null,
+        @Query("sort_by")                sortBy: String = "popularity.desc",
+        @Query("page")                   page: Int = 1,
         @Query("with_original_language") language: String? = null,
     ): TmdbPageDto<TmdbMovieDto>
 
     @GET("discover/tv")
     suspend fun discoverTv(
-        @Query("with_genres")       genreId: Int? = null,
-        @Query("sort_by")           sortBy: String = "popularity.desc",
-        @Query("page")              page: Int = 1,
+        @Query("with_genres")            genreId: Int? = null,
+        @Query("sort_by")                sortBy: String = "popularity.desc",
+        @Query("page")                   page: Int = 1,
         @Query("with_original_language") language: String? = null,
     ): TmdbPageDto<TmdbTvDto>
 
@@ -84,12 +81,6 @@ interface TmdbApi {
     suspend fun getTvGenres(): TmdbGenreListDto
 
     // ── Search ─────────────────────────────────────────────────────────────────
-    @GET("search/multi")
-    suspend fun search(
-        @Query("query") query: String,
-        @Query("page")  page: Int = 1,
-    ): TmdbPageDto<TmdbMovieDto>  // multi returns mixed; we filter by media_type
-
     @GET("search/movie")
     suspend fun searchMovies(@Query("query") q: String, @Query("page") page: Int = 1): TmdbPageDto<TmdbMovieDto>
 
@@ -99,17 +90,17 @@ interface TmdbApi {
     // ── Anime-specific (Japanese animation genre = 16, language = ja) ──────────
     @GET("discover/tv")
     suspend fun getAnime(
-        @Query("with_genres") genreId: Int = 16,
+        @Query("with_genres")            genreId: Int = 16,
         @Query("with_original_language") lang: String = "ja",
-        @Query("sort_by") sort: String = "popularity.desc",
-        @Query("page") page: Int = 1,
+        @Query("sort_by")                sort: String = "popularity.desc",
+        @Query("page")                   page: Int = 1,
     ): TmdbPageDto<TmdbTvDto>
 
     @GET("discover/movie")
     suspend fun getAnimeMovies(
-        @Query("with_genres") genreId: Int = 16,
+        @Query("with_genres")            genreId: Int = 16,
         @Query("with_original_language") lang: String = "ja",
-        @Query("sort_by") sort: String = "popularity.desc",
-        @Query("page") page: Int = 1,
+        @Query("sort_by")                sort: String = "popularity.desc",
+        @Query("page")                   page: Int = 1,
     ): TmdbPageDto<TmdbMovieDto>
 }

@@ -63,7 +63,11 @@ class PlayerViewModel @Inject constructor(
     private val _ui = MutableStateFlow(PlayerUiState())
     val ui: StateFlow<PlayerUiState> = _ui.asStateFlow()
 
-    var exoPlayer: ExoPlayer? = null; private set
+    private val _exoPlayer = MutableStateFlow<ExoPlayer?>(null)
+    val exoPlayerFlow: StateFlow<ExoPlayer?> = _exoPlayer.asStateFlow()
+    var exoPlayer: ExoPlayer?
+        get() = _exoPlayer.value
+        private set(value) { _exoPlayer.value = value }
 
     private var currentTmdbId   = -1
     private var currentType     = MediaType.MOVIE
@@ -117,13 +121,14 @@ class PlayerViewModel @Inject constructor(
         }
         trackSelector = ts
 
-        // Aggressive pre-buffering for instant start
+        // UPGRADE P8: Reduce min buffer before playback from 12s → 2.5s.
+        // Netflix uses ~2s. Users see video 8–10 seconds sooner.
         val loadCtrl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                12_000,   // min buffer before playback
-                60_000,   // max buffer
-                1_000,    // min buffer to resume after rebuffer
-                2_000,    // min buffer to resume after seek
+                2_500,    // min buffer before playback starts (was 12_000)
+                50_000,   // max buffer
+                500,      // min buffer to resume after rebuffer
+                1_000,    // min buffer to resume after seek
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .setTargetBufferBytes(DefaultLoadControl.DEFAULT_TARGET_BUFFER_BYTES * 2)

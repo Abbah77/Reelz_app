@@ -43,6 +43,18 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystoreFile = System.getenv("CM_KEYSTORE_PATH")
+            if (keystoreFile != null) {
+                storeFile      = file(keystoreFile)
+                storePassword  = System.getenv("CM_KEYSTORE_PASSWORD")
+                keyAlias       = System.getenv("CM_KEY_ALIAS")
+                keyPassword    = System.getenv("CM_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isDebuggable    = true
@@ -51,6 +63,10 @@ android {
         release {
             isMinifyEnabled   = true
             isShrinkResources = true
+            val releaseSigning = signingConfigs.findByName("release")
+            if (releaseSigning?.storeFile != null) {
+                signingConfig = releaseSigning
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -112,7 +128,7 @@ dependencies {
     implementation(libs.hilt.work)
     ksp(libs.hilt.compiler.androidx)
 
-    // Media3 / ExoPlayer
+    // Media3 / ExoPlayer — media3-transformer handles .ts → .mp4 remuxing
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.exoplayer.dash)
@@ -152,6 +168,13 @@ dependencies {
 
     // Permissions
     implementation(libs.accompanist.permissions)
+
+    // QR code
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("androidx.camera:camera-core:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-view:1.3.4")
 
     debugImplementation(libs.compose.ui.tooling)
 }

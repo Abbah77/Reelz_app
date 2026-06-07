@@ -75,7 +75,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onPause()   { super.onPause();   vm.exoPlayer?.pause() }
-    override fun onResume()  { super.onResume();  vm.exoPlayer?.play() }
+    override fun onResume()  { super.onResume();  vm.exoPlayer?.let { if (it.mediaItemCount > 0) it.play() } }
     override fun onDestroy() { super.onDestroy(); vm.release() }
 }
 
@@ -89,6 +89,7 @@ fun PlayerScreen(
 ) {
     val ctx   = LocalContext.current
     val ui    by vm.ui.collectAsState()
+    val player by vm.exoPlayerFlow.collectAsState()
     val scope = rememberCoroutineScope()
 
     // Init player once
@@ -120,17 +121,20 @@ fun PlayerScreen(
             }
     ) {
         // ── ExoPlayer surface ────────────────────────────────────────────
-        AndroidView(
-            factory = { c ->
-                PlayerView(c).apply {
-                    useController = false  // we draw our own controls
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                }
-            },
-            update = { pv -> pv.player = vm.exoPlayer },
-            modifier = Modifier.fillMaxSize(),
-        )
+        key(player) {
+            AndroidView(
+                factory = { c ->
+                    PlayerView(c).apply {
+                        useController = false
+                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        this.player = player
+                    }
+                },
+                update = { pv -> pv.player = vm.exoPlayer },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
 
         // ── Resolving overlay ────────────────────────────────────────────
         AnimatedVisibility(

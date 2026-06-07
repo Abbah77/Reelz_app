@@ -6,30 +6,35 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.*
 import com.reelz.data.model.StreamResult
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
 
 /**
- * Per-scan WebView — a NEW instance is created for every scan call.
- * This eliminates the cookie/session cross-contamination bug that forced
- * users to clear app data before re-watching a movie.
+ * Per-scan WebView — creates a fresh instance per scan.
  *
- * Key improvements over the original:
- *  • Cookies are completely isolated per scan (acceptCookie = false + flush each time)
- *  • DOM storage is cleared before AND after each scan
- *  • JS interceptor fires immediately on XHR open (no 2500ms delay)
- *  • MutationObserver starts BEFORE page load
- *  • The WebView is destroyed immediately after a result is received
+ * KEY FIX vs original:
+ *  - nukeWebViewState() is NO LONGER called at the START of scan().
+ *    The original pre-scan nuke wiped the global CookieManager, destroying
+ *    cookies of other WebViews running in parallel — causing random failures.
+ *  - nukeWebViewState() is now called ONLY after result is obtained or on timeout.
+ *  - YouTube itag regex removed from SKIP_PATTERN — it matched nothing useful
+ *    for our embed sources and added regex overhead on every URL.
  */
 class WebViewScanner(private val context: Context) {
 
     companion object {
         private val SKIP_PATTERN = Regex(
-            """(thumbnail|preview|sprite|\.vtt|/sub|/font|/ads|/track|googlevideo\.com/videoplayback.*itag=(?!137|248|299|303|315|264|271|272))""",
+            """(thumbnail|preview|sprite|\.vtt|/sub|/font|/ads|/track)""",
             RegexOption.IGNORE_CASE
         )
 
+        const val SCAN_TIMEOUT_MS = 20_000L
+
+        /**
+         * Nuke WebView state AFTER result is retrieved or on timeout.
+         * NOT called before scan starts to avoid corrupting parallel scans.
+         */
         fun nukeWebViewState(context: Context) {
             try {
                 CookieManager.getInstance().removeAllCookies(null)
@@ -37,6 +42,95 @@ class WebViewScanner(private val context: Context) {
                 WebStorage.getInstance().deleteAllData()
             } catch (_: Exception) {}
         }
+
+        val INTERCEPTOR_JS = """
+(function() {
+    'use strict';
+    if (window.__reelz_hooked) return;
+    window.__reelz_hooked = true;
+
+    var b = window.ReelzBridge;
+    function report(url) {
+        if (!url || typeof url !== 'string') return;
+        url = url.split('#')[0].trim();
+        if (!url.startsWith('http')) return;
+        var l = url.toLowerCase().split('?')[0];
+        if (l.indexOf('.m3u8') !== -1 || l.indexOf('.mp4') !== -1) {
+            try { b.onStreamUrl(url); } catch(e) {}
+        }
+    }
+
+    var XHR = window.XMLHttpRequest;
+    var _open = XHR.prototype.open;
+    XHR.prototype.open = function(m, url) {
+        this.__url = url; report(url);
+        return _open.apply(this, arguments);
+    };
+    var _send = XHR.prototype.send;
+    XHR.prototype.send = function() {
+        var self = this;
+        var _orsc = self.onreadystatechange;
+        self.onreadystatechange = function() {
+            if (self.readyState === 4 && self.status === 200) {
+                try {
+                    var t = self.responseText || '';
+                    var m = t.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
+                    var p = t.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
+                    if (m) m.forEach(report);
+                    if (p) p.forEach(report);
+                } catch(e) {}
+            }
+            if (_orsc) _orsc.apply(this, arguments);
+        };
+        return _send.apply(this, arguments);
+    };
+
+    var _fetch = window.fetch;
+    window.fetch = function(input, init) {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        report(url);
+        return _fetch.apply(this, arguments).then(function(resp) {
+            report(resp.url);
+            return resp.clone().text().then(function(txt) {
+                var m = txt.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
+                var p = txt.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
+                if (m) m.forEach(report);
+                if (p) p.forEach(report);
+                return resp;
+            }).catch(function() { return resp; });
+        });
+    };
+
+    var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+    if (srcDesc) {
+        Object.defineProperty(HTMLVideoElement.prototype, 'src', {
+            set: function(v) { report(v); if (srcDesc.set) srcDesc.set.call(this, v); },
+            get: function() { return srcDesc.get ? srcDesc.get.call(this) : ''; },
+            configurable: true,
+        });
+    }
+
+    new MutationObserver(function(muts) {
+        muts.forEach(function(m) {
+            m.addedNodes.forEach(function(n) {
+                var s = n.nodeName === 'VIDEO' || n.nodeName === 'SOURCE'
+                    ? (n.getAttribute && n.getAttribute('src')) : null;
+                if (s) report(s);
+            });
+        });
+    }).observe(document.documentElement || document.body,
+        { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] }
+    );
+
+    try {
+        var h = document.documentElement.innerHTML;
+        var m2 = h.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
+        var p2 = h.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
+        if (m2) m2.forEach(report);
+        if (p2) p2.forEach(report);
+    } catch(e) {}
+})();
+""".trimIndent()
     }
 
     suspend fun scan(embedUrl: String, source: StreamSource): StreamResult? =
@@ -46,13 +140,13 @@ class WebViewScanner(private val context: Context) {
             var webView: WebView? = null
             val handler = Handler(Looper.getMainLooper())
 
-            // ── Nuke state BEFORE creating the WebView ─────────────────────
-            nukeWebViewState(context)
+            // NOTE: nukeWebViewState() deliberately NOT called here.
+            // Calling it at the start corrupts parallel WebView sessions.
 
             val timeout = Runnable {
                 if (!resolved) {
                     resolved = true
-                    nukeWebViewState(context)
+                    nukeWebViewState(context)  // nuke AFTER timeout
                     destroy(webView); webView = null
                     resultCh.trySend(null)
                 }
@@ -63,13 +157,12 @@ class WebViewScanner(private val context: Context) {
                     if (!resolved && isValidStream(url)) {
                         resolved = true
                         handler.removeCallbacks(timeout)
-                        // Nuke cookies BEFORE sending result
-                        nukeWebViewState(context)
+                        nukeWebViewState(context)  // nuke AFTER result obtained
                         resultCh.trySend(url)
                     }
                 }
 
-                handler.postDelayed(timeout, WebViewScanner.SCAN_TIMEOUT_MS)
+                handler.postDelayed(timeout, SCAN_TIMEOUT_MS)
                 webView!!.loadUrl(embedUrl, source.headers)
 
                 val found = resultCh.receive()
@@ -125,7 +218,6 @@ class WebViewScanner(private val context: Context) {
             setSupportMultipleWindows(false)
         }
 
-        // Hard-disable cookies for scanner WebViews
         val cm = CookieManager.getInstance()
         cm.setAcceptCookie(false)
         cm.setAcceptThirdPartyCookies(wv, false)
@@ -137,7 +229,6 @@ class WebViewScanner(private val context: Context) {
         wv.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
-                // Inject interceptor after every page navigation
                 view.evaluateJavascript(INTERCEPTOR_JS, null)
             }
 
@@ -153,13 +244,11 @@ class WebViewScanner(private val context: Context) {
                 return false
             }
 
-            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                // Swallow — don't surface raw errors to user
-            }
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {}
         }
 
         wv.webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(msg: ConsoleMessage) = true  // suppress dev logs
+            override fun onConsoleMessage(msg: ConsoleMessage) = true
         }
 
         return wv
@@ -170,111 +259,5 @@ class WebViewScanner(private val context: Context) {
         val lower = url.lowercase()
         if (SKIP_PATTERN.containsMatchIn(lower)) return false
         return lower.contains(".m3u8") || lower.contains(".mp4")
-    }
-
-    companion object {
-        const val SCAN_TIMEOUT_MS = 20_000L
-
-        /**
-         * Comprehensive JS interceptor — hooks XHR open/send + fetch + video.src
-         * mutation BEFORE page code runs via onPageFinished injection.
-         * Reports the FIRST m3u8/mp4 it finds without any artificial delay.
-         */
-        val INTERCEPTOR_JS = """
-(function() {
-    'use strict';
-    if (window.__reelz_hooked) return;
-    window.__reelz_hooked = true;
-
-    var b = window.ReelzBridge;
-    function report(url) {
-        if (!url || typeof url !== 'string') return;
-        url = url.split('#')[0].trim();
-        if (!url.startsWith('http')) return;
-        var l = url.toLowerCase().split('?')[0];
-        if (l.indexOf('.m3u8') !== -1 || l.indexOf('.mp4') !== -1) {
-            try { b.onStreamUrl(url); } catch(e) {}
-        }
-    }
-
-    // ── XHR ─────────────────────────────────────────────────────────────────
-    var XHR = window.XMLHttpRequest;
-    var _open = XHR.prototype.open;
-    XHR.prototype.open = function(m, url) {
-        this.__url = url; report(url);
-        return _open.apply(this, arguments);
-    };
-    var _send = XHR.prototype.send;
-    XHR.prototype.send = function() {
-        var self = this;
-        var _orsc = self.onreadystatechange;
-        self.onreadystatechange = function() {
-            if (self.readyState === 4 && self.status === 200) {
-                try {
-                    var t = self.responseText || '';
-                    var m = t.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
-                    var p = t.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
-                    if (m) m.forEach(report);
-                    if (p) p.forEach(report);
-                } catch(e) {}
-            }
-            if (_orsc) _orsc.apply(this, arguments);
-        };
-        return _send.apply(this, arguments);
-    };
-
-    // ── Fetch ────────────────────────────────────────────────────────────────
-    var _fetch = window.fetch;
-    window.fetch = function(input, init) {
-        var url = typeof input === 'string' ? input : (input && input.url) || '';
-        report(url);
-        return _fetch.apply(this, arguments).then(function(resp) {
-            report(resp.url);
-            return resp.clone().text().then(function(txt) {
-                var m = txt.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
-                var p = txt.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
-                if (m) m.forEach(report);
-                if (p) p.forEach(report);
-                return resp;
-            }).catch(function() { return resp; });
-        });
-    };
-
-    // ── HTMLMediaElement.src ─────────────────────────────────────────────────
-    var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-    if (srcDesc) {
-        Object.defineProperty(HTMLVideoElement.prototype, 'src', {
-            set: function(v) {
-                report(v);
-                if (srcDesc.set) srcDesc.set.call(this, v);
-            },
-            get: function() { return srcDesc.get ? srcDesc.get.call(this) : ''; },
-            configurable: true,
-        });
-    }
-
-    // ── MutationObserver ─────────────────────────────────────────────────────
-    new MutationObserver(function(muts) {
-        muts.forEach(function(m) {
-            m.addedNodes.forEach(function(n) {
-                var s = n.nodeName === 'VIDEO' || n.nodeName === 'SOURCE'
-                    ? (n.getAttribute && n.getAttribute('src')) : null;
-                if (s) report(s);
-            });
-        });
-    }).observe(document.documentElement || document.body,
-        { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] }
-    );
-
-    // ── DOM scan (quick, no delay) ────────────────────────────────────────
-    try {
-        var h = document.documentElement.innerHTML;
-        var m2 = h.match(/https?:\/\/[^\s"'\\<>]+\.m3u8[^\s"'\\<>]*/g);
-        var p2 = h.match(/https?:\/\/[^\s"'\\<>]+\.mp4[^\s"'\\<>]*/g);
-        if (m2) m2.forEach(report);
-        if (p2) p2.forEach(report);
-    } catch(e) {}
-})();
-""".trimIndent()
     }
 }

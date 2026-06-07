@@ -108,7 +108,13 @@ data class StreamResult(
 
 data class Subtitle(val url: String, val language: String, val label: String)
 
-data class QualityTrack(val label: String, val url: String, val bandwidth: Long = 0)
+data class QualityTrack(
+    val label: String,
+    val url: String,
+    val bandwidth: Long = 0,
+    /** Estimated file size in bytes — populated during M3U8 parsing */
+    val estimatedSizeBytes: Long = 0,
+)
 
 // ── Room entities ─────────────────────────────────────────────────────────────
 @Entity(tableName = "watchlist")
@@ -179,6 +185,37 @@ data class DownloadItem(
     val headers: String = "{}",  // JSON map
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
+
+    // ── Download tracking ──────────────────────────────────────────────
+    /** Bytes/sec, updated every second during active download */
+    val networkSpeedBps: Long = 0,
+    /** For HLS: how many .ts segments have been saved to disk */
+    val segmentsDone: Int = 0,
+    /** For HLS: total segment count in the playlist */
+    val totalSegments: Int = 0,
+    /**
+     * For HLS partial-play: path to the temporary segment directory.
+     * Kept until download is DONE (then segments are merged and dir deleted).
+     */
+    val segmentDir: String = "",
+    /**
+     * Local .m3u8 playlist path that points at already-downloaded segments.
+     * ExoPlayer can open this for offline partial-playback.
+     */
+    val localPlaylistPath: String = "",
+
+    // ── NEW in v3 ──────────────────────────────────────────────────────
+    /**
+     * JSON-serialised List<QualityTrack>. Stored so resume can pick
+     * the correct variant URL without re-parsing the master playlist.
+     */
+    val qualityTracksJson: String = "[]",
+    /**
+     * When true, the service MUST call engine.resolve() to get a fresh
+     * CDN URL before downloading/resuming. The stored streamUrl has expired.
+     * Set to true whenever status transitions to PAUSED.
+     */
+    val resolveRequired: Boolean = true,
 )
 
 @Entity(tableName = "transfer_history")

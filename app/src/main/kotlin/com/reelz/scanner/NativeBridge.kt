@@ -6,6 +6,10 @@ import com.reelz.data.model.Subtitle
 /**
  * Kotlin wrapper around the C++ JNI bridge (reelz_native.so).
  * All heavy parsing is done natively for maximum speed.
+ *
+ * New in upgrade:
+ *  - nativeDecryptAES128(): AES-128-CBC decryption for encrypted HLS segments (stub)
+ *  - nativeValidateTsSync(): MPEG-TS sync byte validation to catch corrupt segments
  */
 object NativeBridge {
 
@@ -20,6 +24,12 @@ object NativeBridge {
     private external fun parseSubtitles(content: String, baseUrl: String): String
     external fun forgeHeaders(referer: String, origin: String, mobile: Boolean, isXhr: Boolean): String
     external fun getUserAgent(mobile: Boolean): String
+
+    // NEW: AES-128-CBC decryption for encrypted HLS segments
+    external fun nativeDecryptAES128(key: ByteArray, iv: ByteArray, data: ByteArray): ByteArray
+
+    // NEW: MPEG-TS sync byte validation (prevents corrupt segments in merge step)
+    external fun nativeValidateTsSync(data: ByteArray): Boolean
 
     // ── Public Kotlin-friendly API ────────────────────────────────────────────
 
@@ -69,4 +79,20 @@ object NativeBridge {
                 line.substring(0, idx) to line.substring(idx + 2).trimEnd()
             }
     }
+
+    /**
+     * Decrypt an AES-128-CBC encrypted HLS segment.
+     * Stub: returns input unchanged until OpenSSL/mbedTLS is linked.
+     * The JNI entry point is wired so this works without app changes when the
+     * native implementation is completed.
+     */
+    fun decryptSegment(key: ByteArray, iv: ByteArray, data: ByteArray): ByteArray =
+        nativeDecryptAES128(key, iv, data)
+
+    /**
+     * Validate that a .ts segment has valid MPEG-TS sync bytes (0x47 every 188 bytes).
+     * Returns false for corrupt segments, preventing bad data from breaking the merge.
+     */
+    fun validateTsSegment(data: ByteArray): Boolean =
+        if (data.size < 188) false else nativeValidateTsSync(data)
 }

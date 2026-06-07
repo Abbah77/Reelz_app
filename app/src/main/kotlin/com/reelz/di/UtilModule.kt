@@ -1,23 +1,21 @@
 package com.reelz.di
 
+import android.content.Context
+import android.content.SharedPreferences
 import com.google.gson.Gson
-import com.google.gson.GsonBuilder
-import com.reelz.data.local.DownloadDao
-import com.reelz.data.repository.DownloadRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
 object UtilModule {
+    @Provides @Singleton fun provideGson() = Gson()
 
     @Provides @Singleton
-    fun provideGson(): Gson = GsonBuilder().create()
-
-    @Provides @Singleton
-    fun provideDownloadRepository(dao: DownloadDao, gson: Gson): DownloadRepository =
-        DownloadRepository(dao, gson)
+    fun provideSharedPrefs(@ApplicationContext ctx: Context): SharedPreferences =
+        ctx.getSharedPreferences("reelz_prefs", Context.MODE_PRIVATE)
 }
