@@ -19,15 +19,15 @@ val Surface800 = BgCard
 val Surface700 = BgRaised
 val Surface600 = BgSurface
 
-// ── Brand — warm cinematic amber/gold primary ─────────────────────────────────
-val Brand      = Color(0xFFE8A020)   // rich amber gold
-val Brand2     = Color(0xFFFFCC55)   // bright gold highlight
-val BrandDeep  = Color(0xFF7A4A00)   // deep amber shadow
-val BrandDim   = Color(0xFF4A2F00)   // darkest amber tint
+// ── Brand — Electric Blue (was gold/amber) ─────────────────────────────────
+val Brand      = Color(0xFF0A84FF)   // electric blue primary
+val Brand2     = Color(0xFF40A8FF)   // bright blue highlight
+val BrandDeep  = Color(0xFF003780)   // deep blue shadow
+val BrandDim   = Color(0xFF001840)   // darkest blue tint
 val Primary    = Brand
 
 // ── Accent palette ────────────────────────────────────────────────────────────
-val Like       = Color(0xFFFF3D6E)   // vivid coral-rose
+val Like       = Color(0xFFFF2D55)   // vivid red-rose love
 val Teal       = Color(0xFF00E5CC)   // electric teal
 val Violet     = Color(0xFF9B5CF6)   // deep violet
 val Gold       = Color(0xFFFFCC44)   // pure gold for ratings
@@ -42,18 +42,23 @@ val GlassBorder   = Color(0x0FFFFFFF)
 val GlassBorderMd = Color(0x1AFFFFFF)
 val GlassBorderHv = Color(0x33FFFFFF)
 
-// ── Amber glass (brand-tinted glass) ─────────────────────────────────────────
-val AmberGlass    = Color(0x1AE8A020)
-val AmberBorder   = Color(0x33E8A020)
+// ── Blue glass (brand-tinted glass) ──────────────────────────────────────────
+val AmberGlass    = Color(0x1A0A84FF)   // was amber — now electric blue tint
+val AmberBorder   = Color(0x330A84FF)   // was amber border — now blue
+
+// Blue-specific glass
+val BlueGlass     = Color(0x1A0A84FF)
+val BlueBorder    = Color(0x330A84FF)
+val BlueGlow      = Color(0x4D0A84FF)
 
 // ── Text ──────────────────────────────────────────────────────────────────────
-val White    = Color(0xFFF8F4EE)   // warm white
-val White90  = Color(0xE6F8F4EE)
-val White80  = Color(0xCCF8F4EE)
-val White60  = Color(0x99F8F4EE)
-val White40  = Color(0x66F8F4EE)
-val White20  = Color(0x33F8F4EE)
-val White10  = Color(0x1AF8F4EE)
+val White    = Color(0xFFF4F6FF)   // cool white (fits blue theme)
+val White90  = Color(0xE6F4F6FF)
+val White80  = Color(0xCCF4F6FF)
+val White60  = Color(0x99F4F6FF)
+val White40  = Color(0x66F4F6FF)
+val White20  = Color(0x33F4F6FF)
+val White10  = Color(0x1AF4F6FF)
 val TextPrimary   = White
 val TextSecondary = White80
 val TextTertiary  = White60

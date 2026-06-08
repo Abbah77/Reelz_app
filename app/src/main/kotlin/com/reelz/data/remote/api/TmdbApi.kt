@@ -26,6 +26,11 @@ interface TmdbApi {
     @GET("movie/{id}")
     suspend fun getMovieDetail(
         @Path("id") id: Int,
+    ): TmdbMovieDetailDto
+
+    @GET("movie/{id}")
+    suspend fun getMovieExtras(
+        @Path("id") id: Int,
         @Query("append_to_response") append: String = "credits,videos,similar",
     ): TmdbMovieDetailDto
 
@@ -47,6 +52,11 @@ interface TmdbApi {
 
     @GET("tv/{id}")
     suspend fun getTvDetail(
+        @Path("id") id: Int,
+    ): TmdbTvDetailDto
+
+    @GET("tv/{id}")
+    suspend fun getTvExtras(
         @Path("id") id: Int,
         @Query("append_to_response") append: String = "credits,videos,similar,external_ids",
     ): TmdbTvDetailDto

@@ -127,11 +127,17 @@ class PlayerActivity : ComponentActivity() {
         val title     = intent.getStringExtra("title") ?: ""
         val poster    = intent.getStringExtra("posterPath")
         val mediaType = if (typeStr == "TV") MediaType.TV else MediaType.MOVIE
+        val streamUrl     = intent.getStringExtra("streamUrl")
+        val streamIsHls   = intent.getBooleanExtra("streamIsHls", false)
+        val streamReferer = intent.getStringExtra("streamReferer") ?: ""
+        val streamOrigin  = intent.getStringExtra("streamOrigin") ?: ""
 
         setContent {
             MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(primary = Brand)) {
                 PlayerScreen(vm = vm, tmdbId = tmdbId, mediaType = mediaType, season = season,
-                    episode = episode, title = title, poster = poster, onBack = { finish() })
+                    episode = episode, title = title, poster = poster, onBack = { finish() },
+                    streamUrl = streamUrl, streamIsHls = streamIsHls,
+                    streamReferer = streamReferer, streamOrigin = streamOrigin)
             }
         }
     }
@@ -148,13 +154,20 @@ fun PlayerScreen(
     season: Int, episode: Int,
     title: String, poster: String?,
     onBack: () -> Unit,
+    streamUrl: String? = null,
+    streamIsHls: Boolean = false,
+    streamReferer: String = "",
+    streamOrigin: String = "",
 ) {
     val ctx    = LocalContext.current
     val ui     by vm.ui.collectAsState()
     val player by vm.exoPlayerFlow.collectAsState()
     val scope  = rememberCoroutineScope()
 
-    LaunchedEffect(tmdbId, season, episode) { vm.init(ctx, tmdbId, mediaType, season, episode, title, poster) }
+    LaunchedEffect(tmdbId, season, episode) {
+        vm.init(ctx, tmdbId, mediaType, season, episode, title, poster,
+            streamUrl, streamIsHls, streamReferer, streamOrigin)
+    }
     LaunchedEffect(Unit) { while (true) { vm.pollPosition(); delay(500) } }
     LaunchedEffect(ui.showControls) {
         if (ui.showControls && ui.state is PlayerState.Playing) { delay(4_000); vm.hideControls() }

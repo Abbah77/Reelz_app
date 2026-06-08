@@ -84,6 +84,10 @@ class PlayerViewModel @Inject constructor(
         tmdbId: Int, mediaType: MediaType,
         season: Int, episode: Int,
         title: String, posterPath: String?,
+        streamUrl: String? = null,
+        streamIsHls: Boolean = false,
+        streamReferer: String = "",
+        streamOrigin: String = "",
     ) {
         currentTmdbId   = tmdbId
         currentType     = mediaType
@@ -96,8 +100,21 @@ class PlayerViewModel @Inject constructor(
         resetPlayer()
         buildPlayer(context)
         viewModelScope.launch {
-            withContext(Dispatchers.Main) { wipeCookies() }
-            resolveAndPlay(tmdbId, mediaType, season, episode)
+            if (streamUrl != null) {
+                val result = StreamResult(
+                    url        = streamUrl,
+                    isHls      = streamIsHls,
+                    headers    = emptyMap(),
+                    referer    = streamReferer,
+                    origin     = streamOrigin,
+                    sourceName = "prefetched",
+                )
+                lastResult = result
+                _ui.update { it.copy(sourceName = result.sourceName) }
+                playStream(result)
+            } else {
+                resolveAndPlay(tmdbId, mediaType, season, episode)
+            }
         }
     }
 

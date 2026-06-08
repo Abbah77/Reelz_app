@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
@@ -34,7 +35,7 @@ import com.reelz.ui.theme.*
 
 // ── Route definitions ─────────────────────────────────────────────────────────
 sealed class Route(val path: String) {
-    object Browse   : Route("browse")
+    object Browse   : Route("home")      // renamed from "browse" → "home"
     object Shorts   : Route("shorts")
     object Downloads: Route("downloads")
     object Transfer : Route("transfer")
@@ -53,11 +54,11 @@ data class NavTab(
 )
 
 val navTabs = listOf(
-    NavTab(Route.Browse.path,    "Browse",    IconCompass,     IconCompass),
-    NavTab(Route.Shorts.path,    "Shorts",    IconPlayCircle,  IconPlayCircle),
+    NavTab(Route.Browse.path,    "Home",      IconHome,        IconHomeFilled),
+    NavTab(Route.Shorts.path,    "Shorts",    IconReel,        IconReelFilled),
     NavTab(Route.Downloads.path, "Downloads", IconDownloadCloud, IconDownloadCloud),
     NavTab(Route.Transfer.path,  "Transfer",  IconSwap,        IconSwap),
-    NavTab(Route.Profile.path,   "Profile",   IconUser,        IconUser),
+    NavTab(Route.Profile.path,   "Profile",   IconUser,        IconUserFilled),
 )
 
 @Composable
@@ -120,7 +121,7 @@ fun AppNavigation() {
     }
 }
 
-// ── Premium frosted-glass bottom navigation bar ───────────────────────────────
+// ── Liquid glass bottom navigation bar ───────────────────────────────────────
 @Composable
 fun ReelzBottomNav(
     currentRoute: String?,
@@ -132,22 +133,44 @@ fun ReelzBottomNav(
         modifier = Modifier
             .fillMaxWidth()
             .drawBehind {
-                // Top glow line
+                // Top blue glow line
                 drawLine(
                     brush = Brush.horizontalGradient(
-                        listOf(Color.Transparent, Brand.copy(.5f), Brand2.copy(.3f), Color.Transparent)
+                        listOf(Color.Transparent, Brand.copy(.6f), Brand2.copy(.4f), Color.Transparent)
                     ),
                     start = Offset(0f, 0f),
                     end   = Offset(size.width, 0f),
-                    strokeWidth = 1.5f,
+                    strokeWidth = 1f,
                 )
             }
-            .background(
-                Brush.verticalGradient(
-                    listOf(Bg.copy(0f), Bg.copy(0.92f), Bg.copy(0.98f))
-                )
-            )
     ) {
+        // Liquid glass blur layer (simulated with layered translucent boxes)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        0f   to Color(0x00050510),
+                        0.1f to Color(0xB0050510),
+                        1f   to Color(0xF5050510),
+                    )
+                )
+        )
+        // Frosted glass shimmer overlay
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0x08FFFFFF),
+                            Color(0x04FFFFFF),
+                            Color(0x00FFFFFF),
+                        )
+                    )
+                )
+        )
+
         NavigationBar(
             containerColor = Color.Transparent,
             tonalElevation = 0.dp,
@@ -155,8 +178,7 @@ fun ReelzBottomNav(
         ) {
             navTabs.forEach { tab ->
                 val selected = currentRoute == tab.route
-                val iconAlpha by animateFloatAsState(if (selected) 1f else 0.45f, tween(250), label = "ia")
-                val scale     by animateFloatAsState(if (selected) 1.1f else 1f, spring(0.5f, 400f), label = "sc")
+                val scale     by animateFloatAsState(if (selected) 1.12f else 1f, spring(0.5f, 400f), label = "sc")
 
                 NavigationBarItem(
                     selected = selected,
@@ -170,7 +192,7 @@ fun ReelzBottomNav(
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                // Active pill glow background
+                                // Active indicator: blue glow pill
                                 androidx.compose.animation.AnimatedVisibility(
                                     visible = selected,
                                     enter = fadeIn(tween(200)) + scaleIn(tween(200), 0.5f),
@@ -178,21 +200,25 @@ fun ReelzBottomNav(
                                 ) {
                                     Box(
                                         Modifier
-                                            .width(46.dp).height(28.dp)
-                                            .clip(RoundedCornerShape(14.dp))
+                                            .width(48.dp).height(30.dp)
+                                            .clip(RoundedCornerShape(15.dp))
                                             .background(
                                                 Brush.radialGradient(
-                                                    listOf(AmberGlass, Color.Transparent)
+                                                    listOf(Brand.copy(0.25f), Brand.copy(0.08f), Color.Transparent)
                                                 )
                                             )
-                                            .border(1.dp, AmberBorder, RoundedCornerShape(14.dp))
+                                            .border(
+                                                1.dp,
+                                                Brush.linearGradient(listOf(Brand.copy(.5f), Brand2.copy(.3f))),
+                                                RoundedCornerShape(15.dp)
+                                            )
                                     )
                                 }
                                 Icon(
                                     imageVector = if (selected) tab.activeIcon else tab.icon,
                                     contentDescription = tab.label,
-                                    tint = if (selected) Brand else White.copy(0.45f),
-                                    modifier = Modifier.size(20.dp).scale(scale),
+                                    tint = if (selected) Brand else White.copy(0.4f),
+                                    modifier = Modifier.size(21.dp).scale(scale),
                                 )
                             }
                         }

@@ -3,6 +3,10 @@ package com.reelz.ui.components
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.awaitPointerEventScope
+import androidx.compose.ui.input.pointer.awaitPointerEvent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material3.*
@@ -57,6 +61,97 @@ val IconStar: ImageVector get() = ImageVector.Builder("Star", 24.dp, 24.dp, 24f,
     }, fill = SolidColor(Color(0xFFFFCC44)))
 }.build()
 
+// ── Heart / Like icon (filled red heart) ─────────────────────────────────────
+val IconHeart: ImageVector get() = ImageVector.Builder("Heart", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f, 21f)
+        curveTo(12f, 21f, 3f, 14f, 3f, 8f)
+        arcTo(4.5f, 4.5f, 0f, false, true, 12f, 6.1f)
+        arcTo(4.5f, 4.5f, 0f, false, true, 21f, 8f)
+        curveTo(21f, 14f, 12f, 21f, 12f, 21f); close()
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+}.build()
+
+val IconHeartFilled: ImageVector get() = ImageVector.Builder("HeartFilled", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f, 21f)
+        curveTo(12f, 21f, 3f, 14f, 3f, 8f)
+        arcTo(4.5f, 4.5f, 0f, false, true, 12f, 6.1f)
+        arcTo(4.5f, 4.5f, 0f, false, true, 21f, 8f)
+        curveTo(21f, 14f, 12f, 21f, 12f, 21f); close()
+    }, fill = SolidColor(Color(0xFFFF2D55)),
+       stroke = SolidColor(Color(0xFFFF2D55)), strokeLineWidth = 1f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+}.build()
+
+// ── Home icons ─────────────────────────────────────────────────────────────────
+val IconHome: ImageVector get() = ImageVector.Builder("Home", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(3f, 9.5f); lineTo(12f, 3f); lineTo(21f, 9.5f)
+        lineTo(21f, 20f); arcTo(1f, 1f, 0f, false, true, 20f, 21f)
+        lineTo(15f, 21f); lineTo(15f, 16f); lineTo(9f, 16f); lineTo(9f, 21f)
+        lineTo(4f, 21f); arcTo(1f, 1f, 0f, false, true, 3f, 20f); close()
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1.7f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+}.build()
+
+val IconHomeFilled: ImageVector get() = ImageVector.Builder("HomeFilled", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(3f, 9.5f); lineTo(12f, 3f); lineTo(21f, 9.5f)
+        lineTo(21f, 20f); arcTo(1f, 1f, 0f, false, true, 20f, 21f)
+        lineTo(15f, 21f); lineTo(15f, 15f); arcTo(1f, 1f, 0f, false, false, 14f, 14f)
+        lineTo(10f, 14f); arcTo(1f, 1f, 0f, false, false, 9f, 15f)
+        lineTo(9f, 21f); lineTo(4f, 21f)
+        arcTo(1f, 1f, 0f, false, true, 3f, 20f); close()
+    }, fill = SolidColor(Color(0xFF0A84FF)))
+}.build()
+
+// ── Reel / Shorts icons ────────────────────────────────────────────────────────
+val IconReel: ImageVector get() = ImageVector.Builder("Reel", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 12f, 22f)
+        arcTo(10f, 10f, 0f, false, false, 12f, 2f); close()
+        moveTo(2f, 12f); lineTo(22f, 12f)
+        moveTo(12f, 2f); arcTo(5f, 10f, 0f, false, false, 12f, 22f)
+        arcTo(5f, 10f, 0f, false, false, 12f, 2f)
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f)
+}.build()
+
+val IconReelFilled: ImageVector get() = ImageVector.Builder("ReelFilled", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 12f, 22f)
+        arcTo(10f, 10f, 0f, false, false, 12f, 2f); close()
+    }, fill = SolidColor(Color(0xFF0A84FF)))
+    addPath(pathData = PathData {
+        moveTo(10f, 8.5f); lineTo(16f, 12f); lineTo(10f, 15.5f); close()
+    }, fill = SolidColor(Color.White))
+}.build()
+
+// ── User icons ────────────────────────────────────────────────────────────────
+val IconUser: ImageVector get() = ImageVector.Builder("User", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f, 2f); arcTo(4f, 4f, 0f, false, false, 12f, 10f)
+        arcTo(4f, 4f, 0f, false, false, 12f, 2f); close()
+        moveTo(4f, 22f); arcTo(8f, 8f, 0f, false, true, 20f, 22f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.7f,
+       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
+}.build()
+
+val IconUserFilled: ImageVector get() = ImageVector.Builder("UserFilled", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f, 2f); arcTo(4f, 4f, 0f, false, false, 12f, 10f)
+        arcTo(4f, 4f, 0f, false, false, 12f, 2f); close()
+    }, fill = SolidColor(Color(0xFF0A84FF)))
+    addPath(pathData = PathData {
+        moveTo(4f, 22f); arcTo(8f, 8f, 0f, false, true, 20f, 22f)
+    }, stroke = SolidColor(Color(0xFF0A84FF)), strokeLineWidth = 2f,
+       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
+}.build()
+
 val IconWifiOff: ImageVector get() = ImageVector.Builder("WifiOff", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData { moveTo(2f, 2f); lineTo(22f, 22f) },
         stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round)
@@ -103,21 +198,13 @@ val IconSwap: ImageVector get() = ImageVector.Builder("Swap", 24.dp, 24.dp, 24f,
        strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
 }.build()
 
-val IconUser: ImageVector get() = ImageVector.Builder("User", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(12f, 2f); arcTo(4f, 4f, 0f, false, false, 12f, 10f); arcTo(4f, 4f, 0f, false, false, 12f, 2f); close()
-        moveTo(4f, 22f); arcTo(8f, 8f, 0f, false, true, 20f, 22f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.7f, strokeLineCap = StrokeCap.Round,
-       fill = SolidColor(Color.Transparent))
-}.build()
-
 val IconCompass: ImageVector get() = ImageVector.Builder("Compass", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
         moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 12f, 22f); arcTo(10f, 10f, 0f, false, false, 12f, 2f); close()
     }, stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, fill = SolidColor(Color.Transparent))
     addPath(pathData = PathData {
         moveTo(16.24f, 7.76f); lineTo(14.12f, 14.12f); lineTo(7.76f, 16.24f); lineTo(9.88f, 9.88f); close()
-    }, fill = SolidColor(Color(0xFFE8A020)))
+    }, fill = SolidColor(Color(0xFF0A84FF)))
 }.build()
 
 val IconPlayCircle: ImageVector get() = ImageVector.Builder("PlayCircle", 24.dp, 24.dp, 24f, 24f).apply {
@@ -126,6 +213,25 @@ val IconPlayCircle: ImageVector get() = ImageVector.Builder("PlayCircle", 24.dp,
     }, stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, fill = SolidColor(Color.Transparent))
     addPath(pathData = PathData { moveTo(10f, 8f); lineTo(16f, 12f); lineTo(10f, 16f); close() },
         fill = SolidColor(Color.White))
+}.build()
+
+val IconFilter: ImageVector get() = ImageVector.Builder("Filter", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(3f, 6f); lineTo(21f, 6f)
+        moveTo(7f, 12f); lineTo(17f, 12f)
+        moveTo(10f, 18f); lineTo(14f, 18f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round)
+}.build()
+
+val IconChevronDown: ImageVector get() = ImageVector.Builder("ChevDown", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData { moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f) },
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
+}.build()
+
+val IconClose: ImageVector get() = ImageVector.Builder("Close", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData { moveTo(18f, 6f); lineTo(6f, 18f); moveTo(6f, 6f); lineTo(18f, 18f) },
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round)
 }.build()
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,7 +254,7 @@ fun GlassCard(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Premium amber gradient button
+// Premium electric-blue gradient button
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun BrandButton(
@@ -176,7 +282,7 @@ fun BrandButton(
                     )
                 )
             )
-            .border(1.dp, Brand2.copy(.35f), RoundedCornerShape(100.dp))
+            .border(1.dp, Brand2.copy(.4f), RoundedCornerShape(100.dp))
             .clickable(onClick = onClick)
             .padding(
                 horizontal = if (small) 16.dp else 24.dp,
@@ -190,7 +296,7 @@ fun BrandButton(
             Text(
                 text,
                 style = MaterialTheme.typography.labelLarge.copy(
-                    color      = Color(0xFF1A0F00),
+                    color      = Color.White,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize   = if (small) 12.sp else 14.sp,
                     letterSpacing = 0.3.sp,
@@ -201,112 +307,94 @@ fun BrandButton(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Outlined ghost button
+// Ghost button
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun GhostButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    icon: @Composable (() -> Unit)? = null,
+    small: Boolean = false,
 ) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(100.dp))
-            .background(AmberGlass)
-            .border(1.dp, AmberBorder, RoundedCornerShape(100.dp))
+            .background(GlassMd)
+            .border(1.dp, GlassBorderHv, RoundedCornerShape(100.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            .padding(
+                horizontal = if (small) 14.dp else 20.dp,
+                vertical   = if (small) 9.dp else 13.dp,
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            icon?.invoke()
-            if (icon != null) Spacer(Modifier.width(6.dp))
-            Text(text, color = Brand, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
+        Text(
+            text,
+            color      = White80,
+            fontWeight = FontWeight.SemiBold,
+            fontSize   = if (small) 12.sp else 14.sp,
+        )
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Movie/TV poster card
+// 3D tilt poster card — with tap/press 3D effect
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun MediaPosterCard(
     media: Media,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    showRating: Boolean = true,
 ) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick),
-    ) {
-        AsyncImage(
-            model = BuildConfig.TMDB_IMG_W342 + media.posterPath,
-            contentDescription = media.title,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
-        // Cinematic gradient
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    0f   to Color.Transparent,
-                    0.55f to Color.Transparent,
-                    1f   to Color(0xEE05050A),
-                )
-            )
-        )
-        if (showRating && media.voteAverage > 0) {
-            // Rating pill — top right
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xCC000000))
-                    .border(1.dp, AmberBorder, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 5.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(IconStar, null, tint = Gold, modifier = Modifier.size(9.dp))
-                Spacer(Modifier.width(3.dp))
-                Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-        Text(
-            media.title,
-            style = MaterialTheme.typography.labelSmall.copy(color = White, fontSize = 10.sp),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(horizontal = 7.dp, vertical = 6.dp),
-        )
-    }
-}
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.93f else 1f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 600f),
+        label = "cardScale"
+    )
+    val elevation by animateFloatAsState(
+        targetValue = if (pressed) 2f else 12f,
+        animationSpec = spring(stiffness = 400f),
+        label = "elevation"
+    )
+    val rotateX by animateFloatAsState(
+        targetValue = if (pressed) 6f else 0f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 400f),
+        label = "rotX"
+    )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Horizontal media card (wider, for rows)
-// ─────────────────────────────────────────────────────────────────────────────
-@Composable
-fun MediaRowCard(
-    media: Media,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
     Column(
-        modifier = modifier.width(124.dp).clickable(onClick = onClick),
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = scale; scaleY = scale
+                rotationX = rotateX
+                shadowElevation = elevation
+                shape = RoundedCornerShape(14.dp)
+                clip = true
+                // 3D perspective
+                cameraDistance = 8f * density
+            }
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(
+                onClick = onClick,
+                onClickLabel = media.title,
+            )
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        pressed = event.changes.any { it.pressed }
+                    }
+                }
+            }
     ) {
         Box(
-            modifier = Modifier
+            Modifier
                 .fillMaxWidth()
-                .height(185.dp)
+                .weight(1f)
                 .clip(RoundedCornerShape(14.dp))
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
-                .background(BgRaised),
+                .border(1.dp, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(14.dp))
+                .background(BgRaised)
         ) {
             AsyncImage(
                 model = BuildConfig.TMDB_IMG_W342 + media.posterPath,
@@ -314,10 +402,16 @@ fun MediaRowCard(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            // Bottom gradient
+            // Bottom fade
             Box(Modifier.fillMaxSize().background(
                 Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color(0xCC05050A))
             ))
+            // Blue glow on press
+            if (pressed) {
+                Box(Modifier.fillMaxSize().background(
+                    Brush.radialGradient(listOf(Brand.copy(0.15f), Color.Transparent))
+                ))
+            }
             if (media.voteAverage > 0) {
                 Row(
                     modifier = Modifier
@@ -325,7 +419,7 @@ fun MediaRowCard(
                         .padding(5.dp)
                         .clip(RoundedCornerShape(5.dp))
                         .background(Color(0xCC000000))
-                        .border(1.dp, AmberBorder, RoundedCornerShape(5.dp))
+                        .border(1.dp, BlueBorder, RoundedCornerShape(5.dp))
                         .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -345,6 +439,75 @@ fun MediaRowCard(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Media row card (horizontal list)
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.95f else 1f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 500f),
+        label = "rowScale"
+    )
+
+    Column(
+        modifier = modifier
+            .width(130.dp)
+            .graphicsLayer {
+                scaleX = scale; scaleY = scale
+                cameraDistance = 8f * density
+            }
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitPointerEvent(); pressed = true
+                    try { awaitPointerEvent(); } finally { pressed = false }
+                }
+            }
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(190.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(12.dp))
+                .background(BgRaised)
+        ) {
+            AsyncImage(
+                model = BuildConfig.TMDB_IMG_W342 + media.posterPath,
+                contentDescription = media.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(Modifier.fillMaxSize().background(
+                Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color(0xDD05050A))
+            ))
+            if (pressed) {
+                Box(Modifier.fillMaxSize().background(Brand.copy(0.08f)))
+            }
+            if (media.voteAverage > 0) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(Color(0xBB000000))
+                        .padding(horizontal = 5.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(IconStar, null, tint = Gold, modifier = Modifier.size(9.dp))
+                    Spacer(Modifier.width(3.dp))
+                    Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(media.title, color = White80, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Section header with optional "See All" action
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
@@ -358,7 +521,7 @@ fun SectionHeader(
         modifier = modifier.fillMaxWidth().padding(start = 16.dp, top = 28.dp, bottom = 12.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Amber accent bar
+        // Blue accent bar
         Box(
             Modifier
                 .width(3.dp).height(18.dp)
@@ -384,7 +547,74 @@ fun SectionHeader(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Premium cinematic loading spinner (orbital rings)
+// Skeleton shimmer loading — replaces spinner
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun SkeletonBannerLoader() {
+    val inf = rememberInfiniteTransition(label = "skBanner")
+    val offset by inf.animateFloat(
+        -1.5f, 2.5f, infiniteRepeatable(tween(1000, easing = FastOutSlowInEasing)), "skOff"
+    )
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(400.dp)
+            .background(
+                Brush.linearGradient(
+                    colorStops = arrayOf(
+                        0f to BgCard,
+                        (offset * 0.4f + 0.3f).coerceIn(0f, 1f) to BgSurface,
+                        1f to BgCard,
+                    ),
+                    start = Offset.Zero,
+                    end   = Offset(Float.POSITIVE_INFINITY, 0f),
+                )
+            )
+    ) {
+        // Skeleton content overlay
+        Column(Modifier.align(Alignment.BottomStart).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.width(80.dp).height(18.dp).clip(RoundedCornerShape(4.dp)).background(BgRaised))
+            Box(Modifier.width(240.dp).height(28.dp).clip(RoundedCornerShape(6.dp)).background(BgRaised))
+            Box(Modifier.width(160.dp).height(14.dp).clip(RoundedCornerShape(4.dp)).background(BgRaised))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.width(110.dp).height(40.dp).clip(RoundedCornerShape(100.dp)).background(BgSurface))
+                Box(Modifier.width(90.dp).height(40.dp).clip(RoundedCornerShape(100.dp)).background(BgRaised))
+            }
+        }
+    }
+}
+
+@Composable
+fun SkeletonRowLoader() {
+    val inf = rememberInfiniteTransition(label = "skRow")
+    val offset by inf.animateFloat(
+        -1.5f, 2.5f, infiniteRepeatable(tween(900, easing = LinearEasing)), "off"
+    )
+    val shimmerBrush = Brush.linearGradient(
+        colorStops = arrayOf(
+            0f to BgRaised,
+            (offset * 0.4f + 0.3f).coerceIn(0f, 1f) to BgSurface,
+            1f to BgRaised,
+        ),
+        start = Offset.Zero,
+        end   = Offset(Float.POSITIVE_INFINITY, 0f),
+    )
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        repeat(4) {
+            Column(Modifier.width(130.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(Modifier.width(130.dp).height(190.dp).clip(RoundedCornerShape(12.dp)).background(shimmerBrush))
+                Box(Modifier.width(110.dp).height(12.dp).clip(RoundedCornerShape(4.dp)).background(shimmerBrush))
+                Box(Modifier.width(80.dp).height(10.dp).clip(RoundedCornerShape(4.dp)).background(shimmerBrush))
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Premium cinematic loading spinner (kept for reuse)
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun FullScreenLoader() {
@@ -407,54 +637,31 @@ fun CinematicSpinner(size: Dp = 44.dp, modifier: Modifier = Modifier) {
         val stroke1 = Stroke(width = r1 * 0.09f, cap = StrokeCap.Round)
         val stroke2 = Stroke(width = r1 * 0.06f, cap = StrokeCap.Round)
 
-        // Outer arc — gold
         drawArc(
-            brush = Brush.sweepGradient(listOf(Color(0xFFE8A020), Color(0xFFFFCC55), Color.Transparent)),
-            startAngle = angle1,
-            sweepAngle = 240f,
-            useCenter = false,
-            style = stroke1,
+            brush = Brush.sweepGradient(listOf(Brand, Brand2, Color.Transparent)),
+            startAngle = angle1, sweepAngle = 240f, useCenter = false, style = stroke1,
             topLeft = Offset(cx - r1 + stroke1.width / 2, cy - r1 + stroke1.width / 2),
-            size = androidx.compose.ui.geometry.Size(
-                (r1 - stroke1.width / 2) * 2, (r1 - stroke1.width / 2) * 2
-            ),
+            size = androidx.compose.ui.geometry.Size((r1 - stroke1.width / 2) * 2, (r1 - stroke1.width / 2) * 2),
         )
-        // Inner arc — teal
         drawArc(
             brush = Brush.sweepGradient(listOf(Color(0xFF00E5CC), Color.Transparent)),
-            startAngle = angle2,
-            sweepAngle = 180f,
-            useCenter = false,
-            style = stroke2,
+            startAngle = angle2, sweepAngle = 180f, useCenter = false, style = stroke2,
             topLeft = Offset(cx - r2 + stroke2.width / 2, cy - r2 + stroke2.width / 2),
-            size = androidx.compose.ui.geometry.Size(
-                (r2 - stroke2.width / 2) * 2, (r2 - stroke2.width / 2) * 2
-            ),
+            size = androidx.compose.ui.geometry.Size((r2 - stroke2.width / 2) * 2, (r2 - stroke2.width / 2) * 2),
         )
-        // Centre dot
-        drawCircle(
-            color = Brand.copy(alpha = pulse),
-            radius = r1 * 0.1f,
-            center = Offset(cx, cy),
-        )
+        drawCircle(color = Brand.copy(alpha = pulse), radius = r1 * 0.1f, center = Offset(cx, cy))
     }
 }
 
-// Inline small spinner
 @Composable
-fun SmallSpinner(modifier: Modifier = Modifier) {
-    CinematicSpinner(size = 26.dp, modifier = modifier)
-}
+fun SmallSpinner(modifier: Modifier = Modifier) { CinematicSpinner(size = 26.dp, modifier = modifier) }
 
 @Composable
 fun PulsingDot(modifier: Modifier = Modifier) {
     val inf = rememberInfiniteTransition(label = "dot")
     val scale by inf.animateFloat(0.5f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), "sc")
     val glow  by inf.animateFloat(0.4f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), "gl")
-    Box(
-        modifier = modifier.size(10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
+    Box(modifier = modifier.size(10.dp), contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxSize().scale(scale + 0.4f).clip(CircleShape).background(Brand.copy(glow * 0.3f)))
         Box(Modifier.size(7.dp).scale(scale).clip(CircleShape).background(Brand))
     }
@@ -464,33 +671,21 @@ fun PulsingDot(modifier: Modifier = Modifier) {
 // Error state
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-fun ErrorState(
-    message: String,
-    onRetry: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
-) {
+fun ErrorState(message: String, onRetry: (() -> Unit)? = null, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        // Error icon inside glowing ring
         Box(contentAlignment = Alignment.Center) {
-            Box(
-                Modifier.size(72.dp).clip(CircleShape)
-                    .background(Brush.radialGradient(listOf(Error.copy(.15f), Color.Transparent)))
-                    .border(1.dp, Error.copy(.35f), CircleShape)
-            )
+            Box(Modifier.size(72.dp).clip(CircleShape)
+                .background(Brush.radialGradient(listOf(Error.copy(.15f), Color.Transparent)))
+                .border(1.dp, Error.copy(.35f), CircleShape))
             Icon(IconWifiOff, null, tint = Error.copy(.8f), modifier = Modifier.size(30.dp))
         }
         Spacer(Modifier.height(20.dp))
-        Text(
-            friendlyError(message),
-            color = White60,
-            fontSize = 15.sp,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            lineHeight = 23.sp,
-        )
+        Text(friendlyError(message), color = White60, fontSize = 15.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 23.sp)
         if (onRetry != null) {
             Spacer(Modifier.height(28.dp))
             BrandButton("Try Again", onRetry)
@@ -531,16 +726,12 @@ fun RatingChip(rating: Double, modifier: Modifier = Modifier) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Genre pill
+// Genre pill — with blue active state
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-fun GenrePill(
-    text: String,
-    selected: Boolean = false,
-    onClick: () -> Unit = {},
-) {
+fun GenrePill(text: String, selected: Boolean = false, onClick: () -> Unit = {}) {
     val bgBrush = if (selected)
-        Brush.horizontalGradient(listOf(BrandDeep, Brand.copy(.85f)))
+        Brush.horizontalGradient(listOf(BrandDeep, Brand.copy(.9f)))
     else
         Brush.horizontalGradient(listOf(BgRaised, BgSurface))
 
@@ -548,13 +739,13 @@ fun GenrePill(
         modifier = Modifier
             .clip(RoundedCornerShape(100.dp))
             .background(bgBrush)
-            .border(1.dp, if (selected) Brand.copy(.55f) else GlassBorderMd, RoundedCornerShape(100.dp))
+            .border(1.dp, if (selected) Brand.copy(.6f) else GlassBorderMd, RoundedCornerShape(100.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 15.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
         Text(
             text,
-            color      = if (selected) Color(0xFF1A0F00) else White60,
+            color      = if (selected) Color.White else White60,
             fontSize   = 12.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
         )

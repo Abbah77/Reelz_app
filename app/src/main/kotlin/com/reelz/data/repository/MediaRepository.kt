@@ -84,11 +84,22 @@ class MediaRepository @Inject constructor(
     suspend fun getTvGenres(): List<Genre>    = api.getTvGenres().genres.map { Genre(it.id, it.name) }
 
     // ── Detail ────────────────────────────────────────────────────────────────
+
+    /** Fast — no append_to_response. Returns in ~300ms. Shows the screen immediately. */
+    suspend fun getDetailFast(tmdbId: Int, type: MediaType): MediaDetail =
+        if (type == MediaType.MOVIE) api.getMovieDetail(tmdbId).toDetail()
+        else api.getTvDetail(tmdbId).toDetail()
+
+    /** Extras — credits, videos, similar. Heavier, loads after screen is visible. */
+    suspend fun getDetailExtras(tmdbId: Int, type: MediaType): MediaDetail =
+        if (type == MediaType.MOVIE) api.getMovieExtras(tmdbId).toDetail()
+        else api.getTvExtras(tmdbId).toDetail()
+
     suspend fun getMovieDetail(tmdbId: Int): MediaDetail =
-        api.getMovieDetail(tmdbId).toDetail()
+        api.getMovieExtras(tmdbId).toDetail()
 
     suspend fun getTvDetail(tmdbId: Int): MediaDetail =
-        api.getTvDetail(tmdbId).toDetail()
+        api.getTvExtras(tmdbId).toDetail()
 
     suspend fun getDetail(tmdbId: Int, type: MediaType): MediaDetail =
         if (type == MediaType.MOVIE) getMovieDetail(tmdbId) else getTvDetail(tmdbId)

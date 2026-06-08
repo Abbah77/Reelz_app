@@ -2,6 +2,12 @@ package com.reelz.ui.screens.detail
 
 import android.content.Intent
 import androidx.compose.animation.*
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -115,6 +121,7 @@ class DetailViewModel @Inject constructor(
 
     data class UiState(
         val isLoading: Boolean = true,
+        val extrasLoading: Boolean = false,
         val error: String? = null,
         val detail: MediaDetail? = null,
         val episodes: List<Episode> = emptyList(),
@@ -148,15 +155,27 @@ class DetailViewModel @Inject constructor(
      * UPGRADE P9: Pre-resolved stream started in background after detail loads.
      * Used if available when user taps Play or Download.
      */
-    private var preResolvedStream: com.reelz.data.model.StreamResult? = null
+    internal var preResolvedStream: com.reelz.data.model.StreamResult? = null
+
+    /**
+     * Pre-parsed quality list from the master playlist.
+     * Built in the background right after preResolvedStream is resolved.
+     * Makes the download sheet open instantly — zero network call on tap.
+     * Key is "tmdbId_season_episode" so episodes don't collide with movies.
+     */
+    private val preResolvedQualities = HashMap<String, List<QualityTrack>>()
+
+    private fun qualityKey(tmdbId: Int, season: Int = 0, episode: Int = 0) =
+        "${tmdbId}_${season}_${episode}"
 
     fun load(tmdbId: Int, mediaType: MediaType) {
         viewModelScope.launch {
             _ui.update { it.copy(isLoading = true, error = null) }
             try {
-                val detail      = repo.getDetail(tmdbId, mediaType)
+                // Stage 1 — fast fetch (no append_to_response). Screen appears immediately.
                 val inWatchlist = repo.isInWatchlist(tmdbId)
                 val liked       = repo.isLiked(tmdbId)
+                val detail      = repo.getDetailFast(tmdbId, mediaType)
                 currentMedia = Media(
                     id = detail.tmdbId, tmdbId = detail.tmdbId, title = detail.title,
                     overview = detail.overview, posterPath = detail.posterPath,
@@ -164,14 +183,45 @@ class DetailViewModel @Inject constructor(
                     voteAverage = detail.voteAverage, voteCount = detail.voteCount,
                     popularity = 0.0, mediaType = mediaType,
                 )
-                _ui.update { it.copy(isLoading = false, detail = detail, isInWatchlist = inWatchlist, isLiked = liked) }
+                // Screen is now visible — isLoading = false, extrasLoading = true
+                _ui.update { it.copy(
+                    isLoading     = false,
+                    extrasLoading = true,
+                    detail        = detail,
+                    isInWatchlist = inWatchlist,
+                    isLiked       = liked,
+                ) }
+
                 if (mediaType == MediaType.TV && detail.seasons.isNotEmpty()) {
                     loadEpisodes(tmdbId, 1)
                 }
-                // UPGRADE P9: Pre-resolve stream in background so Play/Download is instant
+
+                // Stage 2 — heavy extras (credits, videos, similar) in background
                 viewModelScope.launch {
                     try {
-                        preResolvedStream = engine.resolve(tmdbId, mediaType)
+                        val extras = repo.getDetailExtras(tmdbId, mediaType)
+                        _ui.update { it.copy(detail = extras, extrasLoading = false) }
+                    } catch (_: Exception) {
+                        _ui.update { it.copy(extrasLoading = false) }
+                    }
+                }
+
+                // Stage 3 — pre-resolve stream AND pre-parse qualities in background
+                viewModelScope.launch {
+                    try {
+                        val stream = engine.resolve(tmdbId, mediaType)
+                        preResolvedStream = stream
+                        if (stream != null) {
+                            val qualities = when {
+                                stream.qualities.isNotEmpty() -> stream.qualities
+                                stream.isHls -> parseMasterPlaylist(
+                                    stream.url, stream.headers,
+                                    _ui.value.detail?.runtime,
+                                )
+                                else -> listOf(QualityTrack("Best available", stream.url))
+                            }
+                            preResolvedQualities[qualityKey(tmdbId)] = qualities
+                        }
                     } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
@@ -237,11 +287,25 @@ class DetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             try {
-                // UPGRADE P1: Use pre-resolved stream if available, otherwise resolve
-                val stream = preResolvedStream?.takeIf { season == 0 || true }
-                    ?: engine.resolve(tmdbId, mediaType, season, episode)
+                val key = qualityKey(tmdbId, season, episode)
 
-                // Cache for use in enqueueDownload() — eliminates 2nd resolve call
+                // Fast path — qualities already parsed in background, show instantly
+                val cached = preResolvedQualities[key]
+                if (cached != null) {
+                    cachedStreamResult = preResolvedStream
+                    _ui.update { it.copy(
+                        downloadQualities    = cached,
+                        isResolvingQualities = false,
+                    )}
+                    return@launch
+                }
+
+                // Slow path — not yet pre-resolved (user tapped very fast, or episode)
+                val stream = preResolvedStream?.let { s ->
+                    // Only reuse movie pre-resolve for movie (season==0)
+                    if (season == 0) s else null
+                } ?: engine.resolve(tmdbId, mediaType, season, episode)
+
                 cachedStreamResult = stream
 
                 val qualities = when {
@@ -250,6 +314,10 @@ class DetailViewModel @Inject constructor(
                     stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, detail.runtime)
                     else -> listOf(QualityTrack("Best available", stream.url))
                 }
+
+                // Store so next tap is instant
+                if (qualities.isNotEmpty()) preResolvedQualities[key] = qualities
+
                 _ui.update { it.copy(downloadQualities = qualities, isResolvingQualities = false) }
             } catch (e: Exception) {
                 _ui.update { it.copy(isResolvingQualities = false, showDownloadSheet = false) }
@@ -320,7 +388,10 @@ class DetailViewModel @Inject constructor(
 
             rawVariants.map { variant ->
                 val estimatedSize = if (runtimeSec > 0 && variant.bandwidth > 0) {
-                    (variant.bandwidth * runtimeSec) / 8L
+                    // Apply 0.55 correction factor — declared HLS bandwidth is always
+                    // peak/theoretical. Real encoded streams average ~55% of declared.
+                    // This brings the shown size much closer to actual download size.
+                    ((variant.bandwidth * runtimeSec) / 8L * 55L) / 100L
                 } else 0L
                 variant.copy(estimatedSizeBytes = estimatedSize)
             }
@@ -353,15 +424,22 @@ fun DetailScreen(
             putExtra("episode",    episode)
             putExtra("title",      if (epName.isNotBlank()) epName else d.title)
             putExtra("posterPath", d.posterPath)
+            vm.preResolvedStream?.let { stream ->
+                putExtra("streamUrl",     stream.url)
+                putExtra("streamIsHls",   stream.isHls)
+                putExtra("streamReferer", stream.referer)
+                putExtra("streamOrigin",  stream.origin)
+            }
         })
     }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
         when {
-            ui.isLoading -> FullScreenLoader()
+            ui.isLoading -> DetailSkeleton()
             ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.load(tmdbId, mediaType) })
             ui.detail != null -> DetailContent(
                 ui             = ui,
+                extrasLoading  = ui.extrasLoading,
                 onBack         = { nav.popBackStack() },
                 onPlayMovie    = { launchPlayer() },
                 onPlayEpisode  = { s, e, name -> launchPlayer(s, e, name) },
@@ -529,6 +607,7 @@ fun DownloadQualitySheet(
 @Composable
 private fun DetailContent(
     ui: DetailViewModel.UiState,
+    extrasLoading: Boolean = false,
     onBack: () -> Unit,
     onPlayMovie: () -> Unit,
     onPlayEpisode: (Int, Int, String) -> Unit,
@@ -734,7 +813,10 @@ private fun DetailContent(
         }
 
         // ── Cast ───────────────────────────────────────────────────────────
-        if (detail.cast.isNotEmpty()) {
+        if (extrasLoading) {
+            item { SectionHeader("Cast") }
+            item { CastRowSkeleton() }
+        } else if (detail.cast.isNotEmpty()) {
             item { SectionHeader("Cast") }
             item {
                 LazyRow(
@@ -749,7 +831,10 @@ private fun DetailContent(
         }
 
         // ── Similar ────────────────────────────────────────────────────────
-        if (detail.similar.isNotEmpty()) {
+        if (extrasLoading) {
+            item { SectionHeader("More Like This") }
+            item { MediaRowSkeleton() }
+        } else if (detail.similar.isNotEmpty()) {
             item { SectionHeader("More Like This") }
             item {
                 LazyRow(
@@ -847,4 +932,110 @@ fun MetaChip(label: String, value: String) {
 fun formatRuntime(minutes: Int): String {
     val h = minutes / 60; val m = minutes % 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+// ── Skeleton shimmer ──────────────────────────────────────────────────────────
+
+@Composable
+private fun shimmerBrush(): Brush {
+    val shimmerColors = listOf(
+        androidx.compose.ui.graphics.Color(0xFF1A1A24),
+        androidx.compose.ui.graphics.Color(0xFF2A2A38),
+        androidx.compose.ui.graphics.Color(0xFF1A1A24),
+    )
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val translateAnim by transition.animateFloat(
+        initialValue = 0f,
+        targetValue  = 1000f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "shimmerTranslate",
+    )
+    return Brush.linearGradient(
+        colors = shimmerColors,
+        start  = androidx.compose.ui.geometry.Offset(translateAnim - 300f, 0f),
+        end    = androidx.compose.ui.geometry.Offset(translateAnim, 0f),
+    )
+}
+
+@Composable
+private fun ShimmerBox(modifier: Modifier, radius: androidx.compose.ui.unit.Dp = 8.dp) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(radius))
+            .background(shimmerBrush())
+    )
+}
+
+/** Full-screen skeleton shown while Stage 1 (fast detail) is loading. */
+@Composable
+fun DetailSkeleton() {
+    Column(Modifier.fillMaxSize().background(Bg)) {
+        // Backdrop placeholder
+        ShimmerBox(
+            Modifier.fillMaxWidth().height(420.dp),
+            radius = 0.dp,
+        )
+        Spacer(Modifier.height(16.dp))
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Title
+            ShimmerBox(Modifier.fillMaxWidth(0.7f).height(26.dp))
+            // Subtitle line
+            ShimmerBox(Modifier.fillMaxWidth(0.45f).height(14.dp))
+            Spacer(Modifier.height(4.dp))
+            // Genre pills
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ShimmerBox(Modifier.width(64.dp).height(24.dp), radius = 12.dp)
+                ShimmerBox(Modifier.width(64.dp).height(24.dp), radius = 12.dp)
+                ShimmerBox(Modifier.width(64.dp).height(24.dp), radius = 12.dp)
+            }
+            Spacer(Modifier.height(4.dp))
+            // Play button
+            ShimmerBox(Modifier.fillMaxWidth().height(48.dp), radius = 14.dp)
+            Spacer(Modifier.height(4.dp))
+            // Overview lines
+            ShimmerBox(Modifier.fillMaxWidth().height(13.dp))
+            ShimmerBox(Modifier.fillMaxWidth().height(13.dp))
+            ShimmerBox(Modifier.fillMaxWidth(0.6f).height(13.dp))
+        }
+    }
+}
+
+/** Skeleton row for the Cast section while extras are loading. */
+@Composable
+fun CastRowSkeleton() {
+    Row(
+        Modifier.padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        repeat(5) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                ShimmerBox(Modifier.size(64.dp), radius = 32.dp)
+                ShimmerBox(Modifier.width(56.dp).height(10.dp))
+                ShimmerBox(Modifier.width(44.dp).height(9.dp))
+            }
+        }
+    }
+}
+
+/** Skeleton row for the Similar / More Like This section while extras are loading. */
+@Composable
+fun MediaRowSkeleton() {
+    Row(
+        Modifier.padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        repeat(4) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                ShimmerBox(Modifier.width(120.dp).height(170.dp), radius = 10.dp)
+                ShimmerBox(Modifier.width(100.dp).height(11.dp))
+                ShimmerBox(Modifier.width(72.dp).height(10.dp))
+            }
+        }
+    }
 }
