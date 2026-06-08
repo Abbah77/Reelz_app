@@ -1,13 +1,46 @@
-// reelz_jni.cpp — upgraded with AES-128 segment decryption + TS sync validation
-// Original JNI functions preserved; new functions added at the bottom.
+// reelz_jni.cpp — upgraded with AES-128 TS validation stubs
+// Uses the actual m3u8_parser.h API (parseM3u8 → HlsPlaylist) and
+// header_forge.h API (forgeHeaders → Headers, serialiseHeaders, buildUserAgent).
 
 #include <jni.h>
 #include <string>
-#include <vector>
 #include <sstream>
 #include <cstring>
+#include <cstdint>
 #include "m3u8_parser.h"
 #include "header_forge.h"
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Serialise all variant tracks as "url|bandwidth|resolution|height\n" lines. */
+static std::string variantsToString(const HlsPlaylist& pl) {
+    std::ostringstream oss;
+    for (const auto& v : pl.variants) {
+        oss << v.url << "|"
+            << v.bandwidth << "|"
+            << v.resolution << "|"
+            << v.height << "\n";
+    }
+    return oss.str();
+}
+
+/** Serialise all segment URLs as one URL per line. */
+static std::string segmentsToString(const HlsPlaylist& pl) {
+    std::ostringstream oss;
+    for (const auto& s : pl.segments) {
+        oss << s.url << "\n";
+    }
+    return oss.str();
+}
+
+/** Serialise subtitle tracks as "url|language|name\n" lines. */
+static std::string subtitlesToString(const HlsPlaylist& pl) {
+    std::ostringstream oss;
+    for (const auto& s : pl.subtitles) {
+        oss << s.url << "|" << s.language << "|" << s.name << "\n";
+    }
+    return oss.str();
+}
 
 // ─── Existing JNI functions ────────────────────────────────────────────────────
 
@@ -17,9 +50,11 @@ Java_com_reelz_scanner_NativeBridge_parseBestVariantUrl(
 {
     const char* c = env->GetStringUTFChars(content, nullptr);
     const char* b = env->GetStringUTFChars(baseUrl, nullptr);
-    std::string result = parseBestVariantUrl(c, b);
+    HlsPlaylist pl = parseM3u8(c, b);
     env->ReleaseStringUTFChars(content, c);
     env->ReleaseStringUTFChars(baseUrl, b);
+    const HlsVariant* best = pl.bestVariant();
+    std::string result = best ? best->url : "";
     return env->NewStringUTF(result.c_str());
 }
 
@@ -29,9 +64,10 @@ Java_com_reelz_scanner_NativeBridge_parseSegmentUrls(
 {
     const char* c = env->GetStringUTFChars(content, nullptr);
     const char* b = env->GetStringUTFChars(baseUrl, nullptr);
-    std::string result = parseSegmentUrls(c, b);
+    HlsPlaylist pl = parseM3u8(c, b);
     env->ReleaseStringUTFChars(content, c);
     env->ReleaseStringUTFChars(baseUrl, b);
+    std::string result = segmentsToString(pl);
     return env->NewStringUTF(result.c_str());
 }
 
@@ -41,9 +77,10 @@ Java_com_reelz_scanner_NativeBridge_parseVariants(
 {
     const char* c = env->GetStringUTFChars(content, nullptr);
     const char* b = env->GetStringUTFChars(baseUrl, nullptr);
-    std::string result = parseVariants(c, b);
+    HlsPlaylist pl = parseM3u8(c, b);
     env->ReleaseStringUTFChars(content, c);
     env->ReleaseStringUTFChars(baseUrl, b);
+    std::string result = variantsToString(pl);
     return env->NewStringUTF(result.c_str());
 }
 
@@ -53,9 +90,10 @@ Java_com_reelz_scanner_NativeBridge_parseSubtitles(
 {
     const char* c = env->GetStringUTFChars(content, nullptr);
     const char* b = env->GetStringUTFChars(baseUrl, nullptr);
-    std::string result = parseSubtitles(c, b);
+    HlsPlaylist pl = parseM3u8(c, b);
     env->ReleaseStringUTFChars(content, c);
     env->ReleaseStringUTFChars(baseUrl, b);
+    std::string result = subtitlesToString(pl);
     return env->NewStringUTF(result.c_str());
 }
 
@@ -64,10 +102,12 @@ Java_com_reelz_scanner_NativeBridge_forgeHeaders(
     JNIEnv* env, jobject, jstring referer, jstring origin, jboolean mobile, jboolean isXhr)
 {
     const char* r = env->GetStringUTFChars(referer, nullptr);
-    const char* o = env->GetStringUTFChars(origin, nullptr);
-    std::string result = forgeHeaders(r, o, (bool)mobile, (bool)isXhr);
+    const char* o = env->GetStringUTFChars(origin,  nullptr);
+    Headers h = forgeHeaders(r, o, (bool)mobile, (bool)isXhr);
     env->ReleaseStringUTFChars(referer, r);
-    env->ReleaseStringUTFChars(origin, o);
+    env->ReleaseStringUTFChars(origin,  o);
+    // serialiseHeaders converts Headers (unordered_map) → "Key: Value\r\n" string
+    std::string result = serialiseHeaders(h);
     return env->NewStringUTF(result.c_str());
 }
 
@@ -75,30 +115,21 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_reelz_scanner_NativeBridge_getUserAgent(
     JNIEnv* env, jobject, jboolean mobile)
 {
-    std::string result = getUserAgent((bool)mobile);
+    // buildUserAgent is the actual function name in header_forge.h
+    std::string result = buildUserAgent((bool)mobile);
     return env->NewStringUTF(result.c_str());
 }
 
-// ─── NEW: AES-128-CBC decryption for encrypted HLS segments ──────────────────
-// Uses Android's built-in AES implementation via raw bit manipulation.
-// For production, link against OpenSSL or mbedTLS instead.
-
-static void xorBlock(uint8_t* dst, const uint8_t* a, const uint8_t* b) {
-    for (int i = 0; i < 16; i++) dst[i] = a[i] ^ b[i];
-}
-
-// Simple AES key expansion (AES-128)
-// NOTE: For production use, replace with a proper AES library (mbedTLS/OpenSSL).
-// This is a reference implementation showing where decryption plugs in.
+// ─── NEW: AES-128-CBC decryption stub ─────────────────────────────────────────
+// Returns input unchanged until an AES implementation is linked.
+// The JNI entry point is wired so Kotlin can call it without future app changes.
 
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_reelz_scanner_NativeBridge_nativeDecryptAES128(
     JNIEnv* env, jobject,
     jbyteArray keyArr, jbyteArray ivArr, jbyteArray dataArr)
 {
-    // For now, return the input unchanged (stub).
-    // Replace with AES-128-CBC implementation using OpenSSL or mbedTLS.
-    // This entry point is wired up so Kotlin can call it without app changes.
+    (void)keyArr; (void)ivArr;  // suppress unused warnings — stub
     jsize len = env->GetArrayLength(dataArr);
     jbyteArray out = env->NewByteArray(len);
     jbyte* src = env->GetByteArrayElements(dataArr, nullptr);
@@ -108,7 +139,7 @@ Java_com_reelz_scanner_NativeBridge_nativeDecryptAES128(
 }
 
 // ─── NEW: MPEG-TS sync byte validation ────────────────────────────────────────
-// Validates that a downloaded .ts segment has valid sync bytes (0x47 every 188 bytes).
+// Validates that a .ts segment has valid sync bytes (0x47 every 188 bytes).
 // Prevents corrupt segments from silently breaking the merge step.
 
 extern "C" JNIEXPORT jboolean JNICALL

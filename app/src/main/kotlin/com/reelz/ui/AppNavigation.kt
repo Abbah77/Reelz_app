@@ -5,13 +5,12 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -21,6 +20,7 @@ import androidx.navigation.*
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.*
 import com.reelz.data.model.MediaType
+import com.reelz.ui.components.*
 import com.reelz.ui.screens.browse.BrowseScreen
 import com.reelz.ui.screens.shorts.ShortsScreen
 import com.reelz.ui.screens.downloads.DownloadsScreen
@@ -51,11 +51,11 @@ data class NavTab(
 )
 
 val navTabs = listOf(
-    NavTab(Route.Browse.path,    "Browse",    Icons.Outlined.Explore,       Icons.Filled.Explore),
-    NavTab(Route.Shorts.path,    "Shorts",    Icons.Outlined.PlayCircle,    Icons.Filled.PlayCircle),
-    NavTab(Route.Downloads.path, "Downloads", Icons.Outlined.Download,      Icons.Filled.Download),
-    NavTab(Route.Transfer.path,  "Transfer",  Icons.Outlined.SwapHoriz,     Icons.Filled.SwapHoriz),
-    NavTab(Route.Profile.path,   "Profile",   Icons.Outlined.Person,        Icons.Filled.Person),
+    NavTab(Route.Browse.path,    "Browse",    IconCompass,     IconCompass),
+    NavTab(Route.Shorts.path,    "Shorts",    IconPlayCircle,  IconPlayCircle),
+    NavTab(Route.Downloads.path, "Downloads", IconDownloadCloud, IconDownloadCloud),
+    NavTab(Route.Transfer.path,  "Transfer",  IconSwap,        IconSwap),
+    NavTab(Route.Profile.path,   "Profile",   IconUser,        IconUser),
 )
 
 @Composable
@@ -72,8 +72,8 @@ fun AppNavigation() {
         bottomBar = {
             AnimatedVisibility(
                 visible = showBottomBar,
-                enter   = slideInVertically { it },
-                exit    = slideOutVertically { it },
+                enter   = slideInVertically { it } + fadeIn(),
+                exit    = slideOutVertically { it } + fadeOut(),
             ) {
                 ReelzBottomNav(
                     currentRoute = currentRoute,
@@ -92,10 +92,10 @@ fun AppNavigation() {
             navController    = nav,
             startDestination = Route.Browse.path,
             modifier         = Modifier.padding(padding),
-            enterTransition  = { fadeIn(tween(220)) + scaleIn(tween(220), 0.96f) },
-            exitTransition   = { fadeOut(tween(180)) },
-            popEnterTransition  = { fadeIn(tween(220)) },
-            popExitTransition   = { fadeOut(tween(180)) + scaleOut(tween(220), 0.96f) },
+            enterTransition  = { fadeIn(tween(280)) + scaleIn(tween(280), 0.97f) },
+            exitTransition   = { fadeOut(tween(200)) + scaleOut(tween(200), 1.02f) },
+            popEnterTransition  = { fadeIn(tween(280)) + scaleIn(tween(280), 0.97f) },
+            popExitTransition   = { fadeOut(tween(200)) + scaleOut(tween(200), 0.96f) },
         ) {
             composable(Route.Browse.path)    { BrowseScreen(nav) }
             composable(Route.Shorts.path)    { ShortsScreen(nav) }
@@ -118,7 +118,7 @@ fun AppNavigation() {
     }
 }
 
-// ── Bottom nav matching Flutter's blurred frosted glass bar ──────────────────
+// ── Premium frosted-glass bottom navigation bar ───────────────────────────────
 @Composable
 fun ReelzBottomNav(
     currentRoute: String?,
@@ -126,25 +126,36 @@ fun ReelzBottomNav(
 ) {
     val haptic = LocalHapticFeedback.current
 
-    Box {
-        // Frosted glass background
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(80.dp)
-                .background(
-                    Brush.verticalGradient(listOf(Bg.copy(.0f), Bg.copy(.97f)))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                // Top glow line
+                drawLine(
+                    brush = Brush.horizontalGradient(
+                        listOf(Color.Transparent, Brand.copy(.5f), Brand2.copy(.3f), Color.Transparent)
+                    ),
+                    start = Offset(0f, 0f),
+                    end   = Offset(size.width, 0f),
+                    strokeWidth = 1.5f,
                 )
-        )
+            }
+            .background(
+                Brush.verticalGradient(
+                    listOf(Bg.copy(0f), Bg.copy(0.92f), Bg.copy(0.98f))
+                )
+            )
+    ) {
         NavigationBar(
             containerColor = Color.Transparent,
             tonalElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth().border(
-                BorderStroke(0.8.dp, GlassBorder),
-            ),
+            modifier = Modifier.fillMaxWidth(),
         ) {
             navTabs.forEach { tab ->
                 val selected = currentRoute == tab.route
+                val iconAlpha by animateFloatAsState(if (selected) 1f else 0.45f, tween(250), label = "ia")
+                val scale     by animateFloatAsState(if (selected) 1.1f else 1f, spring(0.5f, 400f), label = "sc")
+
                 NavigationBarItem(
                     selected = selected,
                     onClick  = {
@@ -152,32 +163,44 @@ fun ReelzBottomNav(
                         onTabSelected(tab.route)
                     },
                     icon = {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            AnimatedContent(selected, label = "icon") { sel ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                // Active pill glow background
+                                AnimatedVisibility(
+                                    visible = selected,
+                                    enter = fadeIn(tween(200)) + scaleIn(tween(200), 0.5f),
+                                    exit  = fadeOut(tween(150)),
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .width(46.dp).height(28.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(
+                                                Brush.radialGradient(
+                                                    listOf(AmberGlass, Color.Transparent)
+                                                )
+                                            )
+                                            .border(1.dp, AmberBorder, RoundedCornerShape(14.dp))
+                                    )
+                                }
                                 Icon(
-                                    if (sel) tab.activeIcon else tab.icon,
+                                    if (selected) tab.activeIcon else tab.icon,
                                     contentDescription = tab.label,
-                                    tint = if (sel) Brand else White40,
-                                )
-                            }
-                            // Active indicator dot (like Flutter)
-                            AnimatedVisibility(selected) {
-                                Box(
-                                    Modifier
-                                        .padding(top = 3.dp)
-                                        .width(16.dp)
-                                        .height(2.dp)
-                                        .clip(RoundedCornerShape(1.dp))
-                                        .background(Brand),
+                                    tint = if (selected) Brand else White.copy(0.45f),
+                                    modifier = Modifier.size(20.dp).scale(scale),
                                 )
                             }
                         }
                     },
-                    label  = {
+                    label = {
                         Text(
                             tab.label,
-                            color = if (selected) Brand else White40,
+                            color    = if (selected) Brand else White40,
                             fontSize = 10.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         )
                     },
                     colors = NavigationBarItemDefaults.colors(

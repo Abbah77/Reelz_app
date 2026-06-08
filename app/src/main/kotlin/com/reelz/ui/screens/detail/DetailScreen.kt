@@ -6,8 +6,6 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -40,6 +38,71 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
+
+// ── Local icon aliases used in DetailScreen ───────────────────────────────────
+private val IconArrowLeft  get() = com.reelz.ui.components.IconSearch.let {
+    androidx.compose.ui.graphics.vector.ImageVector.Builder("ArrowLeft", 24.dp, 24.dp, 24f, 24f).apply {
+        addPath(pathData = PathData { moveTo(19f, 12f); lineTo(5f, 12f); moveTo(11f, 6f); lineTo(5f, 12f); lineTo(11f, 18f) },
+            stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.White),
+            strokeLineWidth = 2f, strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round,
+            strokeLineJoin = androidx.compose.ui.graphics.StrokeJoin.Round,
+            fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
+    }.build()
+}
+
+private val IconHeartFill get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("HeartFill", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(20.84f, 4.61f); arcTo(5.5f, 5.5f, 0f, false, false, 12f, 8.5f)
+        arcTo(5.5f, 5.5f, 0f, false, false, 3.16f, 4.61f)
+        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 20f); arcTo(5.5f, 5.5f, 0f, false, false, 20.84f, 4.61f); close()
+    }, fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(0xFFFF3D6E)))
+}.build()
+
+private val IconHeartOutline get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("HeartOut", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(20.84f, 4.61f); arcTo(5.5f, 5.5f, 0f, false, false, 12f, 8.5f)
+        arcTo(5.5f, 5.5f, 0f, false, false, 3.16f, 4.61f)
+        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 20f); arcTo(5.5f, 5.5f, 0f, false, false, 20.84f, 4.61f); close()
+    }, stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.White),
+       strokeLineWidth = 1.7f, fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
+}.build()
+
+private val IconBookmarkFill get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("BookFill", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData { moveTo(5f, 3f); lineTo(19f, 3f); lineTo(19f, 21f); lineTo(12f, 16f); lineTo(5f, 21f); close() },
+        fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(0xFFE8A020)))
+}.build()
+
+private val IconBookmarkOutline get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("BookOut", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData { moveTo(5f, 3f); lineTo(19f, 3f); lineTo(19f, 21f); lineTo(12f, 16f); lineTo(5f, 21f); close() },
+        stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.White),
+        strokeLineWidth = 1.7f, fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
+}.build()
+
+private val IconCheckCircle get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("Check", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 12f, 22f); arcTo(10f, 10f, 0f, false, false, 12f, 2f); close()
+        moveTo(8f, 12f); lineTo(11f, 15f); lineTo(16f, 9f)
+    }, stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(0xFF2DD36F)),
+       strokeLineWidth = 1.7f, strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round,
+       strokeLineJoin = androidx.compose.ui.graphics.StrokeJoin.Round,
+       fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
+}.build()
+
+private val IconError get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("Err", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 12f, 22f); arcTo(10f, 10f, 0f, false, false, 12f, 2f); close()
+        moveTo(12f, 8f); lineTo(12f, 12f); moveTo(12f, 16f); lineTo(12f, 16.01f)
+    }, stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(0xFFFF3B30)),
+       strokeLineWidth = 1.7f, strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round,
+       fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
+}.build()
+
+private val IconClose get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("Close", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData { moveTo(18f, 6f); lineTo(6f, 18f); moveTo(6f, 6f); lineTo(18f, 18f) },
+        stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.White),
+        strokeLineWidth = 1.8f, strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round, fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
+}.build()
+
 @HiltViewModel
 class DetailViewModel @Inject constructor(
     private val repo: MediaRepository,
@@ -365,7 +428,7 @@ fun DownloadQualitySheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Icon(Icons.Default.Download, null, tint = Brand, modifier = Modifier.size(22.dp))
+                Icon(IconDownloadCloud, null, tint = Brand, modifier = Modifier.size(22.dp))
                 Text(
                     "Download",
                     color = White,
@@ -374,7 +437,7 @@ fun DownloadQualitySheet(
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, null, tint = White60, modifier = Modifier.size(20.dp))
+                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(20.dp))
                 }
             }
             Text(title, color = White60, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -382,7 +445,7 @@ fun DownloadQualitySheet(
 
             when {
                 enqueued -> {
-                    Icon(Icons.Default.CheckCircle, null, tint = Brand, modifier = Modifier.size(40.dp))
+                    Icon(IconCheckCircle, null, tint = Brand, modifier = Modifier.size(40.dp))
                     Spacer(Modifier.height(8.dp))
                     Text("Added to downloads!", color = White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                     Text("You can watch it once enough has downloaded.", color = White60, fontSize = 12.sp)
@@ -391,13 +454,13 @@ fun DownloadQualitySheet(
                 }
 
                 isLoading -> {
-                    CircularProgressIndicator(color = Brand, modifier = Modifier.size(32.dp))
+                    CinematicSpinner(size = 32.dp)
                     Spacer(Modifier.height(12.dp))
                     Text("Fetching available qualities…", color = White60, fontSize = 13.sp)
                 }
 
                 qualities.isEmpty() -> {
-                    Icon(Icons.Default.ErrorOutline, null, tint = White40, modifier = Modifier.size(32.dp))
+                    Icon(IconError, null, tint = White40, modifier = Modifier.size(32.dp))
                     Spacer(Modifier.height(8.dp))
                     Text("No downloadable streams found", color = White60, fontSize = 13.sp)
                 }
@@ -447,7 +510,7 @@ fun DownloadQualitySheet(
                                 }
                             }
 
-                            Icon(Icons.Default.Download, null, tint = White60, modifier = Modifier.size(18.dp))
+                            Icon(IconDownloadCloud, null, tint = White60, modifier = Modifier.size(18.dp))
                         }
                         Spacer(Modifier.height(8.dp))
                     }
@@ -496,7 +559,7 @@ private fun DetailContent(
                     onClick = onBack,
                     modifier = Modifier.statusBarsPadding().padding(8.dp)
                         .clip(CircleShape).background(Color.Black.copy(.5f))
-                ) { Icon(Icons.Default.ArrowBack, null, tint = White) }
+                ) { Icon(IconArrowLeft, null, tint = White) }
 
                 // Poster + meta
                 Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
@@ -542,7 +605,7 @@ private fun DetailContent(
                         text     = "Watch Now",
                         onClick  = onPlayMovie,
                         modifier = Modifier.weight(1f),
-                        icon     = { Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(20.dp)) },
+                        icon     = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(20.dp)) },
                     )
                     // ── Download button (movies only, like MovieBox) ────────
                     OutlinedButton(
@@ -551,7 +614,7 @@ private fun DetailContent(
                         border   = BorderStroke(1.dp, GlassBorderMd),
                         modifier = Modifier.height(48.dp),
                     ) {
-                        Icon(Icons.Default.Download, null, tint = White80, modifier = Modifier.size(18.dp))
+                        Icon(IconDownloadCloud, null, tint = White80, modifier = Modifier.size(18.dp))
                     }
                 }
                 // Watchlist button
@@ -562,7 +625,7 @@ private fun DetailContent(
                     modifier = Modifier.height(48.dp).let { if (isMovie) it else it.weight(1f) },
                 ) {
                     Icon(
-                        if (ui.isInWatchlist) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                        if (ui.isInWatchlist) IconBookmarkFill else IconBookmarkOutline,
                         null,
                         tint = if (ui.isInWatchlist) Brand else White60,
                         modifier = Modifier.size(18.dp),
@@ -578,7 +641,7 @@ private fun DetailContent(
                     modifier = Modifier.height(48.dp),
                 ) {
                     Icon(
-                        if (ui.isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        if (ui.isLiked) IconHeartFill else IconHeartOutline,
                         null,
                         tint = if (ui.isLiked) Like else White60,
                         modifier = Modifier.size(18.dp),
@@ -656,7 +719,7 @@ private fun DetailContent(
             }
 
             if (ui.isEpisodesLoading) {
-                item { Box(Modifier.fillMaxWidth().height(120.dp), Alignment.Center) { CircularProgressIndicator(color = Brand) } }
+                item { Box(Modifier.fillMaxWidth().height(120.dp), Alignment.Center) { CinematicSpinner() } }
             } else {
                 items(ui.episodes, key = { it.id }) { ep ->
                     EpisodeRow(
@@ -716,7 +779,7 @@ fun EpisodeRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(
-            Modifier.width(110.dp).height(64.dp).clip(RoundedCornerShape(8.dp)).background(BgRaised),
+            Modifier.width(110.dp).height(64.dp).clip(RoundedCornerShape(12.dp)).background(BgRaised),
         ) {
             if (episode.stillPath != null) {
                 AsyncImage(
@@ -727,7 +790,7 @@ fun EpisodeRow(
                 )
             }
             Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
-                Icon(Icons.Default.PlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(26.dp))
+                Icon(IconPlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(26.dp))
             }
         }
         Column(Modifier.weight(1f)) {
@@ -741,9 +804,9 @@ fun EpisodeRow(
         }
         // Download icon for each episode
         IconButton(onClick = onDownload, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.Download, null, tint = White60, modifier = Modifier.size(18.dp))
+            Icon(IconDownloadCloud, null, tint = White60, modifier = Modifier.size(18.dp))
         }
-        Icon(Icons.Default.PlayArrow, null, tint = Brand, modifier = Modifier.size(20.dp))
+        Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(20.dp))
     }
     Divider(color = GlassBorder, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 16.dp))
 }
@@ -761,7 +824,7 @@ fun CastCard(cast: CastMember) {
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                Icon(Icons.Default.Person, null, tint = White40, modifier = Modifier.fillMaxSize().padding(12.dp))
+                Icon(IconUser, null, tint = White40, modifier = Modifier.fillMaxSize().padding(12.dp))
             }
         }
         Spacer(Modifier.height(5.dp))

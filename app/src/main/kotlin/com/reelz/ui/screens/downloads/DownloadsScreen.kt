@@ -4,12 +4,11 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -37,7 +36,6 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.io.File
-import java.util.UUID
 import javax.inject.Inject
 
 @HiltViewModel
@@ -48,50 +46,43 @@ class DownloadsViewModel @Inject constructor(
     val downloads: StateFlow<List<DownloadItem>> = dao.getAll()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    fun delete(item: DownloadItem, ctx: Context) {
-        viewModelScope.launch {
-            repo.delete(ctx, item)
-        }
-    }
-
-    /**
-     * BUG 1 fix: Use repo.resume() which sets resolveRequired=true so the service
-     * re-resolves the stream URL (CDN tokens expire — reusing old URL → 403 → PAUSED loop).
-     */
-    fun resume(ctx: Context, item: DownloadItem) {
-        viewModelScope.launch {
-            repo.resume(ctx, item)
-        }
-    }
+    fun delete(item: DownloadItem, ctx: Context) { viewModelScope.launch { repo.delete(ctx, item) } }
+    fun resume(ctx: Context, item: DownloadItem)  { viewModelScope.launch { repo.resume(ctx, item) } }
 }
 
 @Composable
 fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
     val ctx       = LocalContext.current
     val downloads by vm.downloads.collectAsState()
-
-    var tab by remember { mutableStateOf(0) }  // 0=All, 1=Movies, 2=TV
+    var tab by remember { mutableStateOf(0) }
 
     Column(Modifier.fillMaxSize().background(Bg).statusBarsPadding()) {
-        // ── Header ─────────────────────────────────────────────────────
+
+        // ── Header ─────────────────────────────────────────────────────────
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "Downloads",
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    color = White, fontWeight = FontWeight.Black
+            Column {
+                Text(
+                    "Downloads",
+                    style = MaterialTheme.typography.headlineMedium.copy(
+                        color = White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp
+                    )
                 )
-            )
+                val readyCount = downloads.count { it.status == DownloadStatus.DONE.name }
+                if (readyCount > 0) {
+                    Text(
+                        "$readyCount file${if (readyCount > 1) "s" else ""} ready to watch",
+                        color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
             Spacer(Modifier.weight(1f))
-            Text(
-                "${downloads.count { it.status == DownloadStatus.DONE.name }} ready",
-                color = White40, fontSize = 12.sp,
-            )
+            Icon(IconDownloadCloud, null, tint = Brand.copy(.6f), modifier = Modifier.size(28.dp))
         }
 
-        // ── Tab filter ─────────────────────────────────────────────────
+        // ── Tab filter ─────────────────────────────────────────────────────
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -100,7 +91,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                 GenrePill(label, tab == i) { tab = i }
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
 
         val filtered = when (tab) {
             1    -> downloads.filter { it.mediaType == "MOVIE" }
@@ -110,18 +101,21 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
 
         if (filtered.isEmpty()) {
             Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Download, null, tint = White20, modifier = Modifier.size(64.dp))
-                    Spacer(Modifier.height(12.dp))
-                    Text("No downloads yet", color = White40, fontSize = 15.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text("Download movies to watch offline", color = White20, fontSize = 13.sp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(90.dp).clip(CircleShape)
+                            .background(Brush.radialGradient(listOf(AmberGlass, Color.Transparent)))
+                            .border(1.dp, AmberBorder, CircleShape))
+                        Icon(IconDownloadCloud, null, tint = Brand.copy(.7f), modifier = Modifier.size(38.dp))
+                    }
+                    Text("No downloads yet", color = White60, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Save movies & shows to watch offline", color = White40, fontSize = 13.sp)
                 }
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(filtered, key = { it.id }) { dl ->
                     DownloadCard(
@@ -131,28 +125,21 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                         onResume = { vm.resume(ctx, dl) },
                     )
                 }
-                item { Spacer(Modifier.height(80.dp)) }
+                item { Spacer(Modifier.height(90.dp)) }
             }
         }
     }
 }
 
-/** Launch player for a completed or partially downloaded item. */
 private fun playDownload(ctx: Context, dl: DownloadItem) {
     val intent = Intent(ctx, PlayerActivity::class.java).apply {
-        putExtra("tmdbId",     dl.tmdbId)
-        putExtra("mediaType",  dl.mediaType)
-        putExtra("season",     dl.season)
-        putExtra("episode",    dl.episode)
-        putExtra("title",      dl.title)
-        putExtra("posterPath", dl.posterPath)
+        putExtra("tmdbId", dl.tmdbId); putExtra("mediaType", dl.mediaType)
+        putExtra("season", dl.season); putExtra("episode", dl.episode)
+        putExtra("title", dl.title);   putExtra("posterPath", dl.posterPath)
     }
     when {
-        // Fully merged MP4
-        dl.status == DownloadStatus.DONE.name && dl.filePath.isNotBlank() -> {
+        dl.status == DownloadStatus.DONE.name && dl.filePath.isNotBlank() ->
             intent.data = Uri.fromFile(File(dl.filePath))
-        }
-        // Partial HLS — point at local playlist for partial offline play
         dl.localPlaylistPath.isNotBlank() -> {
             intent.data = Uri.fromFile(File(dl.localPlaylistPath))
             intent.putExtra("isLocalHls", true)
@@ -171,14 +158,13 @@ fun DownloadCard(
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    val isDownloading = item.status == DownloadStatus.DOWNLOADING.name
-    val isDone        = item.status == DownloadStatus.DONE.name
-    val isPaused      = item.status == DownloadStatus.PAUSED.name
-    val isError       = item.status == DownloadStatus.ERROR.name
+    val isDownloading  = item.status == DownloadStatus.DOWNLOADING.name
+    val isDone         = item.status == DownloadStatus.DONE.name
+    val isPaused       = item.status == DownloadStatus.PAUSED.name
+    val isError        = item.status == DownloadStatus.ERROR.name
     val canPlayPartial = item.localPlaylistPath.isNotBlank()
-    val canPlay       = isDone || canPlayPartial
+    val canPlay        = isDone || canPlayPartial
 
-    // Progress fraction
     val pct = when {
         item.totalSegments > 0 -> item.segmentsDone.toFloat() / item.totalSegments
         item.sizeBytes > 0     -> (item.downloadedBytes.toFloat() / item.sizeBytes).coerceIn(0f, 1f)
@@ -186,149 +172,163 @@ fun DownloadCard(
     }
     val pctInt = (pct * 100).toInt()
 
+    // Animated progress
+    val animPct by animateFloatAsState(pct, tween(600), label = "prog")
+
     Box(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(18.dp))
             .background(BgCard)
-            .border(1.dp, GlassBorder, RoundedCornerShape(14.dp))
+            .border(
+                1.dp,
+                if (isDownloading) Brand.copy(.3f) else GlassBorder,
+                RoundedCornerShape(18.dp)
+            )
     ) {
-        Column {
+        // Active download shimmer edge
+        if (isDownloading) {
+            val shimmer = rememberInfiniteTransition(label = "shimmer")
+            val sx by shimmer.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), "sx")
+            Box(
+                Modifier.fillMaxWidth().height(2.dp).align(Alignment.TopCenter)
+                    .background(
+                        Brush.horizontalGradient(
+                            0f to Color.Transparent,
+                            sx  to Brand2,
+                            1f  to Color.Transparent,
+                        )
+                    )
+            )
+        }
+
+        Column(Modifier.padding(14.dp)) {
             Row(
-                Modifier.padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.Top,
             ) {
                 // Poster
-                Box(Modifier.width(60.dp).height(84.dp).clip(RoundedCornerShape(8.dp)).background(BgRaised)) {
+                Box(
+                    Modifier.width(66.dp).height(94.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp))
+                        .background(BgRaised)
+                ) {
                     AsyncImage(
                         model = BuildConfig.TMDB_IMG_W342 + item.posterPath,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
-                    // Play overlay
                     if (canPlay) {
                         Box(
-                            Modifier.fillMaxSize().background(Color.Black.copy(.3f)).clickable(onClick = onPlay),
+                            Modifier.fillMaxSize().background(Color(0x66000000)).clickable(onClick = onPlay),
                             Alignment.Center,
                         ) {
-                            Icon(Icons.Default.PlayArrow, null, tint = White, modifier = Modifier.size(24.dp))
+                            Box(
+                                Modifier.size(34.dp).clip(CircleShape)
+                                    .background(Color(0x99000000))
+                                    .border(1.dp, Brand.copy(.6f), CircleShape),
+                                Alignment.Center,
+                            ) {
+                                Icon(IconPlay, null, tint = White, modifier = Modifier.size(15.dp))
+                            }
                         }
                     }
                 }
 
                 Column(Modifier.weight(1f)) {
                     Text(
-                        item.title, color = White, fontWeight = FontWeight.SemiBold,
+                        item.title, color = White, fontWeight = FontWeight.Bold,
                         fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                     if (item.season > 0) {
                         Text(
-                            "S${item.season} E${item.episode} · ${item.episodeName}",
+                            "S${item.season} · E${item.episode}  ${item.episodeName}",
                             color = White60, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Spacer(Modifier.height(4.dp))
-
-                    // Status row
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         StatusBadge(item.status)
-                        // Quality label
                         QualityBadge(item.quality)
-                        // Size info
                         if (item.sizeBytes > 0) {
-                            Text(formatSize(item.sizeBytes), color = White40, fontSize = 11.sp)
+                            Text(formatSize(item.sizeBytes), color = White40, fontSize = 10.sp)
                         }
                     }
 
-                    // Downloading: progress bar + speed + segment count
+                    // Progress section
                     if (isDownloading) {
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { pct },
-                            modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
-                            color = Brand,
-                            trackColor = GlassMd,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                        Spacer(Modifier.height(8.dp))
+                        Box(
+                            Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp))
+                                .background(GlassMd)
                         ) {
-                            // Segments or bytes progress
+                            Box(
+                                Modifier.fillMaxWidth(animPct).fillMaxHeight()
+                                    .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
+                            )
+                        }
+                        Spacer(Modifier.height(5.dp))
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                             val progressLabel = when {
-                                item.totalSegments > 0 ->
-                                    "${item.segmentsDone}/${item.totalSegments} segments ($pctInt%)"
-                                item.sizeBytes > 0 ->
-                                    "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)} ($pctInt%)"
-                                else -> "$pctInt%"
+                                item.totalSegments > 0 -> "${item.segmentsDone}/${item.totalSegments} · $pctInt%"
+                                item.sizeBytes > 0     -> "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
+                                else                   -> "$pctInt%"
                             }
                             Text(progressLabel, color = White40, fontSize = 10.sp)
-                            // Network speed
                             if (item.networkSpeedBps > 0) {
                                 Text(formatSpeed(item.networkSpeedBps), color = Brand, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
                         }
-
-                        // Partial-play hint
                         if (canPlayPartial && pct >= 0.05f) {
-                            Spacer(Modifier.height(4.dp))
+                            Spacer(Modifier.height(6.dp))
                             Row(
-                                Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Brand.copy(.12f))
+                                Modifier.clip(RoundedCornerShape(8.dp))
+                                    .background(AmberGlass)
+                                    .border(1.dp, AmberBorder, RoundedCornerShape(8.dp))
                                     .clickable(onClick = onPlay)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
                             ) {
-                                Icon(Icons.Default.PlayCircle, null, tint = Brand, modifier = Modifier.size(12.dp))
-                                Text("Watch ${pctInt}% now", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(11.dp))
+                                Text("Watch $pctInt% now", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
 
-                    // Paused / Error → resume button
                     if (isPaused || isError) {
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(7.dp))
                         if (pct > 0f) {
-                            LinearProgressIndicator(
-                                progress = { pct },
-                                modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
-                                color = White40,
-                                trackColor = GlassMd,
-                            )
-                            Spacer(Modifier.height(4.dp))
+                            Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
+                                Box(Modifier.fillMaxWidth(animPct).fillMaxHeight().background(White40))
+                            }
+                            Spacer(Modifier.height(5.dp))
                         }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                if (isPaused) "Paused · will auto-resume" else "Failed",
-                                color = if (isPaused) White40 else Error,
-                                fontSize = 10.sp,
+                                if (isPaused) "Paused" else "Failed",
+                                color = if (isPaused) White40 else Error, fontSize = 10.sp,
                             )
                             Box(
-                                Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Brand.copy(.15f))
+                                Modifier.clip(RoundedCornerShape(8.dp)).background(AmberGlass)
+                                    .border(1.dp, AmberBorder, RoundedCornerShape(8.dp))
                                     .clickable(onClick = onResume)
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                            ) {
-                                Text("Resume", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                            }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) { Text("Resume", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
                         }
                     }
                 }
 
-                // Delete button
-                IconButton(onClick = { showDeleteDialog = true }) {
-                    Icon(Icons.Default.Delete, null, tint = White40, modifier = Modifier.size(20.dp))
+                // Delete
+                Box(
+                    Modifier.size(32.dp).clip(CircleShape).background(GlassMd)
+                        .border(1.dp, GlassBorderMd, CircleShape)
+                        .clickable { showDeleteDialog = true },
+                    Alignment.Center,
+                ) {
+                    Text("✕", color = White40, fontSize = 13.sp)
                 }
             }
         }
@@ -338,12 +338,11 @@ fun DownloadCard(
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             containerColor = BgCard,
-            title = { Text("Delete Download", color = White) },
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("Delete Download", color = White, fontWeight = FontWeight.Bold) },
             text  = { Text("Remove \"${item.title}\" from your downloads?", color = White60) },
             confirmButton = {
-                TextButton(onClick = { onDelete(); showDeleteDialog = false }) {
-                    Text("Delete", color = Error)
-                }
+                TextButton(onClick = { onDelete(); showDeleteDialog = false }) { Text("Delete", color = Error) }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel", color = White60) }
@@ -355,28 +354,35 @@ fun DownloadCard(
 @Composable
 fun StatusBadge(status: String) {
     val (color, label) = when (status) {
-        DownloadStatus.DONE.name        -> Brand to "Ready"
-        DownloadStatus.DOWNLOADING.name -> Gold to "Downloading"
+        DownloadStatus.DONE.name        -> Success to "Ready"
+        DownloadStatus.DOWNLOADING.name -> Brand to "Downloading"
         DownloadStatus.QUEUED.name      -> White60 to "Queued"
-        DownloadStatus.PAUSED.name      -> White60 to "Paused"
+        DownloadStatus.PAUSED.name      -> White40 to "Paused"
         DownloadStatus.ERROR.name       -> Error to "Failed"
         else                            -> White40 to status
     }
-    Box(
-        Modifier.clip(RoundedCornerShape(4.dp)).background(color.copy(.15f))
-            .border(1.dp, color.copy(.4f), RoundedCornerShape(4.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-    ) { Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
+    Row(
+        Modifier.clip(RoundedCornerShape(5.dp)).background(color.copy(.13f))
+            .border(1.dp, color.copy(.35f), RoundedCornerShape(5.dp))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (status == DownloadStatus.DONE.name) {
+            Box(Modifier.size(5.dp).clip(CircleShape).background(color))
+        }
+        Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+    }
 }
 
 @Composable
 fun QualityBadge(quality: String) {
     if (quality.isBlank()) return
     Box(
-        Modifier.clip(RoundedCornerShape(4.dp)).background(White.copy(.06f))
-            .border(1.dp, GlassBorder, RoundedCornerShape(4.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-    ) { Text(quality, color = White60, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
+        Modifier.clip(RoundedCornerShape(5.dp)).background(GlassSm)
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(5.dp))
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+    ) { Text(quality, color = White60, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
 }
 
 fun formatSize(bytes: Long): String = when {
