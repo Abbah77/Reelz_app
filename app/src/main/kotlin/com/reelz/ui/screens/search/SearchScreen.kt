@@ -101,7 +101,7 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                         Icon(IconSearch, null, tint = if (ui.query.isNotBlank()) Brand else White40, modifier = Modifier.size(20.dp))
                     },
                     trailingIcon = {
-                        AnimatedVisibility(ui.query.isNotBlank(), enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
+                        androidx.compose.animation.AnimatedVisibility(ui.query.isNotBlank(), enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
                             IconButton(onClick = vm::clear) {
                                 Box(
                                     Modifier.size(22.dp).clip(CircleShape).background(GlassMd),

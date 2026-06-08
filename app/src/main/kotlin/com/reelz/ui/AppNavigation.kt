@@ -10,6 +10,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -70,7 +72,7 @@ fun AppNavigation() {
     Scaffold(
         containerColor = Bg,
         bottomBar = {
-            AnimatedVisibility(
+            androidx.compose.animation.AnimatedVisibility(
                 visible = showBottomBar,
                 enter   = slideInVertically { it } + fadeIn(),
                 exit    = slideOutVertically { it } + fadeOut(),
@@ -169,7 +171,7 @@ fun ReelzBottomNav(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 // Active pill glow background
-                                AnimatedVisibility(
+                                androidx.compose.animation.AnimatedVisibility(
                                     visible = selected,
                                     enter = fadeIn(tween(200)) + scaleIn(tween(200), 0.5f),
                                     exit  = fadeOut(tween(150)),
@@ -187,7 +189,7 @@ fun ReelzBottomNav(
                                     )
                                 }
                                 Icon(
-                                    if (selected) tab.activeIcon else tab.icon,
+                                    imageVector = if (selected) tab.activeIcon else tab.icon,
                                     contentDescription = tab.label,
                                     tint = if (selected) Brand else White.copy(0.45f),
                                     modifier = Modifier.size(20.dp).scale(scale),
