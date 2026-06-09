@@ -156,6 +156,8 @@ class DetailViewModel @Inject constructor(
      * Used if available when user taps Play or Download.
      */
     internal var preResolvedStream: com.reelz.data.model.StreamResult? = null
+    /** Live prefetch state from the engine — exposed so the composable can read it on tap. */
+    val enginePrefetchState get() = engine.prefetchState
 
     /**
      * Pre-parsed quality list from the master playlist.
@@ -206,23 +208,32 @@ class DetailViewModel @Inject constructor(
                     }
                 }
 
-                // Stage 3 — pre-resolve stream AND pre-parse qualities in background
+                // Stage 3 — kick off prefetch via engine (fires the racing resolver in background).
+                // The engine exposes prefetchState: StateFlow so the player subscribes to it
+                // and starts playing the moment the result arrives — no duplicate network call.
+                engine.prefetch(viewModelScope, tmdbId, mediaType)
+
+                // Also subscribe here so we can populate preResolvedStream / preResolvedQualities
+                // for the download sheet (same result, zero extra work).
                 viewModelScope.launch {
-                    try {
-                        val stream = engine.resolve(tmdbId, mediaType)
-                        preResolvedStream = stream
-                        if (stream != null) {
-                            val qualities = when {
-                                stream.qualities.isNotEmpty() -> stream.qualities
-                                stream.isHls -> parseMasterPlaylist(
-                                    stream.url, stream.headers,
-                                    _ui.value.detail?.runtime,
-                                )
-                                else -> listOf(QualityTrack("Best available", stream.url))
-                            }
-                            preResolvedQualities[qualityKey(tmdbId)] = qualities
+                    engine.prefetchState
+                        .filter { it is com.reelz.scanner.PrefetchState.Ready }
+                        .take(1)
+                        .collect { state ->
+                            val stream = (state as com.reelz.scanner.PrefetchState.Ready).result
+                            preResolvedStream = stream
+                            try {
+                                val qualities = when {
+                                    stream.qualities.isNotEmpty() -> stream.qualities
+                                    stream.isHls -> parseMasterPlaylist(
+                                        stream.url, stream.headers,
+                                        _ui.value.detail?.runtime,
+                                    )
+                                    else -> listOf(QualityTrack("Best available", stream.url))
+                                }
+                                preResolvedQualities[qualityKey(tmdbId)] = qualities
+                            } catch (_: Exception) {}
                         }
-                    } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
                 _ui.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") }
@@ -417,6 +428,11 @@ fun DetailScreen(
 
     fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
         val d = ui.detail ?: return
+        // Check engine's live prefetchState first — handles the race where the
+        // subscriber coroutine has not updated preResolvedStream yet but the engine
+        // already finished. Either path avoids a second resolve() in the player.
+        val readyStream = vm.preResolvedStream
+            ?: (vm.enginePrefetchState.value as? com.reelz.scanner.PrefetchState.Ready)?.result
         ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
             putExtra("tmdbId",     d.tmdbId)
             putExtra("mediaType",  d.mediaType.name)
@@ -424,7 +440,7 @@ fun DetailScreen(
             putExtra("episode",    episode)
             putExtra("title",      if (epName.isNotBlank()) epName else d.title)
             putExtra("posterPath", d.posterPath)
-            vm.preResolvedStream?.let { stream ->
+            readyStream?.let { stream ->
                 putExtra("streamUrl",     stream.url)
                 putExtra("streamIsHls",   stream.isHls)
                 putExtra("streamReferer", stream.referer)

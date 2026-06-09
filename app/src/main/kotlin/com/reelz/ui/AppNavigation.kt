@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
@@ -22,9 +21,12 @@ import androidx.compose.ui.unit.*
 import androidx.navigation.*
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.*
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import com.reelz.data.model.MediaType
 import com.reelz.ui.components.*
 import com.reelz.ui.screens.browse.BrowseScreen
+import com.reelz.ui.screens.browse.BrowseViewModel
 import com.reelz.ui.screens.shorts.ShortsScreen
 import com.reelz.ui.screens.downloads.DownloadsScreen
 import com.reelz.ui.screens.transfer.TransferScreen
@@ -32,10 +34,13 @@ import com.reelz.ui.screens.profile.ProfileScreen
 import com.reelz.ui.screens.detail.DetailScreen
 import com.reelz.ui.screens.search.SearchScreen
 import com.reelz.ui.theme.*
+import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // ── Route definitions ─────────────────────────────────────────────────────────
 sealed class Route(val path: String) {
-    object Browse   : Route("home")      // renamed from "browse" → "home"
+    object Browse   : Route("home")
     object Shorts   : Route("shorts")
     object Downloads: Route("downloads")
     object Transfer : Route("transfer")
@@ -54,11 +59,11 @@ data class NavTab(
 )
 
 val navTabs = listOf(
-    NavTab(Route.Browse.path,    "Home",      IconHome,        IconHomeFilled),
-    NavTab(Route.Shorts.path,    "Shorts",    IconReel,        IconReelFilled),
+    NavTab(Route.Browse.path,    "Home",      IconHome,          IconHomeFilled),
+    NavTab(Route.Shorts.path,    "Shorts",    IconReel,          IconReelFilled),
     NavTab(Route.Downloads.path, "Downloads", IconDownloadCloud, IconDownloadCloud),
-    NavTab(Route.Transfer.path,  "Transfer",  IconSwap,        IconSwap),
-    NavTab(Route.Profile.path,   "Profile",   IconUser,        IconUserFilled),
+    NavTab(Route.Transfer.path,  "Transfer",  IconSwap,          IconSwap),
+    NavTab(Route.Profile.path,   "Profile",   IconUser,          IconUserFilled),
 )
 
 @Composable
@@ -70,6 +75,14 @@ fun AppNavigation() {
     val topLevelRoutes = navTabs.map { it.route }
     val showBottomBar = currentRoute in topLevelRoutes
 
+    // Shared across AppNavigation + BrowseScreen so the home button can control the list
+    val browseVm: BrowseViewModel = hiltViewModel()
+    val browseListState = rememberLazyListState()
+
+    // Home button state — drives TikTok-style spinner in bottom nav
+    var isHomeRefreshing by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
     Scaffold(
         containerColor = Bg,
         bottomBar = {
@@ -79,12 +92,40 @@ fun AppNavigation() {
                 exit    = slideOutVertically { it } + fadeOut(),
             ) {
                 ReelzBottomNav(
-                    currentRoute = currentRoute,
-                    onTabSelected = { route ->
-                        nav.navigate(route) {
-                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                            restoreState    = true
+                    currentRoute      = currentRoute,
+                    isHomeRefreshing  = isHomeRefreshing,
+                    onTabSelected     = { route ->
+                        if (route == Route.Browse.path && currentRoute == Route.Browse.path) {
+                            // Already on Home:
+                            //   • If scrolled down → scroll to top smoothly (no refresh yet)
+                            //   • If already at top → refresh (spinner shows)
+                            if (!isHomeRefreshing) {
+                                coroutineScope.launch {
+                                    val atTop = !browseListState.canScrollBackward &&
+                                                browseListState.firstVisibleItemIndex == 0
+                                    if (atTop) {
+                                        // Already at top — refresh
+                                        isHomeRefreshing = true
+                                        browseVm.load(forceRefresh = true)
+                                        delay(700)
+                                        isHomeRefreshing = false
+                                    } else {
+                                        // Scroll to top first, then a brief pause, then refresh
+                                        browseListState.animateScrollToItem(0)
+                                        delay(300)
+                                        isHomeRefreshing = true
+                                        browseVm.load(forceRefresh = true)
+                                        delay(700)
+                                        isHomeRefreshing = false
+                                    }
+                                }
+                            }
+                        } else {
+                            nav.navigate(route) {
+                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState    = true
+                            }
                         }
                     }
                 )
@@ -100,7 +141,8 @@ fun AppNavigation() {
             popEnterTransition  = { fadeIn(tween(280)) + scaleIn(tween(280), 0.97f) },
             popExitTransition   = { fadeOut(tween(200)) + scaleOut(tween(200), 0.96f) },
         ) {
-            composable(Route.Browse.path)    { BrowseScreen(nav) }
+            // Pass shared vm + listState so home button can control both
+            composable(Route.Browse.path)    { BrowseScreen(nav, browseVm, browseListState) }
             composable(Route.Shorts.path)    { ShortsScreen(nav) }
             composable(Route.Downloads.path) { DownloadsScreen(nav) }
             composable(Route.Transfer.path)  { TransferScreen() }
@@ -125,6 +167,7 @@ fun AppNavigation() {
 @Composable
 fun ReelzBottomNav(
     currentRoute: String?,
+    isHomeRefreshing: Boolean,
     onTabSelected: (String) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -133,7 +176,6 @@ fun ReelzBottomNav(
         modifier = Modifier
             .fillMaxWidth()
             .drawBehind {
-                // Top blue glow line
                 drawLine(
                     brush = Brush.horizontalGradient(
                         listOf(Color.Transparent, Brand.copy(.6f), Brand2.copy(.4f), Color.Transparent)
@@ -144,7 +186,6 @@ fun ReelzBottomNav(
                 )
             }
     ) {
-        // Liquid glass blur layer (simulated with layered translucent boxes)
         Box(
             Modifier
                 .fillMaxWidth()
@@ -156,17 +197,12 @@ fun ReelzBottomNav(
                     )
                 )
         )
-        // Frosted glass shimmer overlay
         Box(
             Modifier
                 .fillMaxWidth()
                 .background(
                     Brush.verticalGradient(
-                        listOf(
-                            Color(0x08FFFFFF),
-                            Color(0x04FFFFFF),
-                            Color(0x00FFFFFF),
-                        )
+                        listOf(Color(0x08FFFFFF), Color(0x04FFFFFF), Color(0x00FFFFFF))
                     )
                 )
         )
@@ -178,7 +214,11 @@ fun ReelzBottomNav(
         ) {
             navTabs.forEach { tab ->
                 val selected = currentRoute == tab.route
-                val scale     by animateFloatAsState(if (selected) 1.12f else 1f, spring(0.5f, 400f), label = "sc")
+                val scale by animateFloatAsState(if (selected) 1.12f else 1f, spring(0.5f, 400f), label = "sc")
+
+                // For the Home tab, show spinner while refreshing
+                val isHome = tab.route == Route.Browse.path
+                val showSpinner = isHome && isHomeRefreshing
 
                 NavigationBarItem(
                     selected = selected,
@@ -192,7 +232,7 @@ fun ReelzBottomNav(
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                // Active indicator: blue glow pill
+                                // Active pill glow
                                 androidx.compose.animation.AnimatedVisibility(
                                     visible = selected,
                                     enter = fadeIn(tween(200)) + scaleIn(tween(200), 0.5f),
@@ -214,20 +254,44 @@ fun ReelzBottomNav(
                                             )
                                     )
                                 }
-                                Icon(
-                                    imageVector = if (selected) tab.activeIcon else tab.icon,
-                                    contentDescription = tab.label,
-                                    tint = if (selected) Brand else White.copy(0.4f),
-                                    modifier = Modifier.size(21.dp).scale(scale),
-                                )
+
+                                // Home icon ↔ spinner crossfade
+                                if (isHome) {
+                                    Crossfade(
+                                        targetState = showSpinner,
+                                        animationSpec = tween(300),
+                                        label = "homeIconCrossfade",
+                                    ) { spinning ->
+                                        if (spinning) {
+                                            CinematicSpinner(
+                                                size  = 21.dp,
+                                                color = Brand,
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector  = if (selected) tab.activeIcon else tab.icon,
+                                                contentDescription = tab.label,
+                                                tint         = if (selected) Brand else White.copy(0.4f),
+                                                modifier     = Modifier.size(21.dp).scale(scale),
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    Icon(
+                                        imageVector  = if (selected) tab.activeIcon else tab.icon,
+                                        contentDescription = tab.label,
+                                        tint         = if (selected) Brand else White.copy(0.4f),
+                                        modifier     = Modifier.size(21.dp).scale(scale),
+                                    )
+                                }
                             }
                         }
                     },
                     label = {
                         Text(
                             tab.label,
-                            color    = if (selected) Brand else White40,
-                            fontSize = 10.sp,
+                            color      = if (selected) Brand else White40,
+                            fontSize   = 10.sp,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         )
                     },

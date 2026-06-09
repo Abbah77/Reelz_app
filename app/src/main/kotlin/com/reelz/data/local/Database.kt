@@ -109,10 +109,6 @@ interface DownloadDao {
     """)
     suspend fun markDone(id: String, status: String, path: String, at: Long)
 
-    /**
-     * When a download is paused (error or manual), mark resolveRequired = true
-     * so the next resume re-resolves the CDN URL (CDN tokens expire).
-     */
     @Query("""
         UPDATE downloads
         SET status = :status,
@@ -132,6 +128,46 @@ interface DownloadDao {
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: String)
+}
+
+// ── Download Subtitles ────────────────────────────────────────────────────────
+/**
+ * Manages PERSISTENT subtitles for downloaded videos.
+ * These are NEVER used for stream sessions — only for offline playback.
+ *
+ * Design contract:
+ * - INSERT when user downloads a subtitle for a downloaded video.
+ * - QUERY by downloadId to load available subs on offline playback.
+ * - TOGGLE isEnabled without deleting (user can switch off/on anytime).
+ * - DELETE only when the parent DownloadItem is deleted.
+ */
+@Dao
+interface DownloadSubtitleDao {
+    /** Get all subtitles for a specific download. */
+    @Query("SELECT * FROM download_subtitles WHERE downloadId = :downloadId ORDER BY addedAt ASC")
+    fun getForDownload(downloadId: String): Flow<List<DownloadSubtitle>>
+
+    /** Get subtitles by tmdbId + episode key (for playback lookup). */
+    @Query("""
+        SELECT * FROM download_subtitles
+        WHERE tmdbId = :tmdbId AND season = :season AND episode = :episode
+        ORDER BY addedAt ASC
+    """)
+    suspend fun getForContent(tmdbId: Int, season: Int, episode: Int): List<DownloadSubtitle>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(sub: DownloadSubtitle)
+
+    /** Toggle the enabled state without deleting — UX: user wants a quick off, not a delete. */
+    @Query("UPDATE download_subtitles SET isEnabled = :enabled WHERE id = :id")
+    suspend fun setEnabled(id: Long, enabled: Boolean)
+
+    /** Delete all subtitles when the parent download is removed. */
+    @Query("DELETE FROM download_subtitles WHERE downloadId = :downloadId")
+    suspend fun deleteForDownload(downloadId: String)
+
+    @Query("DELETE FROM download_subtitles WHERE id = :id")
+    suspend fun delete(id: Long)
 }
 
 // ── Transfer history ──────────────────────────────────────────────────────────
@@ -154,12 +190,33 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-// ── Migration v2 → v3: qualityTracksJson + resolveRequired ────────────────────
+// ── Migration v2 → v3 ─────────────────────────────────────────────────────────
 val MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE downloads ADD COLUMN qualityTracksJson TEXT NOT NULL DEFAULT '[]'")
-        // resolveRequired = 1 (true) for all existing rows — safest default
         db.execSQL("ALTER TABLE downloads ADD COLUMN resolveRequired INTEGER NOT NULL DEFAULT 1")
+    }
+}
+
+// ── Migration v3 → v4: persistent download subtitles ─────────────────────────
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS download_subtitles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                downloadId TEXT NOT NULL,
+                tmdbId INTEGER NOT NULL,
+                season INTEGER NOT NULL DEFAULT 0,
+                episode INTEGER NOT NULL DEFAULT 0,
+                language TEXT NOT NULL,
+                label TEXT NOT NULL,
+                localFilePath TEXT NOT NULL,
+                isEnabled INTEGER NOT NULL DEFAULT 1,
+                addedAt INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_dlsub_downloadId ON download_subtitles(downloadId)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_dlsub_content ON download_subtitles(tmdbId, season, episode)")
     }
 }
 
@@ -172,8 +229,9 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         CachedMedia::class,
         DownloadItem::class,
         TransferRecord::class,
+        DownloadSubtitle::class,
     ],
-    version = 3,          // bumped from 2 → 3
+    version = 4,
     exportSchema = false,
 )
 @TypeConverters(com.reelz.data.model.MediaConverters::class)
@@ -183,5 +241,6 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun likedDao(): LikedDao
     abstract fun cachedMediaDao(): CachedMediaDao
     abstract fun downloadDao(): DownloadDao
+    abstract fun downloadSubtitleDao(): DownloadSubtitleDao
     abstract fun transferDao(): TransferDao
 }

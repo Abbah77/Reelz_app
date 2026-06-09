@@ -116,6 +116,29 @@ data class QualityTrack(
     val estimatedSizeBytes: Long = 0,
 )
 
+// ── Persistent Download Subtitle ─────────────────────────────────────────────
+/**
+ * Subtitles that are PERMANENTLY attached to a downloaded video.
+ * They survive across sessions until the user explicitly deletes the video.
+ * Stream subtitles are NEVER stored here — they are session-only and discarded on quit.
+ */
+@Entity(tableName = "download_subtitles")
+data class DownloadSubtitle(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Links to DownloadItem.id */
+    val downloadId: String,
+    val tmdbId: Int,
+    val season: Int = 0,
+    val episode: Int = 0,
+    val language: String,
+    val label: String,
+    /** Local file path to the downloaded .srt/.vtt subtitle file */
+    val localFilePath: String,
+    /** Whether user has this subtitle enabled (toggle on/off without deleting) */
+    val isEnabled: Boolean = true,
+    val addedAt: Long = System.currentTimeMillis(),
+)
+
 // ── Room entities ─────────────────────────────────────────────────────────────
 @Entity(tableName = "watchlist")
 data class WatchlistItem(
@@ -185,36 +208,12 @@ data class DownloadItem(
     val headers: String = "{}",  // JSON map
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
-
-    // ── Download tracking ──────────────────────────────────────────────
-    /** Bytes/sec, updated every second during active download */
     val networkSpeedBps: Long = 0,
-    /** For HLS: how many .ts segments have been saved to disk */
     val segmentsDone: Int = 0,
-    /** For HLS: total segment count in the playlist */
     val totalSegments: Int = 0,
-    /**
-     * For HLS partial-play: path to the temporary segment directory.
-     * Kept until download is DONE (then segments are merged and dir deleted).
-     */
     val segmentDir: String = "",
-    /**
-     * Local .m3u8 playlist path that points at already-downloaded segments.
-     * ExoPlayer can open this for offline partial-playback.
-     */
     val localPlaylistPath: String = "",
-
-    // ── NEW in v3 ──────────────────────────────────────────────────────
-    /**
-     * JSON-serialised List<QualityTrack>. Stored so resume can pick
-     * the correct variant URL without re-parsing the master playlist.
-     */
     val qualityTracksJson: String = "[]",
-    /**
-     * When true, the service MUST call engine.resolve() to get a fresh
-     * CDN URL before downloading/resuming. The stored streamUrl has expired.
-     * Set to true whenever status transitions to PAUSED.
-     */
     val resolveRequired: Boolean = true,
 )
 

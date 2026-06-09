@@ -3,9 +3,9 @@ package com.reelz.ui.screens.browse
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.pager.*
 import androidx.compose.foundation.shape.*
@@ -17,9 +17,13 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
@@ -41,6 +45,7 @@ import javax.inject.Inject
 import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
 
@@ -68,7 +73,7 @@ class BrowseViewModel @Inject constructor(
         val hasMoreGenrePages: Boolean = true,
         val continueWatching: List<WatchHistory> = emptyList(),
         val isLoadingMore: Boolean = false,
-        val isCacheLoaded: Boolean = false,   // true once cache was shown
+        val isCacheLoaded: Boolean = false,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -80,7 +85,6 @@ class BrowseViewModel @Inject constructor(
     private var categorySectionsEmitted = false
 
     init {
-        // 1. Load cache instantly (forceRefresh=false)
         load(forceRefresh = false)
         viewModelScope.launch {
             repo.getHistory().collect { h ->
@@ -92,7 +96,6 @@ class BrowseViewModel @Inject constructor(
     fun load(forceRefresh: Boolean = true) {
         viewModelScope.launch {
             if (forceRefresh) {
-                // Pull-to-refresh: show subtle "refreshing" state, keep old content visible
                 _ui.update { it.copy(isRefreshing = true, error = null) }
             } else {
                 _ui.update { it.copy(isLoading = true, error = null) }
@@ -174,10 +177,10 @@ class BrowseViewModel @Inject constructor(
                 val nextPage = st.genrePage + 1
                 val items = repo.discoverMovies(st.selectedGenreId, page = nextPage)
                 _ui.update { it.copy(
-                    genreItems       = it.genreItems + items,
-                    genrePage        = nextPage,
+                    genreItems        = it.genreItems + items,
+                    genrePage         = nextPage,
                     hasMoreGenrePages = items.isNotEmpty(),
-                    isGenreLoading   = false,
+                    isGenreLoading    = false,
                 ) }
             } catch (_: Exception) { _ui.update { it.copy(isGenreLoading = false) } }
         }
@@ -185,21 +188,101 @@ class BrowseViewModel @Inject constructor(
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
+//
+//  Architecture choices made here:
+//  1. Collapsing app bar – floated over content via Box overlay, driven by
+//     NestedScrollConnection reading dy from the LazyColumn.
+//  2. Pull-to-refresh – handled through the same NestedScrollConnection
+//     so it cooperates with LazyColumn (fixes the old pointerInput conflict).
+//  3. Genre chips – remain inside the LazyColumn so they scroll naturally
+//     under the collapsing bar (correct for collapsing appbar mode).
+//  4. TikTok Home button – lives in AppNavigation, talks to shared VM.
+
 @Composable
-fun BrowseScreen(nav: NavController, vm: BrowseViewModel = hiltViewModel()) {
+fun BrowseScreen(
+    nav: NavController,
+    vm: BrowseViewModel = hiltViewModel(),
+    listState: LazyListState = rememberLazyListState(),
+) {
     val ui by vm.ui.collectAsState()
-    val listState = rememberLazyListState()
+    val density = LocalDensity.current
 
-    // Pull-to-refresh drag state
-    var pullOffset by remember { mutableStateOf(0f) }
-    val pullThreshold = 80f
-    val isPulling = pullOffset > 0f
-    val pullProgress = (pullOffset / pullThreshold).coerceIn(0f, 1f)
-    val pullScale by animateFloatAsState(if (pullProgress > 0.9f) 1.2f else 1f, spring(0.4f, 600f), label = "ps")
+    // ── Collapsing app-bar measurements ──────────────────────────────────────
+    // We measure the bar height on first layout so we know how far to collapse.
+    var appBarHeightPx by remember { mutableStateOf(0f) }
+    // How much the bar has been collapsed (0 = fully expanded, appBarHeightPx = fully hidden)
+    var collapseOffsetPx by remember { mutableStateOf(0f) }
+    val collapseProgress = if (appBarHeightPx > 0f)
+        (collapseOffsetPx / appBarHeightPx).coerceIn(0f, 1f)
+    else 0f
 
-    fun goDetail(id: Int, type: MediaType) = nav.navigate(Route.Detail.go(id, type))
+    // ── Pull-to-refresh state (managed in NestedScrollConnection) ────────────
+    // Positive when user overscrolls upward at the top
+    var pullOverscrollPx by remember { mutableStateOf(0f) }
+    val pullThresholdPx = with(density) { 72.dp.toPx() }
+    val pullProgress = (pullOverscrollPx / pullThresholdPx).coerceIn(0f, 1f)
+    val pullIndicatorScale by animateFloatAsState(
+        if (pullProgress > 0.85f) 1.15f else 0.85f + 0.15f * pullProgress,
+        spring(dampingRatio = 0.5f, stiffness = 400f), label = "pullScale"
+    )
 
-    // Infinite scroll trigger
+    // ── NestedScrollConnection ────────────────────────────────────────────────
+    //  KEY BEHAVIOUR:
+    //  • onPreScroll  UP   → snap bar open immediately (even 1px up restores bar)
+    //  • onPostScroll DOWN → collapse bar AFTER content scrolled (moves together)
+    //  • onPostScroll UP at top → accumulate pull-to-refresh overscroll
+    val nestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val dy = available.y
+                // Upward finger → snap bar back open, do NOT consume so content scrolls too
+                if (dy > 0 && collapseOffsetPx > 0f) {
+                    val expand = minOf(dy, collapseOffsetPx)
+                    collapseOffsetPx = (collapseOffsetPx - expand).coerceIn(0f, appBarHeightPx)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                // Content scrolled DOWN → collapse bar by same amount (moves with content)
+                if (consumed.y < 0) {
+                    collapseOffsetPx = (collapseOffsetPx - consumed.y).coerceIn(0f, appBarHeightPx)
+                }
+                // Pull-to-refresh: overscroll when fully expanded + at top
+                val leftover = available.y
+                if (leftover > 0 && !listState.canScrollBackward && collapseOffsetPx == 0f) {
+                    pullOverscrollPx = (pullOverscrollPx + leftover * 0.5f)
+                        .coerceIn(0f, pullThresholdPx * 1.6f)
+                    return Offset(0f, leftover)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (pullOverscrollPx >= pullThresholdPx) {
+                    vm.load(forceRefresh = true)
+                }
+                pullOverscrollPx = 0f
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                pullOverscrollPx = 0f
+                return Velocity.Zero
+            }
+        }
+    }
+
+    // Reset overscroll when refreshing completes
+    LaunchedEffect(ui.isRefreshing) {
+        if (!ui.isRefreshing) pullOverscrollPx = 0f
+    }
+
+    // ── Infinite scroll trigger ───────────────────────────────────────────────
     LaunchedEffect(listState) {
         snapshotFlow {
             val layout = listState.layoutInfo
@@ -212,56 +295,46 @@ fun BrowseScreen(nav: NavController, vm: BrowseViewModel = hiltViewModel()) {
         }
     }
 
+    fun goDetail(id: Int, type: MediaType) = nav.navigate(Route.Detail.go(id, type))
+
+    // ── Root Box: content + floating overlay elements ─────────────────────────
     Box(
         Modifier
             .fillMaxSize()
             .background(Bg)
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onDragStart = { pullOffset = 0f },
-                    onDragEnd = {
-                        if (pullOffset >= pullThreshold) vm.load(forceRefresh = true)
-                        pullOffset = 0f
-                    },
-                    onDragCancel = { pullOffset = 0f },
-                    onVerticalDrag = { _, dragAmount ->
-                        val atTop = !listState.canScrollBackward
-                        if (atTop && dragAmount > 0) {
-                            pullOffset = (pullOffset + dragAmount * 0.5f).coerceAtMost(pullThreshold * 1.5f)
-                        } else {
-                            pullOffset = 0f
-                        }
-                    }
-                )
-            }
+            .nestedScroll(nestedScrollConnection)
     ) {
+
+        // ── Scrollable content ──────────────────────────────────────────────
         LazyColumn(
             state  = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 100.dp),
+            // Top padding = full appbar height so first item clears the bar when expanded
+            contentPadding = PaddingValues(
+                top    = with(density) { appBarHeightPx.toDp() } + 4.dp,
+                bottom = 100.dp,
+            ),
         ) {
-            // ── Glass App Bar ────────────────────────────────────────────────
-            item(key = "appbar") {
-                GlassAppBar(
-                    onSearchClick = { nav.navigate(Route.Search.path) }
-                )
-            }
-
             when {
-                // Initial skeleton loading — show instantly from cache
                 ui.isLoading && !ui.isCacheLoaded -> {
                     item(key = "skeletonBanner") { SkeletonBannerLoader() }
                     item(key = "skeletonRow1") {
                         Column {
-                            Box(Modifier.width(180.dp).height(20.dp).padding(start=16.dp, top=28.dp, bottom=12.dp)
-                                .clip(RoundedCornerShape(4.dp)).background(BgSurface))
+                            Box(
+                                Modifier.width(180.dp).height(20.dp)
+                                    .padding(start = 16.dp, top = 28.dp, bottom = 12.dp)
+                                    .clip(RoundedCornerShape(4.dp)).background(BgSurface)
+                            )
                             SkeletonRowLoader()
                         }
                     }
                     item(key = "skeletonRow2") {
                         Column {
-                            Box(Modifier.width(140.dp).height(20.dp).padding(start=16.dp, top=28.dp, bottom=12.dp)
-                                .clip(RoundedCornerShape(4.dp)).background(BgSurface))
+                            Box(
+                                Modifier.width(140.dp).height(20.dp)
+                                    .padding(start = 16.dp, top = 28.dp, bottom = 12.dp)
+                                    .clip(RoundedCornerShape(4.dp)).background(BgSurface)
+                            )
                             SkeletonRowLoader()
                         }
                     }
@@ -272,7 +345,7 @@ fun BrowseScreen(nav: NavController, vm: BrowseViewModel = hiltViewModel()) {
                 }
 
                 else -> {
-                    // ── Hero pager ──────────────────────────────────────────
+                    // ── Hero pager ────────────────────────────────────────────
                     if (ui.featured.isNotEmpty()) {
                         item(key = "hero") {
                             HeroBannerPager(ui.featured, onClick = { goDetail(it.tmdbId, it.mediaType) })
@@ -281,21 +354,21 @@ fun BrowseScreen(nav: NavController, vm: BrowseViewModel = hiltViewModel()) {
                         item(key = "heroBannerSkeleton") { SkeletonBannerLoader() }
                     }
 
-                    // ── TOP Genre chips (premium horizontal bar) ───────────
+                    // ── Genre chips (flow under collapsing bar) ───────────────
                     if (ui.genres.isNotEmpty()) {
                         item(key = "genreBar") {
                             PremiumGenreBar(
-                                genres = ui.genres,
+                                genres     = ui.genres,
                                 selectedId = ui.selectedGenreId,
-                                onSelect = { vm.selectGenre(it) }
+                                onSelect   = { vm.selectGenre(it) },
                             )
                         }
                     }
 
-                    // ── Genre mode: paginated grid ─────────────────────────
+                    // ── Genre grid mode ───────────────────────────────────────
                     if (ui.selectedGenreId != null) {
                         if (ui.genreItems.isEmpty() && ui.isGenreLoading) {
-                            item(key="genreSkeletonRow") { SkeletonRowLoader() }
+                            item(key = "genreSkeletonRow") { SkeletonRowLoader() }
                         } else {
                             val chunks = ui.genreItems.chunked(18)
                             chunks.forEachIndexed { idx, chunk ->
@@ -319,14 +392,14 @@ fun BrowseScreen(nav: NavController, vm: BrowseViewModel = hiltViewModel()) {
                                 }
                             }
                             if (ui.isGenreLoading) {
-                                item(key="genreLoadMore") { LoadMoreSkeleton() }
+                                item(key = "genreLoadMore") { LoadMoreSkeleton() }
                             }
                         }
                     } else {
-                        // ── Default feed ───────────────────────────────────
+                        // ── Default feed ──────────────────────────────────────
                         if (ui.continueWatching.isNotEmpty()) {
-                            item(key="cwHeader") { SectionHeader("Continue Watching", "See All") }
-                            item(key="cwRow") {
+                            item(key = "cwHeader") { SectionHeader("Continue Watching", "See All") }
+                            item(key = "cwRow") {
                                 LazyRow(
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -376,139 +449,189 @@ fun BrowseScreen(nav: NavController, vm: BrowseViewModel = hiltViewModel()) {
                         }
 
                         if (ui.isLoadingMore) {
-                            item(key="loadMoreSkeleton") { LoadMoreSkeleton() }
+                            item(key = "loadMoreSkeleton") { LoadMoreSkeleton() }
                         }
                     }
 
-                    item(key="adBanner") { AdBannerPlaceholder(Modifier.padding(vertical = 10.dp)) }
+                    item(key = "adBanner") { AdBannerPlaceholder(Modifier.padding(vertical = 10.dp)) }
                 }
             }
         }
 
-        // ── Pull-to-refresh indicator ────────────────────────────────────────
+        // ── Collapsing glass app bar (floats over content) ───────────────────
+        CollapsingGlassAppBar(
+            collapseProgress = collapseProgress,
+            onSearchClick    = { nav.navigate(Route.Search.path) },
+            modifier         = Modifier
+                .align(Alignment.TopCenter)
+                .onGloballyPositioned { coords ->
+                    if (appBarHeightPx == 0f) appBarHeightPx = coords.size.height.toFloat()
+                }
+                .graphicsLayer {
+                    // Translate upward as bar collapses
+                    translationY = -collapseOffsetPx
+                },
+        )
+
+        // ── Pull-to-refresh indicator ─────────────────────────────────────────
+        val showPullIndicator = pullOverscrollPx > 4f || ui.isRefreshing
         AnimatedVisibility(
-            visible = isPulling || ui.isRefreshing,
-            enter = fadeIn() + scaleIn(initialScale = 0.7f),
-            exit  = fadeOut() + scaleOut(targetScale = 0.7f),
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp),
+            visible  = showPullIndicator,
+            enter    = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.6f),
+            exit     = fadeOut(tween(200)) + scaleOut(tween(200), targetScale = 0.6f),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = with(density) { appBarHeightPx.toDp() } + 8.dp),
         ) {
             Box(
                 Modifier
-                    .size(40.dp)
-                    .scale(if (ui.isRefreshing) 1f else pullScale)
+                    .size(44.dp)
+                    .scale(if (ui.isRefreshing) 1f else pullIndicatorScale)
                     .clip(CircleShape)
-                    .background(Brush.radialGradient(listOf(BrandDeep, Bg)))
-                    .border(1.dp, BlueBorder, CircleShape),
+                    .background(
+                        Brush.radialGradient(listOf(BrandDeep.copy(0.95f), Bg.copy(0.85f)))
+                    )
+                    .border(
+                        width = 1.dp,
+                        brush = Brush.linearGradient(listOf(Brand.copy(0.8f), Brand2.copy(0.5f))),
+                        shape = CircleShape,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 if (ui.isRefreshing) {
-                    CinematicSpinner(size = 22.dp)
+                    CinematicSpinner(size = 22.dp, color = Brand)
                 } else {
-                    // Arrow icon drawn manually
-                    Text("↓", color = Brand, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    // Animated arrow that rotates as pull progresses
+                    val arrowRotation by animateFloatAsState(
+                        if (pullProgress > 0.9f) 180f else pullProgress * 160f,
+                        tween(100), label = "arrowRot"
+                    )
+                    Text(
+                        "↓",
+                        color      = Brand,
+                        fontSize   = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier   = Modifier.graphicsLayer { rotationZ = arrowRotation },
+                    )
                 }
             }
         }
     }
 }
 
-// ── Glass App Bar ─────────────────────────────────────────────────────────────
+// ── Collapsing Glass App Bar ───────────────────────────────────────────────────
+//
+//  collapseProgress = 0  →  fully expanded (logo + search bar visible)
+//  collapseProgress = 1  →  fully collapsed (only status bar remains, bar hidden)
+//
 @Composable
-fun GlassAppBar(onSearchClick: () -> Unit) {
+fun CollapsingGlassAppBar(
+    collapseProgress: Float,
+    onSearchClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Elements fade / scale based on collapse
+    val contentAlpha    = (1f - collapseProgress * 1.8f).coerceIn(0f, 1f)
+    val barAlpha        = (0.82f + 0.18f * (1f - collapseProgress)).coerceIn(0f, 1f)
+
     Box(
-        Modifier
+        modifier = modifier
             .fillMaxWidth()
             .drawBehind {
-                // Bottom separator
+                // Bottom separator line fades as bar collapses
                 drawLine(
-                    brush = Brush.horizontalGradient(listOf(Color.Transparent, Brand.copy(.3f), Color.Transparent)),
+                    brush = Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Brand.copy(.35f * (1f - collapseProgress)),
+                            Color.Transparent,
+                        )
+                    ),
                     start = Offset(0f, size.height),
                     end   = Offset(size.width, size.height),
                     strokeWidth = 0.8f,
                 )
             }
+            .graphicsLayer { alpha = barAlpha }
     ) {
-        // Layered glass effect
-        Box(Modifier.matchParentSize().background(
-            Brush.verticalGradient(listOf(Color(0xC8050510), Color(0x88050510), Color(0x00050510)))
-        ))
-        Box(Modifier.matchParentSize().background(Color(0x07FFFFFF)))
+        // Layered glass background
+        Box(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(
+                    listOf(Color(0xCC050510), Color(0x88050510), Color(0x00050510))
+                )
+            )
+        )
+        Box(Modifier.matchParentSize().background(Color(0x09FFFFFF)))
 
-        Column(Modifier.fillMaxWidth().statusBarsPadding()) {
-            // Logo + icons row
+        // Bar content
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .graphicsLayer { alpha = contentAlpha }
+        ) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                // Reelz logo with electric blue gradient
-                val inf = rememberInfiniteTransition(label = "logoShimmer")
-                val shimX by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(3000, easing = LinearEasing)), "lx")
+                // Shimmer logo
+                val inf   = rememberInfiniteTransition(label = "logoShimmer")
+                val shimX by inf.animateFloat(
+                    0f, 1f,
+                    infiniteRepeatable(tween(3000, easing = LinearEasing)),
+                    "lx",
+                )
                 Text(
                     "REELZ",
                     style = MaterialTheme.typography.headlineMedium.copy(
                         brush = Brush.linearGradient(
                             colorStops = arrayOf(
-                                0f to Brand2,
+                                0f    to Brand2,
                                 shimX to Color(0xFFB3D9FF),
-                                1f to Brand,
+                                1f    to Brand,
                             )
                         ),
-                        fontWeight = FontWeight.Black,
-                        fontSize = 26.sp,
+                        fontWeight   = FontWeight.Black,
+                        fontSize     = 24.sp,
                         letterSpacing = 4.sp,
                     ),
                 )
-                Spacer(Modifier.weight(1f))
-                // Notification bell placeholder
+
+                // Search bar
                 Box(
                     Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(GlassSm)
-                        .border(1.dp, GlassBorderMd, CircleShape),
-                    contentAlignment = Alignment.Center,
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Brush.linearGradient(listOf(Color(0x18FFFFFF), Color(0x0AFFFFFF))))
+                        .border(
+                            1.dp,
+                            Brush.horizontalGradient(
+                                listOf(Brand.copy(.4f), GlassBorderMd, Brand.copy(.2f))
+                            ),
+                            RoundedCornerShape(12.dp),
+                        )
+                        .clickable { onSearchClick() }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                 ) {
-                    Text("🔔", fontSize = 16.sp)
-                }
-            }
-
-            // ── Horizontal search bar (like MovieBox) ─────────────────────
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 14.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        Brush.linearGradient(listOf(Color(0x18FFFFFF), Color(0x0AFFFFFF)))
-                    )
-                    .border(
-                        1.dp,
-                        Brush.horizontalGradient(listOf(Brand.copy(.4f), GlassBorderMd, Brand.copy(.2f))),
-                        RoundedCornerShape(14.dp)
-                    )
-                    .clickable { onSearchClick() }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(IconSearch, null, tint = Brand.copy(.8f), modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        "Search movies, series, actors…",
-                        color = White40,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Normal,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    // Filter hint badge
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(BlueGlass)
-                            .border(1.dp, BlueBorder, RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                    ) {
-                        Text("Filter", color = Brand, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(IconSearch, null, tint = Brand.copy(.7f), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Search movies, series…", color = White40, fontSize = 13.sp)
+                        Spacer(Modifier.weight(1f))
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(BlueGlass)
+                                .border(1.dp, BlueBorder, RoundedCornerShape(6.dp))
+                                .padding(horizontal = 7.dp, vertical = 3.dp),
+                        ) {
+                            Text("Filter", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
@@ -516,7 +639,7 @@ fun GlassAppBar(onSearchClick: () -> Unit) {
     }
 }
 
-// ── Premium genre bar (visually distinct from the one below the banner) ────────
+// ── Premium genre bar (flows in scroll content under the collapsing bar) ───────
 @Composable
 fun PremiumGenreBar(
     genres: List<Genre>,
@@ -524,27 +647,30 @@ fun PremiumGenreBar(
     onSelect: (Int?) -> Unit,
 ) {
     Column {
-        // Section divider label
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.width(3.dp).height(14.dp).clip(RoundedCornerShape(2.dp))
-                .background(Brush.verticalGradient(listOf(Brand2, Brand))))
+            Box(
+                Modifier.width(3.dp).height(14.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Brush.verticalGradient(listOf(Brand2, Brand)))
+            )
             Spacer(Modifier.width(8.dp))
-            Text("Browse by Genre", color = White60, fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+            Text(
+                "Browse by Genre",
+                color      = White60,
+                fontSize   = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.5.sp,
+            )
         }
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item {
-                PremiumGenrePill("✦ All", selectedId == null) { onSelect(null) }
-            }
-            items(genres) { g ->
-                PremiumGenrePill(g.name, selectedId == g.id) { onSelect(g.id) }
-            }
+            item { PremiumGenrePill("✦ All", selectedId == null) { onSelect(null) } }
+            items(genres) { g -> PremiumGenrePill(g.name, selectedId == g.id) { onSelect(g.id) } }
         }
     }
 }
@@ -552,12 +678,10 @@ fun PremiumGenreBar(
 @Composable
 fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
     val animBorder by animateColorAsState(
-        if (selected) Brand else GlassBorder,
-        tween(200), label = "pillBorder"
+        if (selected) Brand else GlassBorder, tween(200), label = "pillBorder"
     )
     val scale by animateFloatAsState(
-        if (selected) 1.04f else 1f,
-        spring(0.5f, 400f), label = "pillScale"
+        if (selected) 1.04f else 1f, spring(0.5f, 400f), label = "pillScale"
     )
     Box(
         Modifier
@@ -582,15 +706,13 @@ fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-// ── Load more skeleton (replaces spinner) ─────────────────────────────────────
+// ── Load more skeleton ─────────────────────────────────────────────────────────
 @Composable
 fun LoadMoreSkeleton() {
-    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-        SkeletonRowLoader()
-    }
+    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp)) { SkeletonRowLoader() }
 }
 
-// ── Hero banner pager — glass redesign ───────────────────────────────────────
+// ── Hero banner pager ──────────────────────────────────────────────────────────
 @Composable
 fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
     val pagerState = rememberPagerState { items.size }
@@ -611,13 +733,14 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
 
     Box(Modifier.fillMaxWidth()) {
         HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
-            val media = items[page]
-            val pageOffset = (pagerState.currentPage - page + pagerState.currentPageOffsetFraction).coerceIn(-1f, 1f)
+            val media      = items[page]
+            val pageOffset = (pagerState.currentPage - page + pagerState.currentPageOffsetFraction)
+                .coerceIn(-1f, 1f)
 
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(screenH * 0.6f)
+                    .height(screenH * 0.48f)
                     .clickable { onClick(media) }
                     .graphicsLayer {
                         alpha  = 1f - 0.12f * abs(pageOffset)
@@ -626,18 +749,17 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
                     }
             ) {
                 AsyncImage(
-                    model = BuildConfig.TMDB_IMG_ORIGINAL + media.backdropPath,
+                    model            = BuildConfig.TMDB_IMG_ORIGINAL + media.backdropPath,
                     contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
+                    contentScale     = ContentScale.Crop,
+                    modifier         = Modifier.fillMaxSize(),
                 )
-                // Multi-layer gradient overlay for glass depth
                 Box(Modifier.fillMaxSize().background(
                     Brush.verticalGradient(
-                        0f   to Color(0x10000000),
-                        0.3f to Color(0x00000000),
+                        0f    to Color(0x10000000),
+                        0.3f  to Color(0x00000000),
                         0.65f to Color(0x99000000),
-                        1f   to Bg,
+                        1f    to Bg,
                     )
                 ))
                 Box(Modifier.fillMaxSize().background(
@@ -645,16 +767,11 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
                         listOf(Bg.copy(.35f), Color.Transparent, Color.Transparent, Bg.copy(.25f))
                     )
                 ))
-                // Blue vignette edge tint
                 Box(Modifier.fillMaxSize().background(
-                    Brush.radialGradient(
-                        listOf(Color.Transparent, Brand.copy(0.04f)),
-                        radius = 900f,
-                    )
+                    Brush.radialGradient(listOf(Color.Transparent, Brand.copy(0.04f)), radius = 900f)
                 ))
 
                 Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-                    // Glass badge
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
@@ -667,15 +784,14 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
                         PulsingDot(Modifier.size(5.dp))
                         Text("FEATURED", color = Brand, fontSize = 9.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
                     }
-
                     Spacer(Modifier.height(10.dp))
                     Text(
                         media.title,
-                        color = White,
+                        color      = White,
                         fontWeight = FontWeight.Black,
-                        fontSize = 28.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        fontSize   = 28.sp,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis,
                         letterSpacing = (-0.5).sp,
                         lineHeight = 34.sp,
                     )
@@ -696,14 +812,18 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         media.overview,
-                        color = White60,
+                        color    = White60,
                         fontSize = 13.sp,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         lineHeight = 20.sp,
                     )
                     Spacer(Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         BrandButton(
                             text  = "Watch Now",
                             onClick = { onClick(media) },
@@ -715,7 +835,6 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
             }
         }
 
-        // Dot indicators — glass style
         Row(
             Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -727,8 +846,7 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(3.dp))
-                        .width(width)
-                        .height(5.dp)
+                        .width(width).height(5.dp)
                         .background(
                             if (selected)
                                 Brush.horizontalGradient(listOf(Brand2, Brand))
@@ -741,7 +859,7 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
     }
 }
 
-// ── Continue watching card ────────────────────────────────────────────────────
+// ── Continue watching card ─────────────────────────────────────────────────────
 @Composable
 fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
     val progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
@@ -754,15 +872,14 @@ fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
                 .background(BgRaised)
         ) {
             AsyncImage(
-                model = BuildConfig.TMDB_IMG_W342 + h.posterPath,
+                model            = BuildConfig.TMDB_IMG_W342 + h.posterPath,
                 contentDescription = h.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
+                contentScale     = ContentScale.Crop,
+                modifier         = Modifier.fillMaxSize(),
             )
             Box(Modifier.fillMaxSize().background(Color(0x55000000)), Alignment.Center) {
                 Box(
-                    Modifier
-                        .size(40.dp).clip(CircleShape)
+                    Modifier.size(40.dp).clip(CircleShape)
                         .background(Color(0x99000000))
                         .border(1.dp, White.copy(.3f), CircleShape),
                     contentAlignment = Alignment.Center,
@@ -773,8 +890,7 @@ fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
             Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(White20))
             Box(
                 Modifier.align(Alignment.BottomStart)
-                    .fillMaxWidth(progress)
-                    .height(3.dp)
+                    .fillMaxWidth(progress).height(3.dp)
                     .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
             )
         }

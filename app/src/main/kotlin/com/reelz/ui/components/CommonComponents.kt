@@ -3,10 +3,8 @@ package com.reelz.ui.components
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.awaitPointerEventScope
-import androidx.compose.ui.input.pointer.awaitPointerEvent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material3.*
@@ -315,6 +313,7 @@ fun GhostButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     small: Boolean = false,
+    icon: @Composable (() -> Unit)? = null,
 ) {
     Box(
         modifier = modifier
@@ -328,12 +327,16 @@ fun GhostButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text,
-            color      = White80,
-            fontWeight = FontWeight.SemiBold,
-            fontSize   = if (small) 12.sp else 14.sp,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            icon?.invoke()
+            if (icon != null) Spacer(Modifier.width(7.dp))
+            Text(
+                text,
+                color      = White80,
+                fontWeight = FontWeight.SemiBold,
+                fontSize   = if (small) 12.sp else 14.sp,
+            )
+        }
     }
 }
 
@@ -375,17 +378,15 @@ fun MediaPosterCard(
                 cameraDistance = 8f * density
             }
             .clip(RoundedCornerShape(14.dp))
-            .clickable(
-                onClick = onClick,
-                onClickLabel = media.title,
-            )
             .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        pressed = event.changes.any { it.pressed }
-                    }
-                }
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onTap = { onClick() }
+                )
             }
     ) {
         Box(
@@ -458,12 +459,15 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
                 cameraDistance = 8f * density
             }
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
             .pointerInput(Unit) {
-                awaitEachGesture {
-                    awaitPointerEvent(); pressed = true
-                    try { awaitPointerEvent(); } finally { pressed = false }
-                }
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onTap = { onClick() }
+                )
             }
     ) {
         Box(
@@ -624,7 +628,7 @@ fun FullScreenLoader() {
 }
 
 @Composable
-fun CinematicSpinner(size: Dp = 44.dp, modifier: Modifier = Modifier) {
+fun CinematicSpinner(size: Dp = 44.dp, modifier: Modifier = Modifier, color: Color = Brand) {
     val inf = rememberInfiniteTransition(label = "spinner")
     val angle1 by inf.animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing)), "a1")
     val angle2 by inf.animateFloat(360f, 0f, infiniteRepeatable(tween(900, easing = LinearEasing)), "a2")
@@ -638,7 +642,7 @@ fun CinematicSpinner(size: Dp = 44.dp, modifier: Modifier = Modifier) {
         val stroke2 = Stroke(width = r1 * 0.06f, cap = StrokeCap.Round)
 
         drawArc(
-            brush = Brush.sweepGradient(listOf(Brand, Brand2, Color.Transparent)),
+            brush = Brush.sweepGradient(listOf(color, color.copy(0.5f), Color.Transparent)),
             startAngle = angle1, sweepAngle = 240f, useCenter = false, style = stroke1,
             topLeft = Offset(cx - r1 + stroke1.width / 2, cy - r1 + stroke1.width / 2),
             size = androidx.compose.ui.geometry.Size((r1 - stroke1.width / 2) * 2, (r1 - stroke1.width / 2) * 2),
@@ -649,7 +653,7 @@ fun CinematicSpinner(size: Dp = 44.dp, modifier: Modifier = Modifier) {
             topLeft = Offset(cx - r2 + stroke2.width / 2, cy - r2 + stroke2.width / 2),
             size = androidx.compose.ui.geometry.Size((r2 - stroke2.width / 2) * 2, (r2 - stroke2.width / 2) * 2),
         )
-        drawCircle(color = Brand.copy(alpha = pulse), radius = r1 * 0.1f, center = Offset(cx, cy))
+        drawCircle(color = color.copy(alpha = pulse), radius = r1 * 0.1f, center = Offset(cx, cy))
     }
 }
 

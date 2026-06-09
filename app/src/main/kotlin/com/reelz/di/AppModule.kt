@@ -30,9 +30,6 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object AppModule {
 
-    /**
-     * Appends the TMDB API key to every request to api.themoviedb.org.
-     */
     private val tmdbAuthInterceptor = Interceptor { chain ->
         val original = chain.request()
         val url = original.url.newBuilder()
@@ -41,10 +38,6 @@ object AppModule {
         chain.proceed(original.newBuilder().url(url).build())
     }
 
-    /**
-     * Primary singleton OkHttpClient for TMDB API (Retrofit).
-     * Named "tmdb" to distinguish from the download client.
-     */
     @Provides @Singleton @Named("tmdb")
     fun provideTmdbOkHttp(): OkHttpClient = OkHttpClient.Builder()
         .addInterceptor(tmdbAuthInterceptor)
@@ -53,13 +46,6 @@ object AppModule {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    /**
-     * Tuned OkHttpClient for HLS/MP4 downloads:
-     *  - ConnectionPool(10) keeps sockets warm between segment downloads
-     *  - HTTP/2 multiplexing for parallel segments over one TCP connection
-     *  - maxRequestsPerHost(6) allows 6 concurrent segment fetches per CDN host
-     *  - retryOnConnectionFailure for transient network errors
-     */
     @Provides @Singleton @Named("download")
     fun provideDownloadOkHttp(): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -83,15 +69,16 @@ object AppModule {
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): ReelzDatabase =
         Room.databaseBuilder(ctx, ReelzDatabase::class.java, "reelz.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .build()
 
-    @Provides fun provideWatchlistDao(db: ReelzDatabase)    = db.watchlistDao()
-    @Provides fun provideWatchHistoryDao(db: ReelzDatabase) = db.watchHistoryDao()
-    @Provides fun provideLikedDao(db: ReelzDatabase)        = db.likedDao()
-    @Provides fun provideCachedMediaDao(db: ReelzDatabase)  = db.cachedMediaDao()
-    @Provides fun provideDownloadDao(db: ReelzDatabase)     = db.downloadDao()
-    @Provides fun provideTransferDao(db: ReelzDatabase)     = db.transferDao()
+    @Provides fun provideWatchlistDao(db: ReelzDatabase)          = db.watchlistDao()
+    @Provides fun provideWatchHistoryDao(db: ReelzDatabase)       = db.watchHistoryDao()
+    @Provides fun provideLikedDao(db: ReelzDatabase)              = db.likedDao()
+    @Provides fun provideCachedMediaDao(db: ReelzDatabase)        = db.cachedMediaDao()
+    @Provides fun provideDownloadDao(db: ReelzDatabase)           = db.downloadDao()
+    @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase)   = db.downloadSubtitleDao()
+    @Provides fun provideTransferDao(db: ReelzDatabase)           = db.transferDao()
 
     @Provides @Singleton
     fun provideMediaRepository(
