@@ -233,6 +233,8 @@ fun ReelzBottomNav(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 // Active pill glow
+                                // Use AnimatedVisibility via a Column to satisfy the ColumnScope receiver requirement
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 androidx.compose.animation.AnimatedVisibility(
                                     visible = selected,
                                     enter = fadeIn(tween(200)) + scaleIn(tween(200), 0.5f),
@@ -254,6 +256,7 @@ fun ReelzBottomNav(
                                             )
                                     )
                                 }
+                                } // end Column for AnimatedVisibility
 
                                 // Home icon ↔ spinner crossfade
                                 if (isHome) {

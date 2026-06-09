@@ -5,7 +5,9 @@ import androidx.room.Room
 import com.reelz.BuildConfig
 import com.reelz.data.local.*
 import com.reelz.data.remote.api.TmdbApi
+import com.reelz.data.remote.api.OpenSubtitlesApi
 import com.reelz.data.repository.MediaRepository
+import com.reelz.data.repository.OpenSubtitlesRepository
 import com.reelz.scanner.DirectScanner
 import com.reelz.scanner.StreamEngine
 import com.reelz.scanner.StreamResultCache
@@ -98,4 +100,35 @@ object AppModule {
         directScanner: DirectScanner,
         cache: StreamResultCache,
     ) = StreamEngine(ctx, directScanner, cache)
+
+    // ── OpenSubtitles ─────────────────────────────────────────────────────────
+
+    @Provides @Singleton @Named("osApiKey")
+    fun provideOsApiKey(): String = BuildConfig.OPENSUBTITLES_API_KEY  // add to BuildConfig via local.properties
+
+    @Provides @Singleton @Named("osUserAgent")
+    fun provideOsUserAgent(): String = "Reelz v1.0"  // change to your app name + version
+
+    @Provides @Singleton @Named("opensubtitles")
+    fun provideOsOkHttp(): OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .build()
+
+    @Provides @Singleton
+    fun provideOpenSubtitlesApi(@Named("opensubtitles") client: OkHttpClient): OpenSubtitlesApi =
+        Retrofit.Builder()
+            .baseUrl("https://api.opensubtitles.com/api/v1/")
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(OpenSubtitlesApi::class.java)
+
+    @Provides @Singleton
+    fun provideOpenSubtitlesRepository(
+        api: OpenSubtitlesApi,
+        @Named("osApiKey") apiKey: String,
+        @Named("osUserAgent") userAgent: String,
+    ) = OpenSubtitlesRepository(api, apiKey, userAgent)
 }

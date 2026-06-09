@@ -121,6 +121,7 @@ class PlayerViewModel @Inject constructor(
     private val engine: StreamEngine,
     private val repo: MediaRepository,
     private val downloadSubtitleDao: DownloadSubtitleDao,
+    private val openSubtitlesRepo: OpenSubtitlesRepository,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PlayerUiState())
@@ -310,22 +311,67 @@ class PlayerViewModel @Inject constructor(
      * They are NEVER saved to disk. When the user quits, they vanish.
      * If user comes back (e.g. resumes same session), they'll reload from the stream result.
      */
+    /**
+     * Stream subtitles: EPHEMERAL. Loaded into UI state only.
+     * They are NEVER saved to disk. When the user quits, they vanish.
+     *
+     * If the stream itself carries no subtitles, we fall back to OpenSubtitles
+     * using the TMDB id so the user always gets proper subtitle options.
+     */
     private fun loadStreamSubtitles(subtitles: List<Subtitle>) {
-        val options = subtitles.map { sub ->
-            SubtitleOption(
-                language     = sub.language,
-                label        = sub.label,
-                url          = sub.url,
-                isPersistent = false,
-            )
-        }
-        _ui.update {
-            it.copy(
-                subtitleOptions        = options,
-                subtitles              = subtitles,
-                activeSubtitleLanguage = "off",
-                subtitlesEnabled       = false,
-            )
+        if (subtitles.isNotEmpty()) {
+            // Stream already has subtitles — use them directly
+            val options = subtitles.map { sub ->
+                SubtitleOption(
+                    language     = sub.language,
+                    label        = sub.label,
+                    url          = sub.url,
+                    isPersistent = false,
+                )
+            }
+            _ui.update {
+                it.copy(
+                    subtitleOptions        = options,
+                    subtitles              = subtitles,
+                    activeSubtitleLanguage = "off",
+                    subtitlesEnabled       = false,
+                )
+            }
+        } else {
+            // No embedded subtitles — fetch from OpenSubtitles by TMDB id
+            val tmdbId  = currentTmdbId
+            val type    = currentType
+            val season  = currentSeason
+            val episode = currentEpisode
+            if (tmdbId > 0) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    val fetched = openSubtitlesRepo.fetchSubtitles(
+                        tmdbId            = tmdbId,
+                        mediaType         = type,
+                        season            = season,
+                        episode           = episode,
+                        preferredLanguages = listOf("en"),  // TODO: read from user prefs
+                    )
+                    if (fetched.isNotEmpty()) {
+                        val options = fetched.map { sub ->
+                            SubtitleOption(
+                                language     = sub.language,
+                                label        = sub.label,
+                                url          = sub.url,
+                                isPersistent = false,
+                            )
+                        }
+                        _ui.update {
+                            it.copy(
+                                subtitleOptions        = options,
+                                subtitles              = fetched,
+                                activeSubtitleLanguage = "off",
+                                subtitlesEnabled       = false,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 

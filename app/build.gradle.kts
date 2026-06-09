@@ -21,7 +21,8 @@ android {
         buildConfigField("String", "TMDB_IMG_W500",      "\"https://image.tmdb.org/t/p/w500\"")
         buildConfigField("String", "TMDB_IMG_W342",      "\"https://image.tmdb.org/t/p/w342\"")
         buildConfigField("String", "TMDB_IMG_ORIGINAL",  "\"https://image.tmdb.org/t/p/original\"")
-        // ── Ad placeholders — swap in your real IDs ──────────────────────────
+        // ── OpenSubtitles — get a free key at https://www.opensubtitles.com/consumers ──
+        buildConfigField("String", "OPENSUBTITLES_API_KEY", "\"\"")  // ← paste your key here
         buildConfigField("String", "AD_BANNER_ID",       "\"ca-app-pub-3940256099942544/6300978111\"")
         buildConfigField("String", "AD_INTERSTITIAL_ID", "\"ca-app-pub-3940256099942544/1033173712\"")
         buildConfigField("String", "AD_REWARDED_ID",     "\"ca-app-pub-3940256099942544/5224354917\"")
