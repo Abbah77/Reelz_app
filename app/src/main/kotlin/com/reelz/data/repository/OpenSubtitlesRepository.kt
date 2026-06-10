@@ -5,8 +5,6 @@ import com.reelz.data.model.MediaType
 import com.reelz.data.model.Subtitle
 import com.reelz.data.remote.api.OsDownloadRequest
 import com.reelz.data.remote.api.OpenSubtitlesApi
-import javax.inject.Inject
-import javax.inject.Singleton
 
 private const val TAG = "OpenSubtitlesRepo"
 
@@ -33,11 +31,11 @@ private val LANG_LABELS = mapOf(
     "fi" to "Finnish",
 )
 
-@Singleton
-class OpenSubtitlesRepository @Inject constructor(
+// AFTER
+class OpenSubtitlesRepository(
     private val api: OpenSubtitlesApi,
-    private val apiKey: String,           // injected via @Named("osApiKey")
-    private val userAgent: String,        // injected via @Named("osUserAgent")
+    private val apiKey: String,
+    private val userAgent: String,
 ) {
 
     /**

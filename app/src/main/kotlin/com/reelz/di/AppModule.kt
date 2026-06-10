@@ -2,13 +2,15 @@ package com.reelz.di
 
 import android.content.Context
 import androidx.room.Room
-import com.reelz.BuildConfig
+import com.google.gson.Gson
 import com.reelz.data.local.*
 import com.reelz.data.remote.api.TmdbApi
 import com.reelz.data.remote.api.OpenSubtitlesApi
 import com.reelz.data.repository.MediaRepository
 import com.reelz.data.repository.OpenSubtitlesRepository
+import com.reelz.remoteconfig.RemoteConfigRepository
 import com.reelz.scanner.DirectScanner
+import com.reelz.scanner.SourceRegistry
 import com.reelz.scanner.StreamEngine
 import com.reelz.scanner.StreamResultCache
 import dagger.Module
@@ -32,21 +34,45 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object AppModule {
 
-    private val tmdbAuthInterceptor = Interceptor { chain ->
-        val original = chain.request()
-        val url = original.url.newBuilder()
-            .addQueryParameter("api_key", BuildConfig.TMDB_KEY)
-            .build()
-        chain.proceed(original.newBuilder().url(url).build())
-    }
+    // ── Gson ──────────────────────────────────────────────────────────────────
 
+    @Provides @Singleton
+    fun provideGson(): Gson = Gson()
+
+    // ── Remote Config ─────────────────────────────────────────────────────────
+
+    @Provides @Singleton
+    fun provideRemoteConfigRepository(
+        @ApplicationContext ctx: Context,
+        gson: Gson,
+    ): RemoteConfigRepository = RemoteConfigRepository(ctx, gson)
+
+    @Provides @Singleton
+    fun provideSourceRegistry(remoteConfig: RemoteConfigRepository): SourceRegistry =
+        SourceRegistry(remoteConfig)
+
+    // ── OkHttp clients ────────────────────────────────────────────────────────
+
+    /**
+     * TMDB client — API key is now resolved dynamically from remote config.
+     * The interceptor reads the live key on every request so key rotation is instant.
+     */
     @Provides @Singleton @Named("tmdb")
-    fun provideTmdbOkHttp(): OkHttpClient = OkHttpClient.Builder()
-        .addInterceptor(tmdbAuthInterceptor)
-        .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+    fun provideTmdbOkHttp(remoteConfig: RemoteConfigRepository): OkHttpClient {
+        val tmdbAuthInterceptor = Interceptor { chain ->
+            val original = chain.request()
+            val url = original.url.newBuilder()
+                .addQueryParameter("api_key", remoteConfig.activeTmdbKey())
+                .build()
+            chain.proceed(original.newBuilder().url(url).build())
+        }
+        return OkHttpClient.Builder()
+            .addInterceptor(tmdbAuthInterceptor)
+            .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
 
     @Provides @Singleton @Named("download")
     fun provideDownloadOkHttp(): OkHttpClient = OkHttpClient.Builder()
@@ -58,6 +84,8 @@ object AppModule {
         .retryOnConnectionFailure(true)
         .build()
 
+    // ── Retrofit / TMDB API ───────────────────────────────────────────────────
+
     @Provides @Singleton
     fun provideRetrofit(@Named("tmdb") client: OkHttpClient): Retrofit = Retrofit.Builder()
         .baseUrl("https://api.themoviedb.org/3/")
@@ -68,19 +96,23 @@ object AppModule {
     @Provides @Singleton
     fun provideTmdbApi(retrofit: Retrofit): TmdbApi = retrofit.create(TmdbApi::class.java)
 
+    // ── Database ──────────────────────────────────────────────────────────────
+
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): ReelzDatabase =
         Room.databaseBuilder(ctx, ReelzDatabase::class.java, "reelz.db")
             .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .build()
 
-    @Provides fun provideWatchlistDao(db: ReelzDatabase)          = db.watchlistDao()
-    @Provides fun provideWatchHistoryDao(db: ReelzDatabase)       = db.watchHistoryDao()
-    @Provides fun provideLikedDao(db: ReelzDatabase)              = db.likedDao()
-    @Provides fun provideCachedMediaDao(db: ReelzDatabase)        = db.cachedMediaDao()
-    @Provides fun provideDownloadDao(db: ReelzDatabase)           = db.downloadDao()
-    @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase)   = db.downloadSubtitleDao()
-    @Provides fun provideTransferDao(db: ReelzDatabase)           = db.transferDao()
+    @Provides fun provideWatchlistDao(db: ReelzDatabase)        = db.watchlistDao()
+    @Provides fun provideWatchHistoryDao(db: ReelzDatabase)     = db.watchHistoryDao()
+    @Provides fun provideLikedDao(db: ReelzDatabase)            = db.likedDao()
+    @Provides fun provideCachedMediaDao(db: ReelzDatabase)      = db.cachedMediaDao()
+    @Provides fun provideDownloadDao(db: ReelzDatabase)         = db.downloadDao()
+    @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase) = db.downloadSubtitleDao()
+    @Provides fun provideTransferDao(db: ReelzDatabase)         = db.transferDao()
+
+    // ── Repositories ──────────────────────────────────────────────────────────
 
     @Provides @Singleton
     fun provideMediaRepository(
@@ -91,6 +123,8 @@ object AppModule {
         likedDao: LikedDao,
     ) = MediaRepository(api, cachedMediaDao, watchlistDao, watchHistoryDao, likedDao)
 
+    // ── Stream engine ─────────────────────────────────────────────────────────
+
     @Provides @Singleton
     fun provideStreamResultCache() = StreamResultCache()
 
@@ -99,15 +133,21 @@ object AppModule {
         @ApplicationContext ctx: Context,
         directScanner: DirectScanner,
         cache: StreamResultCache,
-    ) = StreamEngine(ctx, directScanner, cache)
+        sourceRegistry: SourceRegistry,
+    ) = StreamEngine(ctx, directScanner, cache, sourceRegistry)
 
     // ── OpenSubtitles ─────────────────────────────────────────────────────────
 
+    /**
+     * API key resolved at injection time from remote config.
+     * Falls back to the compile-time key if remote config hasn't loaded yet.
+     */
     @Provides @Singleton @Named("osApiKey")
-    fun provideOsApiKey(): String = BuildConfig.OPENSUBTITLES_API_KEY  // add to BuildConfig via local.properties
+    fun provideOsApiKey(remoteConfig: RemoteConfigRepository): String =
+        remoteConfig.activeOsKey()
 
     @Provides @Singleton @Named("osUserAgent")
-    fun provideOsUserAgent(): String = "Reelz v1.0"  // change to your app name + version
+    fun provideOsUserAgent(): String = "Reelz v2.0"
 
     @Provides @Singleton @Named("opensubtitles")
     fun provideOsOkHttp(): OkHttpClient = OkHttpClient.Builder()

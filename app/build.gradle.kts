@@ -17,12 +17,14 @@ android {
         versionCode    = 2
         versionName    = "2.0.0"
 
-        buildConfigField("String", "TMDB_KEY",           "\"1eef1496d59aa06f62e201ddce2741b4\"")
-        buildConfigField("String", "TMDB_IMG_W500",      "\"https://image.tmdb.org/t/p/w500\"")
-        buildConfigField("String", "TMDB_IMG_W342",      "\"https://image.tmdb.org/t/p/w342\"")
-        buildConfigField("String", "TMDB_IMG_ORIGINAL",  "\"https://image.tmdb.org/t/p/original\"")
-        // ── OpenSubtitles — get a free key at https://www.opensubtitles.com/consumers ──
-        buildConfigField("String", "OPENSUBTITLES_API_KEY", "\"\"")  // ← paste your key here
+        // ── Compile-time fallback keys (used only before remote config loads) ──
+        // Real keys come from the encrypted remote config JSON hosted on your CDNs.
+        buildConfigField("String", "TMDB_KEY_FALLBACK",        "\"1eef1496d59aa06f62e201ddce2741b4\"")
+        buildConfigField("String", "TMDB_IMG_W500",            "\"https://image.tmdb.org/t/p/w500\"")
+        buildConfigField("String", "TMDB_IMG_W342",            "\"https://image.tmdb.org/t/p/w342\"")
+        buildConfigField("String", "TMDB_IMG_ORIGINAL",        "\"https://image.tmdb.org/t/p/original\"")
+        buildConfigField("String", "OS_API_KEY_FALLBACK",      "\"C8jjWBqYDBiM4U3QA9xJfmf8BiC2ISyq\"")
+        // Ad IDs: still in BuildConfig (ad SDK needs them at init, before config loads)
         buildConfigField("String", "AD_BANNER_ID",       "\"ca-app-pub-3940256099942544/6300978111\"")
         buildConfigField("String", "AD_INTERSTITIAL_ID", "\"ca-app-pub-3940256099942544/1033173712\"")
         buildConfigField("String", "AD_REWARDED_ID",     "\"ca-app-pub-3940256099942544/5224354917\"")
@@ -136,6 +138,7 @@ dependencies {
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
     implementation(libs.media3.datasource.okhttp)
+    implementation(libs.media3.datasource)       // SimpleCache + CacheDataSource
     implementation(libs.media3.transformer)
 
     // Database

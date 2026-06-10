@@ -9,6 +9,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -27,6 +28,7 @@ class StreamEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val directScanner: DirectScanner,
     private val cache: StreamResultCache,
+    private val sourceRegistry: SourceRegistry,
 ) {
     // ── Observable prefetch state ────────────────────────────────────────────
     // The player observes this. If it's Ready when the user taps Play,
@@ -103,22 +105,15 @@ class StreamEngine @Inject constructor(
             return current.result
         }
 
-        // 3. Prefetch is running for the same key — subscribe and wait
-        //    This is the "handoff" — the player joins the already-running race.
+        // 3. Prefetch is running for the same key — subscribe and wait.
+        //    Use first{} so the coroutine actually suspends and resumes on the
+        //    first terminal emission.  collect{} on a StateFlow never completes
+        //    on its own, so return@collect only skips the current item and the
+        //    coroutine hangs forever — that was the original deadlock.
         if (_prefetch.value is PrefetchState.Running && prefetchKey == key) {
-            // Collect until we get a terminal state
-            val stateFlow = prefetchState
-            var collected: StreamResult? = null
-            stateFlow.collect { state ->
-                when (state) {
-                    is PrefetchState.Ready  -> { collected = state.result; return@collect }
-                    is PrefetchState.Failed -> { collected = null; return@collect }
-                    else -> return@collect  // still Running — keep waiting
-                }
-            }
-            // If we got here via the stateFlow completing a terminal state:
-            if (collected != null) return collected
-            // Fall through to fresh resolve if somehow still nothing
+            val terminal = prefetchState.first { it is PrefetchState.Ready || it is PrefetchState.Failed }
+            if (terminal is PrefetchState.Ready) return terminal.result
+            // Failed — fall through to fresh resolve
         }
 
         // 4. No prefetch running — start a fresh race
@@ -143,7 +138,7 @@ class StreamEngine @Inject constructor(
         season: Int,
         episode: Int,
     ): StreamResult? = coroutineScope {
-        val sources = SourceRegistry.sorted()
+        val sources = sourceRegistry.sorted()
         if (sources.isEmpty()) return@coroutineScope null
 
         val resultChannel = Channel<StreamResult?>(Channel.CONFLATED)
@@ -208,7 +203,7 @@ class StreamEngine @Inject constructor(
         // Reset prefetch state so it can be re-used
         if (prefetchKey == key) _prefetch.value = PrefetchState.Idle
 
-        val sources = SourceRegistry.sorted().filter { it.name != excludeSource }
+        val sources = sourceRegistry.sorted().filter { it.name != excludeSource }
         for (source in sources) {
             try {
                 val url = source.buildUrl(tmdbId, mediaType, season, episode)

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Traced from company logo PNG.
+  Shape: stylised A / code-cursor mark.
+  Three filled segments with dark-navy→bright-blue gradient.
+  ViewportWidth/Height = 100 (normalised from 251×225 source bbox).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <!--
+      The shape has three distinct filled strokes visible in the lower half
+      and merges into a single triangular top.
+
+      Top apex (A point): ~x=50, y=0
+      Left edge goes: (45,0)→(0,75)→(15,75) then reversal forms left wing
+      Right edge: (55,0)→(100,75)→(85,75) forms right wing
+      Centre slash: vertical-ish bar from ~(44,57)→(36,98) and (51,57)→(45,98)
+
+      We draw:
+        1. Left arm + left wing (one path)
+        2. Right arm + right wing (one path, mirrored)
+        3. Centre diagonal slash
+      All three share the same gradient.
+    -->
+
+    <!-- LEFT ARM + LEFT WING -->
+    <path
+        android:pathData="
+          M 45.0,0
+          L 50.0,0
+          L 17.0,57
+          L 34.7,57
+          L 28.7,98
+          L 25.5,100
+          L 0.0,75
+          L 0.0,71
+          L 14.7,33
+          Z
+        ">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0"   android:startY="0"
+                android:endX="50"    android:endY="100"
+                xmlns:android="http://schemas.android.com/apk/res/android">
+                <item android:offset="0.0"  android:color="#FF0D1829"/>
+                <item android:offset="0.6"  android:color="#FF003DA0"/>
+                <item android:offset="1.0"  android:color="#FF005CFF"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- RIGHT ARM + RIGHT WING -->
+    <path
+        android:pathData="
+          M 55.0,0
+          L 50.0,0
+          L 83.0,57
+          L 65.3,57
+          L 71.3,98
+          L 74.5,100
+          L 100.0,75
+          L 100.0,71
+          L 85.3,33
+          Z
+        ">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="50"  android:startY="0"
+                android:endX="100"   android:endY="100"
+                xmlns:android="http://schemas.android.com/apk/res/android">
+                <item android:offset="0.0"  android:color="#FF1B3A7A"/>
+                <item android:offset="0.5"  android:color="#FF004EC8"/>
+                <item android:offset="1.0"  android:color="#FF1A6EFF"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- CENTRE SLASH ( / ) -->
+    <path
+        android:pathData="
+          M 51.4,57
+          L 44.6,57
+          L 35.5,100
+          L 42.3,100
+          Z
+        ">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="48"  android:startY="57"
+                android:endX="39"    android:endY="100"
+                xmlns:android="http://schemas.android.com/apk/res/android">
+                <item android:offset="0.0"  android:color="#FF0050E0"/>
+                <item android:offset="1.0"  android:color="#FF33AAFF"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+</vector>

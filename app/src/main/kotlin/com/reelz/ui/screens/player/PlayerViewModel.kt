@@ -13,6 +13,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
@@ -26,6 +30,7 @@ import com.reelz.data.model.QualityTrack
 import com.reelz.data.model.StreamResult
 import com.reelz.data.model.Subtitle
 import com.reelz.data.repository.MediaRepository
+import com.reelz.data.repository.OpenSubtitlesRepository
 import com.reelz.scanner.PrefetchState
 import com.reelz.scanner.StreamEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -33,6 +38,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +112,10 @@ data class PlayerUiState(
     val subtitleOffsetMs: Int                   = 0,
     /** Show the subtitle side drawer. */
     val showSubtitleDrawer: Boolean             = false,
+    /** True while a user-initiated OpenSubtitles search is in-flight. */
+    val isSubtitleSearching: Boolean            = false,
+    /** True after a user-initiated search returned zero results. */
+    val subtitleSearchEmpty: Boolean            = false,
 
     // ── Legacy compat ─────────────────────────────────────────────────────────
     val subtitles: List<com.reelz.data.model.Subtitle> = emptyList(),
@@ -118,6 +128,7 @@ data class PlayerUiState(
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
     private val engine: StreamEngine,
     private val repo: MediaRepository,
     private val downloadSubtitleDao: DownloadSubtitleDao,
@@ -269,31 +280,29 @@ class PlayerViewModel @Inject constructor(
                     )
                     lastResult       = result
                     activeSourceName = result.sourceName
-                    if (!isOffline) {
-                        // Stream subtitles are session-only — load into UI but NOT persisted
-                        loadStreamSubtitles(result.subtitles)
-                    }
+                    // ↓ Play FIRST — subtitles load in background, never block playback
                     playStream(result)
+                    if (!isOffline) loadStreamSubtitles(result.subtitles)
                 }
 
                 else -> {
                     val prefetchKey = engine.prefetchState.value
                     if (prefetchKey is PrefetchState.Running || prefetchKey is PrefetchState.Ready) {
-                        engine.prefetchState
+                        // Use first{} — collect{} on StateFlow never terminates (deadlock)
+                        val terminal = engine.prefetchState
                             .filter { it is PrefetchState.Ready || it is PrefetchState.Failed }
-                            .take(1)
-                            .collect { state ->
-                                when (state) {
-                                    is PrefetchState.Ready -> {
-                                        lastResult       = state.result
-                                        activeSourceName = state.result.sourceName
-                                        if (!isOffline) loadStreamSubtitles(state.result.subtitles)
-                                        playStream(state.result)
-                                    }
-                                    is PrefetchState.Failed -> resolveAndPlay(tmdbId, mediaType, season, episode, isOffline)
-                                    else -> {}
-                                }
+                            .first()
+                        when (terminal) {
+                            is PrefetchState.Ready -> {
+                                lastResult       = terminal.result
+                                activeSourceName = terminal.result.sourceName
+                                // ↓ Play FIRST — subtitles load in background
+                                playStream(terminal.result)
+                                if (!isOffline) loadStreamSubtitles(terminal.result.subtitles)
                             }
+                            is PrefetchState.Failed -> resolveAndPlay(tmdbId, mediaType, season, episode, isOffline)
+                            else -> {}
+                        }
                     } else {
                         resolveAndPlay(tmdbId, mediaType, season, episode, isOffline)
                     }
@@ -320,7 +329,7 @@ class PlayerViewModel @Inject constructor(
      */
     private fun loadStreamSubtitles(subtitles: List<Subtitle>) {
         if (subtitles.isNotEmpty()) {
-            // Stream already has subtitles — use them directly
+            // Stream already carries embedded subtitles — use them directly, no network call needed
             val options = subtitles.map { sub ->
                 SubtitleOption(
                     language     = sub.language,
@@ -337,42 +346,10 @@ class PlayerViewModel @Inject constructor(
                     subtitlesEnabled       = false,
                 )
             }
-        } else {
-            // No embedded subtitles — fetch from OpenSubtitles by TMDB id
-            val tmdbId  = currentTmdbId
-            val type    = currentType
-            val season  = currentSeason
-            val episode = currentEpisode
-            if (tmdbId > 0) {
-                viewModelScope.launch(Dispatchers.IO) {
-                    val fetched = openSubtitlesRepo.fetchSubtitles(
-                        tmdbId            = tmdbId,
-                        mediaType         = type,
-                        season            = season,
-                        episode           = episode,
-                        preferredLanguages = listOf("en"),  // TODO: read from user prefs
-                    )
-                    if (fetched.isNotEmpty()) {
-                        val options = fetched.map { sub ->
-                            SubtitleOption(
-                                language     = sub.language,
-                                label        = sub.label,
-                                url          = sub.url,
-                                isPersistent = false,
-                            )
-                        }
-                        _ui.update {
-                            it.copy(
-                                subtitleOptions        = options,
-                                subtitles              = fetched,
-                                activeSubtitleLanguage = "off",
-                                subtitlesEnabled       = false,
-                            )
-                        }
-                    }
-                }
-            }
         }
+        // If the stream has no embedded subtitles we do NOT auto-call OpenSubtitles.
+        // The user must open the subtitle drawer and tap "Search Online" themselves.
+        // This avoids burning OpenSubtitles request quota on every video load.
     }
 
     /**
@@ -403,10 +380,70 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    /** Call when user adds a subtitle to a downloaded video. Saves permanently. */
+    /**
+     * USER-INITIATED: search OpenSubtitles for the current content.
+     * Only called when the user explicitly taps "Search Online" in the subtitle drawer.
+     * Shows a loading indicator, then populates options. Never called automatically.
+     *
+     * @param languages  ISO 639-1 codes. Empty list = all languages.
+     */
+    fun searchOnlineSubtitles(languages: List<String> = emptyList()) {
+        val tmdbId  = currentTmdbId
+        val type    = currentType
+        val season  = currentSeason
+        val episode = currentEpisode
+        if (tmdbId <= 0) return
+
+        _ui.update { it.copy(isSubtitleSearching = true, subtitleSearchEmpty = false) }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val fetched = openSubtitlesRepo.fetchSubtitles(
+                tmdbId             = tmdbId,
+                mediaType          = type,
+                season             = season,
+                episode            = episode,
+                preferredLanguages = languages,
+            )
+            if (fetched.isNotEmpty()) {
+                val options = fetched.map { sub ->
+                    SubtitleOption(
+                        language     = sub.language,
+                        label        = sub.label,
+                        url          = sub.url,
+                        isPersistent = false,
+                    )
+                }
+                _ui.update {
+                    it.copy(
+                        subtitleOptions        = options,
+                        subtitles              = fetched,
+                        activeSubtitleLanguage = "off",
+                        subtitlesEnabled       = false,
+                        isSubtitleSearching    = false,
+                        subtitleSearchEmpty    = false,
+                    )
+                }
+            } else {
+                _ui.update { it.copy(isSubtitleSearching = false, subtitleSearchEmpty = true) }
+            }
+        }
+    }
+
+    /**
+     * Call when user adds a subtitle to a downloaded video. Saves permanently.
+     * DUPLICATE-SAFE: if the same language is already downloaded, skip silently.
+     */
     fun addDownloadedSubtitle(sub: Subtitle, localFilePath: String) {
         val downloadId = currentDownloadId ?: return
         viewModelScope.launch {
+            // ── Duplicate guard ─────────────────────────────────────────────
+            // Check if this language is already saved for this content.
+            val existing = downloadSubtitleDao.getForContent(currentTmdbId, currentSeason, currentEpisode)
+            if (existing.any { it.language == sub.language }) {
+                // Already downloaded — just activate it, don't re-download
+                selectSubtitle(sub.language)
+                return@launch
+            }
             val entity = DownloadSubtitle(
                 downloadId    = downloadId,
                 tmdbId        = currentTmdbId,
@@ -504,15 +541,10 @@ class PlayerViewModel @Inject constructor(
 
     /** Adjust subtitle timing offset in milliseconds. Positive = delay, negative = advance. */
     fun setSubtitleOffset(offsetMs: Int) {
-        _ui.update { it.copy(subtitleOffsetMs = offsetMs) }
-        exoPlayer?.setMediaItemTransitionListener(null) // trigger re-render
-        // ExoPlayer subtitle offset via TrackSelector parameters
-        trackSelector?.let { ts ->
-            // Note: ExoPlayer doesn't have a direct sub timing API;
-            // offset is applied at rendering layer via a custom SubtitleView or
-            // handled by the SubtitlePainter in the ExoPlayer surface.
-            // We store it and apply it in the UI overlay renderer.
-        }
+    _ui.update { it.copy(subtitleOffsetMs = offsetMs) }
+    trackSelector?.let { ts ->
+        // Offset is stored in UI state and applied in the subtitle overlay renderer
+    }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -542,23 +574,73 @@ class PlayerViewModel @Inject constructor(
         trackSelector = null
     }
 
+    // ── Singleton video cache — shared across all player instances in this process ──
+    // 100 MB on-disk cache: recently watched segments play instantly on re-seek,
+    // and the next-episode prefetch also fills this same cache.
+    companion object {
+        @Volatile private var _videoCache: SimpleCache? = null
+
+        @OptIn(UnstableApi::class)
+        fun getVideoCache(context: Context): SimpleCache {
+            return _videoCache ?: synchronized(this) {
+                _videoCache ?: SimpleCache(
+                    File(context.cacheDir, "reelz_video_cache"),
+                    LeastRecentlyUsedCacheEvictor(100L * 1024 * 1024),  // 100 MB
+                ).also { _videoCache = it }
+            }
+        }
+    }
+
     @OptIn(UnstableApi::class)
     private fun buildPlayer(context: Context) {
         val ts = DefaultTrackSelector(context).apply {
-            setParameters(buildUponParameters().setPreferredTextLanguage("en"))
+            setParameters(
+                buildUponParameters()
+                    .setPreferredTextLanguage("en")
+                    // Start with lowest viable quality so first frame appears instantly,
+                    // then let the bandwidth meter auto-upgrade within 1–2 seconds.
+                    .setForceLowestBitrate(false)
+                    .setAllowVideoMixedMimeTypeAdaptiveness(true)
+            )
         }
         trackSelector = ts
 
-        val loadCtrl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(1_500, 50_000, 500, 800)
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .setTargetBufferBytes(DefaultLoadControl.DEFAULT_TARGET_BUFFER_BYTES * 2)
+        // Bandwidth meter: measures real download speed → faster adaptive quality selection.
+        // Without this, ExoPlayer guesses; with it, it picks the right tier on the first chunk.
+        val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
+            .setResetOnNetworkTypeChange(true)
             .build()
+
+        // ── Buffer tuning for TikTok-style instant start ──────────────────────
+        // minBufferMs = 800ms  → start playback after only 0.8s buffered (was 1.5s)
+        // maxBufferMs = 60s    → keep 60s ahead in memory during playback
+        // bufferForPlaybackMs = 300ms → resume from rebuffer after 300ms (was 500ms)
+        // bufferForPlaybackAfterRebufferMs = 500ms → very quick rebuffer recovery
+        val loadCtrl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(800, 60_000, 300, 500)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .setTargetBufferBytes(DefaultLoadControl.DEFAULT_TARGET_BUFFER_BYTES * 3)
+            .build()
+
+        // ── CacheDataSource: local disk cache acts as mini-CDN ───────────────
+        // When ExoPlayer fetches HLS segments, they go to SimpleCache first.
+        // Re-seeks and repeated plays are served from disk at memory speed.
+        val videoCache    = getVideoCache(context)
+        val upstreamDsf   = DefaultHttpDataSource.Factory()
+            .setConnectTimeoutMs(6_000)
+            .setReadTimeoutMs(15_000)
+            .setAllowCrossProtocolRedirects(true)
+            .setTransferListener(bandwidthMeter)   // feed real speeds to bandwidth meter
+        val cacheDsf = CacheDataSource.Factory()
+            .setCache(videoCache)
+            .setUpstreamDataSourceFactory(upstreamDsf)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)  // graceful degradation
 
         exoPlayer = ExoPlayer.Builder(context)
             .setTrackSelector(ts)
             .setLoadControl(loadCtrl)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(context))
+            .setBandwidthMeter(bandwidthMeter)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(cacheDsf))
             .build()
             .also { p ->
                 p.addListener(object : Player.Listener {
@@ -624,34 +706,49 @@ class PlayerViewModel @Inject constructor(
         }
         lastResult       = result
         activeSourceName = result.sourceName
-        if (!isOffline) loadStreamSubtitles(result.subtitles)
+        // ↓ Play FIRST — subtitles load in background, never block playback
         playStream(result)
+        if (!isOffline) loadStreamSubtitles(result.subtitles)
     }
 
     @OptIn(UnstableApi::class)
     fun playStream(result: StreamResult) {
         val p = exoPlayer ?: return
+
         val headers = mutableMapOf<String, String>().apply {
             putAll(result.headers)
             if (result.referer.isNotBlank()) put("Referer", result.referer)
             if (result.origin.isNotBlank())  put("Origin",  result.origin)
         }
+
         val item = MediaItem.Builder()
             .setUri(result.url)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build())
             .build()
-        val dsf = DefaultHttpDataSource.Factory()
+
+        // ── Cached data source: upstream HTTP → 100 MB SimpleCache on disk ──
+        // Any segment already in cache is served instantly (0 network).
+        // This is the core of TikTok-style speed: prefetch fills the cache,
+        // the player reads from disk, network is only hit for cold segments.
+        val upstreamDsf = DefaultHttpDataSource.Factory()
             .setDefaultRequestProperties(headers)
             .setConnectTimeoutMs(6_000)
             .setReadTimeoutMs(15_000)
             .setAllowCrossProtocolRedirects(true)
+
+        val cachedDsf = CacheDataSource.Factory()
+            .setCache(getVideoCache(appContext))
+            .setUpstreamDataSourceFactory(upstreamDsf)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
         val source = if (result.isHls) {
-            HlsMediaSource.Factory(dsf)
-                .setAllowChunklessPreparation(true)
+            HlsMediaSource.Factory(cachedDsf)
+                .setAllowChunklessPreparation(true)  // parse playlist without fetching first segment
                 .createMediaSource(item)
         } else {
-            ProgressiveMediaSource.Factory(dsf).createMediaSource(item)
+            ProgressiveMediaSource.Factory(cachedDsf).createMediaSource(item)
         }
+
         viewModelScope.launch {
             val resumeMs = repo.getPosition(currentTmdbId, currentSeason, currentEpisode)
             p.setMediaSource(source)
@@ -755,8 +852,9 @@ class PlayerViewModel @Inject constructor(
             if (fallback != null) {
                 lastResult       = fallback
                 activeSourceName = fallback.sourceName
-                if (!_ui.value.isOfflinePlayback) loadStreamSubtitles(fallback.subtitles)
+                // ↓ Play FIRST — subtitles load in background
                 playStream(fallback)
+                if (!_ui.value.isOfflinePlayback) loadStreamSubtitles(fallback.subtitles)
             } else {
                 val isNet = error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
                          || error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT

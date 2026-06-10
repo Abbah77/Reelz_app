@@ -28,6 +28,7 @@ import com.reelz.ui.components.*
 import com.reelz.ui.screens.browse.BrowseScreen
 import com.reelz.ui.screens.browse.BrowseViewModel
 import com.reelz.ui.screens.shorts.ShortsScreen
+import com.reelz.ui.screens.shorts.ShortsViewModel
 import com.reelz.ui.screens.downloads.DownloadsScreen
 import com.reelz.ui.screens.transfer.TransferScreen
 import com.reelz.ui.screens.profile.ProfileScreen
@@ -79,8 +80,12 @@ fun AppNavigation() {
     val browseVm: BrowseViewModel = hiltViewModel()
     val browseListState = rememberLazyListState()
 
+    // Shared ShortsViewModel so the Shorts bottom tab can scroll-to-top + refresh
+    val shortsVm: ShortsViewModel = hiltViewModel()
+
     // Home button state — drives TikTok-style spinner in bottom nav
     var isHomeRefreshing by remember { mutableStateOf(false) }
+    var isShortsRefreshing by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
     Scaffold(
@@ -120,6 +125,16 @@ fun AppNavigation() {
                                     }
                                 }
                             }
+                        } else if (route == Route.Shorts.path && currentRoute == Route.Shorts.path) {
+                            // Already on Shorts — refresh feed
+                            if (!isShortsRefreshing) {
+                                coroutineScope.launch {
+                                    isShortsRefreshing = true
+                                    shortsVm.refresh()
+                                    delay(700)
+                                    isShortsRefreshing = false
+                                }
+                            }
                         } else {
                             nav.navigate(route) {
                                 popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -143,7 +158,7 @@ fun AppNavigation() {
         ) {
             // Pass shared vm + listState so home button can control both
             composable(Route.Browse.path)    { BrowseScreen(nav, browseVm, browseListState) }
-            composable(Route.Shorts.path)    { ShortsScreen(nav) }
+            composable(Route.Shorts.path)    { ShortsScreen(nav, shortsVm) }
             composable(Route.Downloads.path) { DownloadsScreen(nav) }
             composable(Route.Transfer.path)  { TransferScreen() }
             composable(Route.Profile.path)   { ProfileScreen(nav) }

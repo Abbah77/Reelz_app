@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -50,6 +52,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import androidx.compose.ui.draw.drawBehind
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Custom vector icons
@@ -574,6 +577,7 @@ fun PlayerScreen(
         AnimatedVisibility(
             visible  = ui.showControls
                     && ui.state !is PlayerState.Resolving
+                     && ui.state !is PlayerState.Buffering
                     && ui.state !is PlayerState.Error,
             enter    = fadeIn(tween(180)),
             exit     = fadeOut(tween(300)),
@@ -811,6 +815,7 @@ fun PlayerScreen(
             onToggleOff = { vm.toggleSubtitlesOnOff() },
             onTogglePersistent = { vm.togglePersistentSubtitle(it) },
             onOffsetChange = { vm.setSubtitleOffset(it) },
+            onSearchOnline = { vm.searchOnlineSubtitles() },
         )
     }
 
@@ -841,21 +846,6 @@ fun PlayerScreen(
 // Subtitle Drawer — 40% right-side panel, glass over video
 // ─────────────────────────────────────────────────────────────────────────────
 
-private val PRIORITY_LANGUAGES = listOf(
-    "en" to "English",
-    "es" to "Spanish",
-    "fr" to "French",
-    "de" to "German",
-    "pt" to "Portuguese",
-    "ar" to "Arabic",
-    "zh" to "Chinese",
-    "ja" to "Japanese",
-    "ko" to "Korean",
-    "it" to "Italian",
-    "ru" to "Russian",
-    "hi" to "Hindi",
-)
-
 @Composable
 private fun SubtitleDrawer(
     visible: Boolean,
@@ -865,10 +855,10 @@ private fun SubtitleDrawer(
     onToggleOff: () -> Unit,
     onTogglePersistent: (SubtitleOption) -> Unit,
     onOffsetChange: (Int) -> Unit,
+    onSearchOnline: () -> Unit,
 ) {
     val drawerWidth   = 0.40f   // 40% of screen width
     var searchQuery   by remember { mutableStateOf("") }
-    var showMoreLangs by remember { mutableStateOf(false) }
     var showOffsetSection by remember { mutableStateOf(false) }
 
     // Animate slide-in from right
@@ -1094,51 +1084,97 @@ private fun SubtitleDrawer(
                             )
                         }
                     } else if (searchQuery.isEmpty()) {
-                        // No subtitles yet — show browsable list of languages
+                        // No subtitles loaded yet — show Search Online CTA
                         item {
-                            Text(
-                                "Languages",
-                                color    = White40,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 1.sp,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-                            )
-                        }
-
-                        val langList = if (showMoreLangs) PRIORITY_LANGUAGES
-                                       else PRIORITY_LANGUAGES.take(4)
-
-                        items(langList) { (code, name) ->
-                            SubtitleRow(
-                                label        = name,
-                                language     = code,
-                                isActive     = false,
-                                isPersistent = false,
-                                isEnabled    = true,
-                                onClick      = { /* no-op: UI only, no subtitle loaded */ },
-                                dimmed       = true,
-                            )
-                        }
-
-                        if (!showMoreLangs) {
-                            item {
-                                Box(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { showMoreLangs = true }
-                                        .padding(vertical = 10.dp),
-                                    Alignment.Center,
-                                ) {
-                                    Text(
-                                        "More languages…",
-                                        color    = Brand.copy(.7f),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
-                                    )
+                            Spacer(Modifier.height(8.dp))
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                when {
+                                    ui.isSubtitleSearching -> {
+                                        // Searching spinner
+                                        androidx.compose.material3.CircularProgressIndicator(
+                                            modifier = Modifier.size(22.dp),
+                                            color    = Brand,
+                                            strokeWidth = 2.dp,
+                                        )
+                                        Text(
+                                            "Searching…",
+                                            color    = White40,
+                                            fontSize = 11.sp,
+                                        )
+                                    }
+                                    ui.subtitleSearchEmpty -> {
+                                        // Search done, nothing found
+                                        Text(
+                                            "No subtitles found",
+                                            color    = White40,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                        Box(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(GlassMd)
+                                                .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp))
+                                                .clickable { onSearchOnline() }
+                                                .padding(vertical = 10.dp),
+                                            Alignment.Center,
+                                        ) {
+                                            Text(
+                                                "Try again",
+                                                color      = Brand,
+                                                fontSize   = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                            )
+                                        }
+                                    }
+                                    else -> {
+                                        // Default: user hasn't searched yet
+                                        Text(
+                                            if (ui.isOfflinePlayback) "Search for subtitles to download"
+                                            else "Search OpenSubtitles for this title",
+                                            color    = White40,
+                                            fontSize = 11.sp,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                        )
+                                        Box(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(AmberGlass)
+                                                .border(1.dp, AmberBorder, RoundedCornerShape(10.dp))
+                                                .clickable { onSearchOnline() }
+                                                .padding(vertical = 11.dp),
+                                            Alignment.Center,
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Search,
+                                                    contentDescription = null,
+                                                    tint     = Brand,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                                Text(
+                                                    "Search Online",
+                                                    color      = Brand,
+                                                    fontSize   = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
+                            Spacer(Modifier.height(4.dp))
                         }
                     }
 

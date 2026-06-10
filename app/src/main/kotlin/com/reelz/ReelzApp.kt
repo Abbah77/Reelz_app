@@ -8,6 +8,8 @@ import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import com.reelz.data.local.DownloadDao
 import com.reelz.data.model.DownloadStatus
+import com.reelz.remoteconfig.ConfigSyncWorker
+import com.reelz.remoteconfig.RemoteConfigRepository
 import com.reelz.service.DownloadService
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -22,27 +24,31 @@ import javax.inject.Inject
 class ReelzApp : Application(), ImageLoaderFactory {
 
     @Inject lateinit var downloadDao: DownloadDao
+    @Inject lateinit var remoteConfig: RemoteConfigRepository
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
+
+        // ── Remote config: load cache instantly, then sync if stale ──────────
+        appScope.launch {
+            remoteConfig.init()
+        }
+
+        // ── Schedule periodic background sync (every 6 hours via WorkManager) ─
+        ConfigSyncWorker.schedule(this)
+
+        // ── Recover downloads stuck in QUEUED/DOWNLOADING state ──────────────
         recoverStuckDownloads()
     }
 
-    /**
-     * UPGRADE P20 / BUG 10: On app start, scan for downloads that were stuck in
-     * QUEUED or DOWNLOADING state (e.g. service was killed by OS).
-     * Restart them so they never get permanently stuck.
-     */
     private fun recoverStuckDownloads() {
         appScope.launch {
             try {
-                val queued = downloadDao.getByStatus(DownloadStatus.QUEUED.name)
+                val queued      = downloadDao.getByStatus(DownloadStatus.QUEUED.name)
                 val downloading = downloadDao.getByStatus(DownloadStatus.DOWNLOADING.name)
-                val stuck = (queued + downloading)
-                stuck.forEach { item ->
-                    // Mark as needing re-resolve (CDN token likely expired)
+                (queued + downloading).forEach { item ->
                     downloadDao.markPaused(item.id)
                     DownloadService.start(this@ReelzApp, item.id)
                 }
