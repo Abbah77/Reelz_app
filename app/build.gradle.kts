@@ -25,10 +25,15 @@ android {
         buildConfigField("String", "TMDB_IMG_ORIGINAL",        "\"https://image.tmdb.org/t/p/original\"")
         buildConfigField("String", "OS_API_KEY_FALLBACK",      "\"C8jjWBqYDBiM4U3QA9xJfmf8BiC2ISyq\"")
         // Ad IDs: still in BuildConfig (ad SDK needs them at init, before config loads)
-        buildConfigField("String", "AD_BANNER_ID",       "\"ca-app-pub-3940256099942544/6300978111\"")
-        buildConfigField("String", "AD_INTERSTITIAL_ID", "\"ca-app-pub-3940256099942544/1033173712\"")
-        buildConfigField("String", "AD_REWARDED_ID",     "\"ca-app-pub-3940256099942544/5224354917\"")
-        buildConfigField("String", "AD_NATIVE_ID",       "\"ca-app-pub-3940256099942544/2247696110\"")
+        // Ad unit IDs — replace with real IDs from your AppLovin MAX dashboard before release
+        // Test IDs below work for development builds only
+        buildConfigField("String", "AD_BANNER_ID",       "\"YOUR_MAX_BANNER_AD_UNIT_ID\"")
+        buildConfigField("String", "AD_INTERSTITIAL_ID", "\"YOUR_MAX_INTERSTITIAL_AD_UNIT_ID\"")
+        buildConfigField("String", "AD_REWARDED_ID",     "\"YOUR_MAX_REWARDED_AD_UNIT_ID\"")
+        buildConfigField("String", "AD_NATIVE_ID",       "\"YOUR_MAX_NATIVE_AD_UNIT_ID\"")
+        buildConfigField("String", "AD_APP_OPEN_ID",     "\"YOUR_MAX_APP_OPEN_AD_UNIT_ID\"")
+        // VAST tag URL from your ad network (Pangle / AppLovin MAX)
+        buildConfigField("String", "AD_VAST_TAG_URL",    "\"YOUR_VAST_TAG_URL\"")
 
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
@@ -172,6 +177,11 @@ dependencies {
 
     // Permissions
     implementation(libs.accompanist.permissions)
+
+    // Ads — AppLovin MAX + IMA for VAST pre-roll
+    implementation("com.applovin:applovin-sdk:12.5.0")
+    implementation("com.google.ads.interactivemedia.v3:interactivemedia:3.33.0")
+    implementation("androidx.media3:media3-exoplayer-ima:1.3.1")
 
     // QR code
     implementation("com.google.zxing:core:3.5.3")

@@ -29,6 +29,9 @@
 -keep class com.google.gson.** { *; }
 -keep class com.reelz.data.model.** { *; }
 -keep class com.reelz.data.remote.dto.** { *; }
+# Remote config models parsed by Gson - must not be obfuscated
+-keep class com.reelz.remoteconfig.** { *; }
+-keepclassmembers class com.reelz.remoteconfig.** { *; }
 -keepclassmembers class * {
     @com.google.gson.annotations.SerializedName <fields>;
 }

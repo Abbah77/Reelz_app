@@ -39,6 +39,8 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import com.reelz.ads.AdEngine
+import com.reelz.ads.VastTagProvider
 import javax.inject.Inject
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,6 +122,12 @@ data class PlayerUiState(
     // ── Legacy compat ─────────────────────────────────────────────────────────
     val subtitles: List<com.reelz.data.model.Subtitle> = emptyList(),
     val selectedSubtitle: String                = "Off",
+
+    // ── Pre-roll ad ───────────────────────────────────────────────────────────
+    /** Non-null when a VAST pre-roll should be shown before ExoPlayer starts. */
+    val preRollVastUrl: String?                 = null,
+    /** True while the IMA ad is playing — hides player controls. */
+    val isPreRollPlaying: Boolean               = false,
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -133,6 +141,7 @@ class PlayerViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val openSubtitlesRepo: OpenSubtitlesRepository,
+    private val adEngine: AdEngine,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PlayerUiState())
@@ -153,6 +162,9 @@ class PlayerViewModel @Inject constructor(
     private var currentDownloadId: String? = null
     private var lastResult: StreamResult? = null
     private var activeSourceName = ""
+    // Pre-roll ad tracking
+    private var isFirstPlayThisSession   = true
+    private var lastPreRollTimeMinutes   = -30L   // allows pre-roll on very first play
     private var trackSelector: DefaultTrackSelector? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -689,7 +701,29 @@ class PlayerViewModel @Inject constructor(
     private suspend fun resolveAndPlay(
         tmdbId: Int, type: MediaType, season: Int, episode: Int,
         isOffline: Boolean = false,
+        isQualitySwitch: Boolean = false,
     ) {
+        // ── Pre-roll gate ─────────────────────────────────────────────────────
+        val minutesSince = System.currentTimeMillis() / 60_000L - lastPreRollTimeMinutes
+        val isMovie      = type == MediaType.MOVIE
+        if (VastTagProvider.shouldShowPreRoll(
+                isMovie                 = isMovie,
+                isFirstPlayThisSession  = isFirstPlayThisSession,
+                minutesSinceLastPreRoll = minutesSince,
+                isOfflinePlayback       = isOffline,
+                isResumingEpisode       = season > 0 && episode > 1,
+                isQualitySwitch         = isQualitySwitch,
+            )
+        ) {
+            lastPreRollTimeMinutes = System.currentTimeMillis() / 60_000L
+            isFirstPlayThisSession = false
+            _ui.update { it.copy(preRollVastUrl = VastTagProvider.getPreRollVastUrl(), isPreRollPlaying = true) }
+            // Actual playback continues after IMA fires preRollCompleted() from the Activity
+            // — resolveAndPlay is re-entered with isFirstPlayThisSession already false.
+            return
+        }
+        isFirstPlayThisSession = false
+
         val result = engine.resolve(tmdbId, type, season, episode)
         if (result == null) {
             val netConnected = _ui.value.networkState is NetworkState.Connected
@@ -865,6 +899,18 @@ class PlayerViewModel @Inject constructor(
                     ))
                 }
             }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Pre-roll lifecycle — called by PlayerActivity IMA listener
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Called by PlayerActivity when the IMA ad finishes or errors — resumes playback. */
+    fun preRollCompleted() {
+        _ui.update { it.copy(preRollVastUrl = null, isPreRollPlaying = false) }
+        viewModelScope.launch {
+            resolveAndPlay(currentTmdbId, currentType, currentSeason, currentEpisode)
         }
     }
 

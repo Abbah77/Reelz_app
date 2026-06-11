@@ -10,6 +10,7 @@ import com.reelz.data.local.DownloadDao
 import com.reelz.data.model.DownloadStatus
 import com.reelz.remoteconfig.ConfigSyncWorker
 import com.reelz.remoteconfig.RemoteConfigRepository
+import com.reelz.ads.AdEngine
 import com.reelz.service.DownloadService
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -25,18 +26,22 @@ class ReelzApp : Application(), ImageLoaderFactory {
 
     @Inject lateinit var downloadDao: DownloadDao
     @Inject lateinit var remoteConfig: RemoteConfigRepository
+    @Inject lateinit var adEngine: AdEngine
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
 
-        // ── Remote config: load cache instantly, then sync if stale ──────────
+        // Initialize ad engine — starts SDK + preloads all ad formats
+        adEngine.initialize(this)
+
+        // Load cache so UI is ready instantly on launch.
         appScope.launch {
-            remoteConfig.init()
+            remoteConfig.loadLocalConfig()
         }
 
-        // ── Schedule periodic background sync (every 6 hours via WorkManager) ─
+        // Periodic background refresh every 6 hours.
         ConfigSyncWorker.schedule(this)
 
         // ── Recover downloads stuck in QUEUED/DOWNLOADING state ──────────────

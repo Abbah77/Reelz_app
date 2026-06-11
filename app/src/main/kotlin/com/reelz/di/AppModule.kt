@@ -34,11 +34,6 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object AppModule {
 
-    // ── Gson ──────────────────────────────────────────────────────────────────
-
-    @Provides @Singleton
-    fun provideGson(): Gson = Gson()
-
     // ── Remote Config ─────────────────────────────────────────────────────────
 
     @Provides @Singleton
@@ -62,7 +57,7 @@ object AppModule {
         val tmdbAuthInterceptor = Interceptor { chain ->
             val original = chain.request()
             val url = original.url.newBuilder()
-                .addQueryParameter("api_key", remoteConfig.activeTmdbKey())
+                .addQueryParameter("api_key", remoteConfig.activeTmdbKey().orEmpty())
                 .build()
             chain.proceed(original.newBuilder().url(url).build())
         }
@@ -144,7 +139,7 @@ object AppModule {
      */
     @Provides @Singleton @Named("osApiKey")
     fun provideOsApiKey(remoteConfig: RemoteConfigRepository): String =
-        remoteConfig.activeOsKey()
+        remoteConfig.activeOsKey().orEmpty()
 
     @Provides @Singleton @Named("osUserAgent")
     fun provideOsUserAgent(): String = "Reelz v2.0"

@@ -2,25 +2,18 @@ package com.reelz.remoteconfig
 
 import com.google.gson.annotations.SerializedName
 
-// ── Top-level envelope ────────────────────────────────────────────────────────
-
-/** The raw JSON envelope: { "v": 1, "d": "<base64>" }  */
-data class EncryptedConfigEnvelope(
-    @SerializedName("v") val version: Int,
-    @SerializedName("d") val data: String,
-)
-
 // ── Fully decoded config ──────────────────────────────────────────────────────
 
 data class RemoteConfig(
-    val meta: MetaConfig,
-    val tmdb: TmdbConfig,
-    val subtitles: SubtitlesConfig,
-    val ads: AdsConfig,
-    @SerializedName("stream_sources") val streamSources: List<StreamSourceConfig>,
-    @SerializedName("user_agents")    val userAgents: UserAgentsConfig,
-    val scanner: ScannerConfig,
-    @SerializedName("feature_flags") val featureFlags: FeatureFlags,
+    val meta: MetaConfig                                        = MetaConfig(),
+    val tmdb: TmdbConfig?                                       = null,
+    val subtitles: SubtitlesConfig?                             = null,
+    val ads: AdsConfig?                                         = null,
+    @SerializedName("stream_sources") val streamSources: List<StreamSourceConfig> = emptyList(),
+    @SerializedName("user_agents")    val userAgents: UserAgentsConfig             = UserAgentsConfig(),
+    val scanner: ScannerConfig                                  = ScannerConfig(),
+    @SerializedName("feature_flags") val featureFlags: FeatureFlags               = FeatureFlags(),
+    val shorts: ShortsConfig                                    = ShortsConfig(),
 )
 
 data class MetaConfig(
@@ -33,7 +26,7 @@ data class MetaConfig(
 )
 
 data class TmdbConfig(
-    val keys: List<ApiKey>,
+    val keys: List<ApiKey> = emptyList(),
     @SerializedName("base_url")     val baseUrl: String     = "https://api.themoviedb.org/3",
     @SerializedName("img_w500")     val imgW500: String     = "https://image.tmdb.org/t/p/w500",
     @SerializedName("img_w342")     val imgW342: String     = "https://image.tmdb.org/t/p/w342",
@@ -41,34 +34,34 @@ data class TmdbConfig(
 )
 
 data class ApiKey(
-    val id: String,
-    val key: String,
+    val id: String      = "",
+    val key: String     = "",
     val weight: Int     = 10,
     val enabled: Boolean = true,
 )
 
 data class SubtitlesConfig(
-    val providers: List<SubtitleProvider>,
+    val providers: List<SubtitleProvider> = emptyList(),
 )
 
 data class SubtitleProvider(
-    val id: String,
-    val name: String,
-    val enabled: Boolean,
-    val keys: List<ApiKey>,
+    val id: String        = "",
+    val name: String      = "",
+    val enabled: Boolean  = false,
+    val keys: List<ApiKey> = emptyList(),
     @SerializedName("base_url")    val baseUrl: String   = "",
     @SerializedName("user_agent")  val userAgent: String = "",
     @SerializedName("daily_limit") val dailyLimit: Int   = 20,
 )
 
 data class AdsConfig(
-    val enabled: Boolean,
-    val networks: List<AdNetwork>,
+    val enabled: Boolean = false,
+    val networks: List<AdNetwork> = emptyList(),
 )
 
 data class AdNetwork(
-    val id: String,
-    val enabled: Boolean,
+    val id: String       = "",
+    val enabled: Boolean = false,
     @SerializedName("banner_id")       val bannerId: String       = "",
     @SerializedName("interstitial_id") val interstitialId: String = "",
     @SerializedName("rewarded_id")     val rewardedId: String     = "",
@@ -76,20 +69,20 @@ data class AdNetwork(
 )
 
 data class StreamSourceConfig(
-    val id: String,
-    val name: String,
-    val enabled: Boolean,
-    val priority: Int,
-    @SerializedName("requires_js")  val requiresJs: Boolean,
-    @SerializedName("url_patterns") val urlPatterns: UrlPatterns,
+    val id: String       = "",
+    val name: String     = "",
+    val enabled: Boolean = false,
+    val priority: Int    = 99,
+    @SerializedName("requires_js")  val requiresJs: Boolean  = false,
+    @SerializedName("url_patterns") val urlPatterns: UrlPatterns = UrlPatterns(),
     val headers: Map<String, String> = emptyMap(),
     val referer: String = "",
     val origin: String  = "",
 )
 
 data class UrlPatterns(
-    val movie: String,
-    val tv: String,
+    val movie: String = "",
+    val tv: String    = "",
 )
 
 data class UserAgentsConfig(
@@ -115,4 +108,29 @@ data class FeatureFlags(
     @SerializedName("ads_enabled")         val adsEnabled: Boolean         = true,
     @SerializedName("force_maintenance")   val forceMaintenance: Boolean   = false,
     @SerializedName("maintenance_message") val maintenanceMessage: String  = "",
+)
+
+// ── Shorts / Reddit feed config ───────────────────────────────────────────────
+
+data class ShortsConfig(
+    @SerializedName("reddit_base")       val redditBase: String              = "https://old.reddit.com",
+    @SerializedName("for_you_subs")      val forYouSubs: String              =
+        "nextfuckinglevel+oddlysatisfying+funny+aww+BeAmazed+interestingasfuck+Unexpected+Damnthatsinteresting+sports+NatureIsFuckingLit",
+    val categories: List<ShortCategory>                                      = defaultCategories(),
+)
+
+data class ShortCategory(
+    val label: String = "",
+    val subs: String  = "",
+)
+
+private fun defaultCategories() = listOf(
+    ShortCategory("🔥 Hot",        "nextfuckinglevel+oddlysatisfying+Unexpected+interestingasfuck+BeAmazed"),
+    ShortCategory("😂 Funny",      "funny+facepalm+Whatcouldgowrong+therewasanattempt"),
+    ShortCategory("😮 WOW",        "nextfuckinglevel+BeAmazed+interestingasfuck+Damnthatsinteresting"),
+    ShortCategory("😌 Satisfying", "oddlysatisfying+ASMR+powerwashingporn+Perfectfit"),
+    ShortCategory("🐾 Animals",    "aww+AnimalsBeingBros+rarepuppers+NatureIsFuckingLit"),
+    ShortCategory("⚽ Sports",     "sports+soccer+nba+MMA+skateboarding"),
+    ShortCategory("🎨 Art",        "Art+blackmagicfuckery+specializedtools+crafts"),
+    ShortCategory("🌍 Nature",     "NatureIsFuckingLit+EarthPorn+interestingasfuck+Outdoors"),
 )

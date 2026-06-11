@@ -1,52 +1,57 @@
 package com.reelz.remoteconfig
 
 import android.util.Base64
+import java.util.zip.InflaterInputStream
+import java.io.ByteArrayInputStream
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Decrypts the AES-256-CBC encrypted remote config payload.
+ * Decrypts the remote config payload.
  *
  * Payload format (after base64 decode):
- *   byte[0]      = version byte (currently 1 — reserved for future re-keying)
+ *   byte[0]      = version byte
+ *                  1 = AES-CBC only (plain JSON)
+ *                  2 = AES-CBC + zlib compress (everything secret, smallest size)
  *   byte[1..16]  = IV (16 bytes)
  *   byte[17..]   = AES-CBC ciphertext (PKCS7 padded)
- *
- * Key must be exactly 32 bytes. Store it via NDK / BuildConfig — never in plain
- * Kotlin source in production. For this implementation it comes from ConfigCrypto.KEY.
  */
 object ConfigCrypto {
 
-    // ⚠️  Match the Python encryption script exactly.
-    //     In production, load this from a native function via JNI rather than
-    //     keeping it in Kotlin bytecode.
-    private val KEY: ByteArray = "ReelzCfgKey2024!ReelzCfgKey2024!".toByteArray(Charsets.UTF_8)
+    // ⚠️ In production, load this from a native JNI function instead.
+    private val KEY = "ReelzCfgKey2024!ReelzCfgKey2024!".toByteArray(Charsets.UTF_8)
 
-    /**
-     * @param base64Payload The raw `d` field from the JSON envelope
-     * @return Decrypted UTF-8 JSON string, or null on any failure
-     */
     fun decrypt(base64Payload: String): String? = runCatching {
         val raw = Base64.decode(base64Payload, Base64.DEFAULT)
+        require(raw.size >= 33) { "Payload too short" }
 
-        // Sanity check: need at least version(1) + IV(16) + 1 block(16)
-        require(raw.size >= 33) { "Payload too short: ${raw.size} bytes" }
-
-        // byte[0] is the version tag — skip it
+        val version    = raw[0].toInt()
         val iv         = raw.copyOfRange(1, 17)
         val ciphertext = raw.copyOfRange(17, raw.size)
 
         val keySpec = SecretKeySpec(KEY, "AES")
         val ivSpec  = IvParameterSpec(iv)
-
-        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        val cipher  = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
+        val decrypted = cipher.doFinal(ciphertext)
 
-        val plain = cipher.doFinal(ciphertext)
-        String(plain, Charsets.UTF_8)
+        when (version) {
+            2 -> {
+                // version 2: decompress after decrypt
+                val inflater = InflaterInputStream(ByteArrayInputStream(decrypted))
+                String(inflater.readBytes(), Charsets.UTF_8)
+            }
+            else -> {
+                // version 1: plain JSON after decrypt
+                String(decrypted, Charsets.UTF_8)
+            }
+        }
     }.getOrElse { e ->
         android.util.Log.e("ConfigCrypto", "Decryption failed", e)
         null
     }
+
+    /** Decrypt a single encrypted key string (used in v2 per-key format if needed). */
+    fun decryptKey(encrypted: String): String? = decrypt(encrypted)
 }

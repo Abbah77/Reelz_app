@@ -27,6 +27,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import com.reelz.ads.AdEngine
+import com.reelz.ads.NativeAdCard
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -52,6 +54,7 @@ import kotlin.math.roundToInt
 sealed class FeedRow {
     data class Section(val section: HomeSection) : FeedRow()
     data class InfinitePage(val items: List<Media>, val page: Int) : FeedRow()
+    object NativeAdPlacement : FeedRow()
 }
 
 @HiltViewModel
@@ -108,7 +111,15 @@ class BrowseViewModel @Inject constructor(
                 categorySections = sections
                 val featured = sections.firstOrNull()?.items?.take(6) ?: emptyList()
                 val genres   = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
-                val feedRows = sections.map { FeedRow.Section(it) }
+                // Build feed rows, injecting a native ad every 3 section rows
+                val rawRows = sections.map { FeedRow.Section(it) }
+                val feedRows = buildList {
+                    rawRows.forEachIndexed { index, row ->
+                        add(row)
+                        // Inject ad after every 3rd section (index 2, 5, 8 …)
+                        if ((index + 1) % 3 == 0) add(FeedRow.NativeAdPlacement)
+                    }
+                }
                 _ui.update {
                     it.copy(
                         isLoading    = false,
@@ -201,6 +212,7 @@ class BrowseViewModel @Inject constructor(
 @Composable
 fun BrowseScreen(
     nav: NavController,
+    adEngine: AdEngine,
     vm: BrowseViewModel = hiltViewModel(),
     listState: LazyListState = rememberLazyListState(),
 ) {
@@ -414,7 +426,7 @@ fun BrowseScreen(
                             }
                         }
 
-                        ui.feedRows.forEach { row ->
+                        ui.feedRows.forEachIndexed { feedRowIdx, row ->
                             when (row) {
                                 is FeedRow.Section -> {
                                     item(key = "hdr_${row.section.title}") {
@@ -429,6 +441,11 @@ fun BrowseScreen(
                                                 MediaRowCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
                                             }
                                         }
+                                    }
+                                }
+                                is FeedRow.NativeAdPlacement -> {
+                                    item(key = "native_ad_") {
+                                        NativeAdCard(adEngine = adEngine)
                                     }
                                 }
                                 is FeedRow.InfinitePage -> {

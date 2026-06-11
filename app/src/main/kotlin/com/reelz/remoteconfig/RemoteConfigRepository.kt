@@ -9,13 +9,17 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -24,34 +28,25 @@ import javax.inject.Singleton
 
 private val Context.configDataStore: DataStore<Preferences> by preferencesDataStore("reelz_remote_cfg")
 
-private val KEY_CACHED_CONFIG    = stringPreferencesKey("cached_config_json")
-private val KEY_LAST_FETCH_MS    = longPreferencesKey("last_fetch_timestamp_ms")
-private val KEY_CONFIG_VERSION   = longPreferencesKey("cached_config_version")
+private val KEY_CACHED_CONFIG  = stringPreferencesKey("cached_config_json")
+private val KEY_LAST_FETCH_MS  = longPreferencesKey("last_fetch_timestamp_ms")
+private val KEY_CONFIG_VERSION = longPreferencesKey("cached_config_version")
 
-/**
- * Remote config CDN endpoints (ordered by priority).
- *
- * The app tries each URL in order. The first successful decrypt wins.
- * Add more GitHub raw / Cloudflare / jsDelivr mirrors here as you deploy them.
- *
- * URL format: must return `{ "v": 1, "d": "<base64-encrypted-blob>" }`
- */
 private val CDN_URLS = listOf(
-    // ── Primary: your GitHub Pages / Cloudflare Pages deploy ─────────────────
-    "https://cdn.jsdelivr.net/gh/yourusername/reelz-config@main/reelz_config.json",
-
-    // ── Mirror 1: Cloudflare R2 / Workers KV ─────────────────────────────────
-    "https://config.yourdomain.workers.dev/reelz_config.json",
-
-    // ── Mirror 2: Raw GitHub (rate-limited, last resort) ─────────────────────
-    "https://raw.githubusercontent.com/yourusername/reelz-config/main/reelz_config.json",
-
-    // ── Mirror 3: Cloudflare Pages ────────────────────────────────────────────
-    "https://reelz-config.pages.dev/reelz_config.json",
+    "https://raw.githubusercontent.com/Abbah77/reelz-config/main/reelz_config.json",
+    "https://falling-credit-954c.yakubuyakson77.workers.dev/",
+    "https://cdn.jsdelivr.net/gh/Abbah77/reelz-config@main/reelz_config.json",
 )
 
-/** How often we re-fetch (6 hours by default). */
-private const val REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000L
+/** Three-state readiness so the UI never races against DataStore. */
+enum class ConfigReadiness {
+    /** DataStore read not finished yet — show nothing, not even the offline screen. */
+    LOADING,
+    /** DataStore read done, no cache found — first install, needs internet. */
+    NO_CONFIG,
+    /** Config is in memory and ready — proceed normally. */
+    READY,
+}
 
 @Singleton
 class RemoteConfigRepository @Inject constructor(
@@ -59,10 +54,19 @@ class RemoteConfigRepository @Inject constructor(
     private val gson: Gson,
 ) {
     private val tag = "RemoteConfig"
+    private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // ── Observable state ──────────────────────────────────────────────────────
     private val _config = MutableStateFlow<RemoteConfig?>(null)
     val config: StateFlow<RemoteConfig?> = _config.asStateFlow()
+
+    /**
+     * Drives the splash/gate logic in MainActivity.
+     * Starts as LOADING so the UI shows nothing while DataStore is being read.
+     * Moves to NO_CONFIG or READY once the read completes.
+     * Can move back to READY at any time when sync() succeeds.
+     */
+    private val _readiness = MutableStateFlow(ConfigReadiness.LOADING)
+    val readiness: StateFlow<ConfigReadiness> = _readiness.asStateFlow()
 
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
@@ -75,20 +79,26 @@ class RemoteConfigRepository @Inject constructor(
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Called from ReelzApp.onCreate().
-     * Loads cached config instantly, then triggers a background refresh if stale.
+     * Called once from ReelzApp.onCreate().
+     * Reads local DataStore only — never touches the network.
+     * Sets readiness to READY or NO_CONFIG when done.
      */
-    suspend fun init() {
-        loadFromCache()
-        if (isCacheStale()) {
-            sync()
-        }
+    suspend fun loadLocalConfig() {
+        val found = loadFromCache()
+        _readiness.value = if (found) ConfigReadiness.READY else ConfigReadiness.NO_CONFIG
     }
 
     /**
-     * Force a background sync regardless of cache freshness.
-     * Tries each CDN in order; first success wins.
+     * Fetches config from the CDN and saves it locally.
+     * Called by [ConfigSyncWorker] for background refreshes, AND directly
+     * by the UI when the user taps "Try again" on the offline screen.
+     * Updates [_config] and [_readiness] on the calling coroutine — no WorkManager needed
+     * for the first-install path.
      */
+    fun syncInBackground() {
+        repoScope.launch { sync() }
+    }
+
     suspend fun sync() {
         _syncState.value = SyncState.Syncing
         Log.d(tag, "Starting config sync across ${CDN_URLS.size} CDN endpoints")
@@ -97,40 +107,48 @@ class RemoteConfigRepository @Inject constructor(
         for ((index, url) in CDN_URLS.withIndex()) {
             try {
                 Log.d(tag, "Trying CDN[$index]: $url")
-                val json = fetchRaw(url) ?: continue
-                val parsed = parseAndDecrypt(json) ?: continue
-
-                // Success
-                _config.value = parsed
-                persistToCache(parsed)
-                _syncState.value = SyncState.Success
-                Log.d(tag, "Config synced from CDN[$index] (version=${parsed.meta.configVersion})")
-                return
+                val (json, status) = fetchRaw(url)
+                if (json != null) {
+                    val parsed = parseConfig(json)
+                    if (parsed != null) {
+                        _config.value = parsed
+                        _readiness.value = ConfigReadiness.READY
+                        persistToCache(parsed)
+                        _syncState.value = SyncState.Success
+                        Log.d(tag, "Config synced from CDN[$index] (version=${parsed.meta.configVersion})")
+                        return
+                    } else {
+                        lastError = "Unable to load configuration. Please check your connection."
+                        Log.w(tag, "CDN[$index] parse failed for $url")
+                    }
+                } else {
+                    lastError = "Unable to reach server. Please check your connection."
+                    Log.w(tag, "CDN[$index] failed: HTTP $status for $url")
+                }
             } catch (e: Exception) {
-                lastError = e.message
-                Log.w(tag, "CDN[$index] failed: $lastError")
+                lastError = "Connection error. Please check your internet and try again."
+                Log.w(tag, "CDN[$index] exception: ${e.message}")
             }
         }
 
-        // All CDNs failed — stay on cached config
-        _syncState.value = SyncState.Error(lastError ?: "All CDN endpoints unreachable")
-        Log.e(tag, "Config sync failed across all CDNs. Using cached config.")
+        _syncState.value = SyncState.Error(lastError ?: "No internet connection. Please try again.")
+        Log.e(tag, "Config sync failed. Readiness stays: ${_readiness.value}")
+        // Do NOT change _readiness here — if we already have a cached config it stays READY;
+        // if this was a first-install retry it stays NO_CONFIG so the UI keeps showing the screen.
     }
 
-    // ── Convenience accessors (non-null, safe) ────────────────────────────────
+    // ── Convenience accessors ─────────────────────────────────────────────────
 
-    fun activeTmdbKey(): String =
+    fun activeTmdbKey(): String? =
         _config.value?.tmdb?.keys
             ?.filter { it.enabled }
             ?.maxByOrNull { it.weight }
             ?.key
-            ?: "1eef1496d59aa06f62e201ddce2741b4" // compile-time fallback
 
-    fun activeOsKey(): String =
+    fun activeOsKey(): String? =
         _config.value?.subtitles?.providers
             ?.firstOrNull { it.id == "opensubtitles" && it.enabled }
             ?.keys?.filter { it.enabled }?.maxByOrNull { it.weight }?.key
-            ?: "C8jjWBqYDBiM4U3QA9xJfmf8BiC2ISyq"
 
     fun activeStreamSources(): List<StreamSourceConfig> =
         _config.value?.streamSources
@@ -138,59 +156,83 @@ class RemoteConfigRepository @Inject constructor(
             ?.sortedBy { it.priority }
             ?: emptyList()
 
-    fun featureFlags(): FeatureFlags =
-        _config.value?.featureFlags ?: FeatureFlags()
-
-    fun meta(): MetaConfig =
-        _config.value?.meta ?: MetaConfig()
+    fun featureFlags(): FeatureFlags  = _config.value?.featureFlags ?: FeatureFlags()
+    fun meta(): MetaConfig            = _config.value?.meta ?: MetaConfig()
+    fun shortsConfig(): ShortsConfig  = _config.value?.shorts ?: ShortsConfig()
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private suspend fun fetchRaw(url: String): String? = withContext(Dispatchers.IO) {
-        val req = Request.Builder().url(url).build()
+    private suspend fun fetchRaw(url: String): Pair<String?, Int> = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+            .header("Accept", "application/json, text/plain, */*")
+            .build()
         http.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) return@withContext null
-            resp.body?.string()
+            Log.d(tag, "fetchRaw $url -> HTTP ${resp.code}")
+            if (!resp.isSuccessful) {
+                return@withContext Pair(null, resp.code)
+            }
+            val body = resp.body?.string()
+            Log.d(tag, "fetchRaw got ${body?.length ?: 0} chars from $url")
+
+            // Reject HTML responses (Cloudflare error pages, GitHub 404 HTML, etc.)
+            val trimmed = body?.trimStart() ?: ""
+            if (trimmed.startsWith("<!") || trimmed.startsWith("<html", ignoreCase = true)) {
+                Log.w(tag, "fetchRaw $url returned HTML not JSON — skipping")
+                return@withContext Pair(null, resp.code)
+            }
+
+            Pair(body, resp.code)
         }
     }
 
-    private fun parseAndDecrypt(rawJson: String): RemoteConfig? = runCatching {
-        val envelope = gson.fromJson(rawJson, EncryptedConfigEnvelope::class.java)
-        val plainJson = ConfigCrypto.decrypt(envelope.data) ?: return null
-        gson.fromJson(plainJson, RemoteConfig::class.java)
-    }.getOrElse {
-        Log.e(tag, "Parse/decrypt error: ${it.message}")
-        null
+    private val safeGson = GsonBuilder().serializeNulls().setLenient().create()
+
+    private var _lastParseError: String? = null
+
+    private fun parseConfig(rawJson: String): RemoteConfig? {
+        return try {
+            val cleanJson = rawJson.trimStart('\uFEFF', ' ', '\n', '\r', '\t')
+            val result = safeGson.fromJson(cleanJson, RemoteConfig::class.java)
+            if (result == null) {
+                _lastParseError = "Gson returned null for valid JSON"
+                return null
+            }
+            _lastParseError = null
+            result
+        } catch (e: Exception) {
+            Log.e(tag, "parseConfig exception: ${e.javaClass.simpleName}: ${e.message}")
+            null
+        }
     }
 
-    private suspend fun loadFromCache() {
+    private suspend fun loadFromCache(): Boolean {
         val prefs = context.configDataStore.data.first()
-        val json  = prefs[KEY_CACHED_CONFIG] ?: return
-        runCatching {
-            _config.value = gson.fromJson(json, RemoteConfig::class.java)
-            Log.d(tag, "Loaded config from cache (version=${_config.value?.meta?.configVersion})")
+        val json  = prefs[KEY_CACHED_CONFIG] ?: return false
+        return try {
+            _config.value = safeGson.fromJson(json, RemoteConfig::class.java)
+            Log.d(tag, "Loaded config from local cache (version=${_config.value?.meta?.configVersion})")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to load from cache: ${e.message}")
+            false
         }
     }
 
     private suspend fun persistToCache(cfg: RemoteConfig) {
-        val json = gson.toJson(cfg)
+        val json = safeGson.toJson(cfg)
         context.configDataStore.edit { prefs ->
             prefs[KEY_CACHED_CONFIG]  = json
             prefs[KEY_LAST_FETCH_MS]  = System.currentTimeMillis()
             prefs[KEY_CONFIG_VERSION] = cfg.meta.configVersion.toLong()
         }
     }
-
-    private suspend fun isCacheStale(): Boolean {
-        val prefs       = context.configDataStore.data.first()
-        val lastFetch   = prefs[KEY_LAST_FETCH_MS] ?: 0L
-        return System.currentTimeMillis() - lastFetch > REFRESH_INTERVAL_MS
-    }
 }
 
 sealed class SyncState {
-    object Idle     : SyncState()
-    object Syncing  : SyncState()
-    object Success  : SyncState()
+    object Idle    : SyncState()
+    object Syncing : SyncState()
+    object Success : SyncState()
     data class Error(val message: String) : SyncState()
 }

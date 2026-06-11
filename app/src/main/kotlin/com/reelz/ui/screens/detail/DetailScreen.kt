@@ -1,6 +1,9 @@
 package com.reelz.ui.screens.detail
 
 import android.content.Intent
+import com.reelz.ads.AdEngine
+import com.reelz.ads.DetailBannerAd
+import com.reelz.ads.routeAdUrl
 import androidx.compose.animation.*
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -116,6 +119,7 @@ class DetailViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val downloadRepo: DownloadRepository,
     private val engine: StreamEngine,
+    private val adEngine: com.reelz.ads.AdEngine,
     @javax.inject.Named("download") private val httpClient: okhttp3.OkHttpClient,
 ) : ViewModel() {
 
@@ -173,6 +177,8 @@ class DetailViewModel @Inject constructor(
     fun load(tmdbId: Int, mediaType: MediaType) {
         viewModelScope.launch {
             _ui.update { it.copy(isLoading = true, error = null) }
+            // Count content opens for frequency cap gate
+            adEngine.incrementContentOpen()
             try {
                 // Stage 1 — fast fetch (no append_to_response). Screen appears immediately.
                 val inWatchlist = repo.isInWatchlist(tmdbId)
@@ -419,6 +425,7 @@ fun DetailScreen(
     tmdbId: Int,
     mediaType: MediaType,
     nav: NavController,
+    adEngine: AdEngine,
     vm: DetailViewModel = hiltViewModel(),
 ) {
     val ui  by vm.ui.collectAsState()
@@ -428,25 +435,40 @@ fun DetailScreen(
 
     fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
         val d = ui.detail ?: return
-        // Check engine's live prefetchState first — handles the race where the
-        // subscriber coroutine has not updated preResolvedStream yet but the engine
-        // already finished. Either path avoids a second resolve() in the player.
-        val readyStream = vm.preResolvedStream
-            ?: (vm.enginePrefetchState.value as? com.reelz.scanner.PrefetchState.Ready)?.result
-        ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
-            putExtra("tmdbId",     d.tmdbId)
-            putExtra("mediaType",  d.mediaType.name)
-            putExtra("season",     season)
-            putExtra("episode",    episode)
-            putExtra("title",      if (epName.isNotBlank()) epName else d.title)
-            putExtra("posterPath", d.posterPath)
-            readyStream?.let { stream ->
-                putExtra("streamUrl",     stream.url)
-                putExtra("streamIsHls",   stream.isHls)
-                putExtra("streamReferer", stream.referer)
-                putExtra("streamOrigin",  stream.origin)
-            }
-        })
+
+        // Helper so both the ad-dismissed path and the direct path share one call-site
+        fun startPlayerActivity() {
+            // Check engine's live prefetchState first — handles the race where the
+            // subscriber coroutine has not updated preResolvedStream yet but the engine
+            // already finished. Either path avoids a second resolve() in the player.
+            val readyStream = vm.preResolvedStream
+                ?: (vm.enginePrefetchState.value as? com.reelz.scanner.PrefetchState.Ready)?.result
+            ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
+                putExtra("tmdbId",     d.tmdbId)
+                putExtra("mediaType",  d.mediaType.name)
+                putExtra("season",     season)
+                putExtra("episode",    episode)
+                putExtra("title",      if (epName.isNotBlank()) epName else d.title)
+                putExtra("posterPath", d.posterPath)
+                readyStream?.let { stream ->
+                    putExtra("streamUrl",     stream.url)
+                    putExtra("streamIsHls",   stream.isHls)
+                    putExtra("streamReferer", stream.referer)
+                    putExtra("streamOrigin",  stream.origin)
+                }
+            })
+        }
+
+        adEngine.incrementPlayTap()
+        if (adEngine.shouldShowInterstitial()) {
+            adEngine.showInterstitial(
+                activity    = ctx as android.app.Activity,
+                onDismissed = { startPlayerActivity() },
+                onFailed    = { startPlayerActivity() },
+            )
+        } else {
+            startPlayerActivity()
+        }
     }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
@@ -471,6 +493,12 @@ fun DetailScreen(
                 },
             )
         }
+
+        // ── Banner ad — always visible at bottom of DetailScreen ─────────
+        DetailBannerAd(
+            adUnitId = com.reelz.BuildConfig.AD_BANNER_ID,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+        )
 
         // ── Download bottom sheet ──────────────────────────────────────
         if (ui.showDownloadSheet) {

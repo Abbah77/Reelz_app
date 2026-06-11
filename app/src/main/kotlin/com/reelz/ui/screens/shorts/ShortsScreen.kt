@@ -1,7 +1,11 @@
 package com.reelz.ui.screens.shorts
 
+// Ad imports added for native ad injection
+
 import android.view.ViewGroup
 import androidx.annotation.OptIn
+import com.reelz.ads.AdEngine
+import com.reelz.ads.ShortsNativeAdPage
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -44,6 +48,8 @@ import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.reelz.data.repository.MediaRepository
+import com.reelz.remoteconfig.RemoteConfigRepository
+import com.reelz.remoteconfig.ShortCategory
 import com.reelz.scanner.StreamHeaders
 import com.reelz.ui.components.CinematicSpinner
 import com.reelz.ui.theme.*
@@ -84,25 +90,8 @@ data class ShortVideo(
 enum class FeedMode { FOR_YOU, DISCOVERY }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Subreddit categories  (only used in DISCOVERY mode)
+// Subreddit categories and For You subs are now driven entirely by remote config.
 // ─────────────────────────────────────────────────────────────────────────────
-
-private data class Category(val label: String, val subs: String)
-
-private val CATEGORIES = listOf(
-    Category("🔥 Hot",        "nextfuckinglevel+oddlysatisfying+Unexpected+interestingasfuck+BeAmazed"),
-    Category("😂 Funny",      "funny+facepalm+Whatcouldgowrong+therewasanattempt"),
-    Category("😮 WOW",        "nextfuckinglevel+BeAmazed+interestingasfuck+Damnthatsinteresting"),
-    Category("😌 Satisfying", "oddlysatisfying+ASMR+powerwashingporn+Perfectfit"),
-    Category("🐾 Animals",    "aww+AnimalsBeingBros+rarepuppers+NatureIsFuckingLit"),
-    Category("⚽ Sports",     "sports+soccer+nba+MMA+skateboarding"),
-    Category("🎨 Art",        "Art+blackmagicfuckery+specializedtools+crafts"),
-    Category("🌍 Nature",     "NatureIsFuckingLit+EarthPorn+interestingasfuck+Outdoors"),
-)
-
-// For You pool — wide mix, shuffled for addictive randomness
-private val FOR_YOU_SUBS =
-    "nextfuckinglevel+oddlysatisfying+funny+aww+BeAmazed+interestingasfuck+Unexpected+Damnthatsinteresting+sports+NatureIsFuckingLit"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Icons (unchanged)
@@ -205,12 +194,31 @@ private val IconClose: ImageVector get() = ImageVector.Builder("Close", 24.dp, 2
 // ─────────────────────────────────────────────────────────────────────────────
 
 @HiltViewModel
+// ── Shorts feed item — either a real video or an ad slot ─────────────────────
+sealed class ShortsItem {
+    data class Video(val video: com.reelz.data.model.ShortVideo) : ShortsItem()
+    object AdSlot : ShortsItem()
+}
+
+// Helper: merge videos with ad slots every 5 videos
+private fun buildShortsItemList(videos: List<com.reelz.data.model.ShortVideo>): List<ShortsItem> = buildList {
+    videos.forEachIndexed { index, video ->
+        add(ShortsItem.Video(video))
+        if ((index + 1) % 5 == 0) add(ShortsItem.AdSlot)
+    }
+}
+
 class ShortsViewModel @Inject constructor(
     private val repo: MediaRepository,
+    private val remoteConfig: RemoteConfigRepository,
 ) : ViewModel() {
 
-    // FIX 1+2: Real browser UA, old.reddit.com base URL
-    private val REDDIT_BASE = "https://old.reddit.com"
+    // Reddit base URL and feed config come from remote config; safe defaults are
+    // baked into ShortsConfig so this works even before a sync completes.
+    private val shortsConfig get() = remoteConfig.shortsConfig()
+    private val redditBase   get() = shortsConfig.redditBase
+    private val forYouSubs   get() = shortsConfig.forYouSubs
+    private val categories   get() = shortsConfig.categories
 
     private val okHttp = OkHttpClient.Builder()
         .addInterceptor { chain ->
@@ -243,6 +251,8 @@ class ShortsViewModel @Inject constructor(
         val discLoading: Boolean = false,
         val discLoadingMore: Boolean = false,
         val selectedCategory: Int = 0,
+        // categories driven by remote config
+        val categories: List<ShortCategory> = emptyList(),
         // error
         val error: String? = null,
         // refresh
@@ -261,7 +271,17 @@ class ShortsViewModel @Inject constructor(
     val liked: StateFlow<Set<String>> = _liked.asStateFlow()
     val saved: StateFlow<Set<String>> = _saved.asStateFlow()
 
-    init { loadForYou() }
+    init {
+        // Seed categories from config (uses safe defaults if config not yet loaded)
+        _ui.update { it.copy(categories = categories) }
+        // Re-sync categories whenever the config updates (e.g. after first sync completes)
+        viewModelScope.launch {
+            remoteConfig.config.collect {
+                _ui.update { s -> s.copy(categories = categories) }
+            }
+        }
+        loadForYou()
+    }
 
     fun refresh() {
         _ui.update { it.copy(isRefreshing = true, error = null) }
@@ -283,8 +303,7 @@ class ShortsViewModel @Inject constructor(
     private fun loadForYou(after: String? = null) {
         val sorts = listOf("hot", "top", "new", "rising")
         val sort  = sorts.random()
-        // FIX 1: old.reddit.com
-        val url = "$REDDIT_BASE/r/$FOR_YOU_SUBS/$sort.json?limit=50${if (after != null) "&after=$after" else ""}"
+        val url = "$redditBase/r/$forYouSubs/$sort.json?limit=50${if (after != null) "&after=$after" else ""}"
         if (after == null) _ui.update { it.copy(forYouLoading = true, error = null) }
         else _ui.update { it.copy(forYouLoadingMore = true) }
         viewModelScope.launch {
@@ -304,9 +323,8 @@ class ShortsViewModel @Inject constructor(
     }
 
     private fun loadDiscovery(categoryIndex: Int, after: String? = null) {
-        val subs = CATEGORIES[categoryIndex].subs
-        // FIX 1: old.reddit.com
-        val url  = "$REDDIT_BASE/r/$subs/hot.json?limit=25${if (after != null) "&after=$after" else ""}"
+        val subs = categories[categoryIndex].subs
+        val url  = "$redditBase/r/$subs/hot.json?limit=25${if (after != null) "&after=$after" else ""}"
         if (after == null) _ui.update { it.copy(discLoading = true, error = null) }
         else _ui.update { it.copy(discLoadingMore = true) }
         viewModelScope.launch {
@@ -353,10 +371,9 @@ class ShortsViewModel @Inject constructor(
         }
         _ui.update { it.copy(isSearching = true, searchQuery = query, error = null) }
         val extra = if (_ui.value.feedMode == FeedMode.DISCOVERY) {
-            "+subreddit:${CATEGORIES[_ui.value.selectedCategory].subs.replace("+", " OR subreddit:")}"
+            "+subreddit:${categories[_ui.value.selectedCategory].subs.replace("+", " OR subreddit:")}"
         } else ""
-        // FIX 1: old.reddit.com for search too
-        val url = "$REDDIT_BASE/search.json?q=${query.trim().replace(" ", "+")}$extra&type=link&sort=relevance&limit=25"
+        val url = "$redditBase/search.json?q=${query.trim().replace(" ", "+")}$extra&type=link&sort=relevance&limit=25"
         viewModelScope.launch {
             val result = fetchReddit(url)
             val mode   = _ui.value.feedMode
@@ -460,7 +477,7 @@ class ShortsViewModel @Inject constructor(
 
 @OptIn(UnstableApi::class)
 @Composable
-fun ShortsScreen(nav: NavController, vm: ShortsViewModel = hiltViewModel()) {
+fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = hiltViewModel()) {
     val ui    by vm.ui.collectAsState()
     val liked by vm.liked.collectAsState()
     val saved by vm.saved.collectAsState()
@@ -514,8 +531,12 @@ fun ShortsScreen(nav: NavController, vm: ShortsViewModel = hiltViewModel()) {
     var showSearch by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
 
-    val forYouPager = rememberPagerState { ui.forYouVideos.size.coerceAtLeast(1) }
-    val discPager   = rememberPagerState { ui.discVideos.size.coerceAtLeast(1) }
+    // Build ShortsItem lists (videos + ad slots every 5 videos)
+    val forYouItems by remember(ui.forYouVideos) { derivedStateOf { buildShortsItemList(ui.forYouVideos) } }
+    val discItems   by remember(ui.discVideos)   { derivedStateOf { buildShortsItemList(ui.discVideos) } }
+
+    val forYouPager = rememberPagerState { forYouItems.size.coerceAtLeast(1) }
+    val discPager   = rememberPagerState { discItems.size.coerceAtLeast(1) }
     val activePager = if (ui.feedMode == FeedMode.FOR_YOU) forYouPager else discPager
     val currentPage = activePager.currentPage
 
@@ -536,12 +557,22 @@ fun ShortsScreen(nav: NavController, vm: ShortsViewModel = hiltViewModel()) {
     // Runs whenever the page or video list changes.
     // 1. Loads the current page into the active player (plays immediately)
     // 2. Loads the next page into the preload player (buffers silently)
+    // For preloading, extract only real video items from the active item list
+    val activeItems = if (ui.feedMode == FeedMode.FOR_YOU) forYouItems else discItems
+    val activeVideosOnly = remember(activeItems) {
+        activeItems.filterIsInstance<ShortsItem.Video>().map { it.video }
+    }
+
     LaunchedEffect(currentPage, ui.videos, ui.feedMode) {
-        val videos = ui.videos
+        val videos = activeVideosOnly
         if (videos.isEmpty()) return@LaunchedEffect
 
-        val current = videos.getOrNull(currentPage) ?: return@LaunchedEffect
-        val next    = videos.getOrNull(currentPage + 1)
+        // Map pager page to video index (skip ad slots in pager position)
+        val currentItem = activeItems.getOrNull(currentPage)
+        val current = (currentItem as? ShortsItem.Video)?.video ?: return@LaunchedEffect
+        // Find next video (skip ad slots)
+        val nextVideo = activeItems.drop(currentPage + 1).filterIsInstance<ShortsItem.Video>().firstOrNull()?.video
+        val next = nextVideo
 
         // Determine if we need to swap (the preload player already has next ready)
         // On first load or after a list refresh, always set active player directly.
@@ -672,18 +703,21 @@ fun ShortsScreen(nav: NavController, vm: ShortsViewModel = hiltViewModel()) {
                         .then(if (ui.feedMode != FeedMode.FOR_YOU) Modifier.alpha(0f) else Modifier),
                     userScrollEnabled = ui.feedMode == FeedMode.FOR_YOU,
                 ) { page ->
-                    val video = ui.forYouVideos.getOrNull(page) ?: return@VerticalPager
-                    ShortVideoPage(
-                        video         = video,
-                        activePlayer  = activePlayer,
-                        isActive      = page == forYouPager.currentPage && ui.feedMode == FeedMode.FOR_YOU,
-                        isMuted       = isMuted,
-                        isLiked       = video.id in liked,
-                        isSaved       = video.id in saved,
-                        onLike        = { vm.toggleLike(video.id) },
-                        onSave        = { vm.toggleSave(video.id) },
-                        onMute        = { isMuted = !isMuted },
-                    )
+                    when (val item = forYouItems.getOrNull(page)) {
+                        is ShortsItem.AdSlot  -> ShortsNativeAdPage(adEngine = adEngine)
+                        is ShortsItem.Video   -> ShortVideoPage(
+                            video         = item.video,
+                            activePlayer  = activePlayer,
+                            isActive      = page == forYouPager.currentPage && ui.feedMode == FeedMode.FOR_YOU,
+                            isMuted       = isMuted,
+                            isLiked       = item.video.id in liked,
+                            isSaved       = item.video.id in saved,
+                            onLike        = { vm.toggleLike(item.video.id) },
+                            onSave        = { vm.toggleSave(item.video.id) },
+                            onMute        = { isMuted = !isMuted },
+                        )
+                        null -> Unit
+                    }
                 }
 
                 // Discovery pager — layered on top when active
@@ -695,18 +729,21 @@ fun ShortsScreen(nav: NavController, vm: ShortsViewModel = hiltViewModel()) {
                             .then(if (ui.feedMode != FeedMode.DISCOVERY) Modifier.alpha(0f) else Modifier),
                         userScrollEnabled = ui.feedMode == FeedMode.DISCOVERY,
                     ) { page ->
-                        val video = ui.discVideos.getOrNull(page) ?: return@VerticalPager
-                        ShortVideoPage(
-                            video         = video,
-                            activePlayer  = activePlayer,
-                            isActive      = page == discPager.currentPage && ui.feedMode == FeedMode.DISCOVERY,
-                            isMuted       = isMuted,
-                            isLiked       = video.id in liked,
-                            isSaved       = video.id in saved,
-                            onLike        = { vm.toggleLike(video.id) },
-                            onSave        = { vm.toggleSave(video.id) },
-                            onMute        = { isMuted = !isMuted },
-                        )
+                        when (val item = discItems.getOrNull(page)) {
+                            is ShortsItem.AdSlot -> ShortsNativeAdPage(adEngine = adEngine)
+                            is ShortsItem.Video  -> ShortVideoPage(
+                                video         = item.video,
+                                activePlayer  = activePlayer,
+                                isActive      = page == discPager.currentPage && ui.feedMode == FeedMode.DISCOVERY,
+                                isMuted       = isMuted,
+                                isLiked       = item.video.id in liked,
+                                isSaved       = item.video.id in saved,
+                                onLike        = { vm.toggleLike(item.video.id) },
+                                onSave        = { vm.toggleSave(item.video.id) },
+                                onMute        = { isMuted = !isMuted },
+                            )
+                            null -> Unit
+                        }
                     }
                 }
             }
@@ -812,7 +849,7 @@ fun ShortsScreen(nav: NavController, vm: ShortsViewModel = hiltViewModel()) {
                     contentPadding        = PaddingValues(horizontal = 14.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(CATEGORIES.size) { i ->
+                    items(ui.categories.size) { i ->
                         val selected = i == ui.selectedCategory
                         val chipScale by animateFloatAsState(if (selected) 1.04f else 1f, spring(0.6f, 400f), label = "cs")
                         Box(
@@ -829,7 +866,7 @@ fun ShortsScreen(nav: NavController, vm: ShortsViewModel = hiltViewModel()) {
                             Alignment.Center,
                         ) {
                             Text(
-                                CATEGORIES[i].label,
+                                ui.categories[i].label,
                                 color      = if (selected) Color.White else White60,
                                 fontSize   = 12.sp,
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,

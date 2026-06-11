@@ -44,6 +44,17 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.ui.PlayerView
+import com.google.ads.interactivemedia.v3.api.AdErrorEvent
+import com.google.ads.interactivemedia.v3.api.AdEvent
+import com.google.ads.interactivemedia.v3.api.AdsLoader
+import com.google.ads.interactivemedia.v3.api.AdsManagerLoadedEvent
+import com.google.ads.interactivemedia.v3.api.AdsRequest
+import com.google.ads.interactivemedia.v3.api.ImaSdkFactory
+import com.google.ads.interactivemedia.v3.api.ImaSdkSettings
+import com.google.ads.interactivemedia.v3.api.player.VideoAdPlayer
+import com.google.ads.interactivemedia.v3.api.player.VideoProgressUpdate
+import com.reelz.ads.AdEngine
+import com.reelz.ads.ImaPreRollView
 import com.reelz.data.model.MediaType
 import com.reelz.ui.components.*
 import com.reelz.ui.theme.*
@@ -500,6 +511,19 @@ fun PlayerScreen(
                 Icon(IconWifi, null, tint = Warning, modifier = Modifier.size(16.dp))
                 Text("No internet connection", color = Warning, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
+        }
+
+        // ── IMA Pre-roll ad overlay ───────────────────────────────────────
+        // Rendered as an AndroidView on top of ExoPlayer while isPreRollPlaying = true.
+        // When the ad finishes or errors we call vm.preRollCompleted() which clears the
+        // flag and starts actual content playback.
+        if (ui.isPreRollPlaying && ui.preRollVastUrl != null) {
+            ImaPreRollView(
+                vastUrl         = ui.preRollVastUrl,
+                onAdCompleted   = { vm.preRollCompleted() },
+                onAdError       = { vm.preRollCompleted() },
+                modifier        = Modifier.fillMaxSize(),
+            )
         }
 
         // ── Buffering / Resolving overlay ─────────────────────────────────

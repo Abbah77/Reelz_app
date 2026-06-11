@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import com.reelz.data.model.MediaType
 import com.reelz.ui.components.*
+import com.reelz.ads.AdEngine
 import com.reelz.ui.screens.browse.BrowseScreen
 import com.reelz.ui.screens.browse.BrowseViewModel
 import com.reelz.ui.screens.shorts.ShortsScreen
@@ -68,7 +69,7 @@ val navTabs = listOf(
 )
 
 @Composable
-fun AppNavigation() {
+fun AppNavigation(adEngine: AdEngine) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
@@ -157,8 +158,8 @@ fun AppNavigation() {
             popExitTransition   = { fadeOut(tween(200)) + scaleOut(tween(200), 0.96f) },
         ) {
             // Pass shared vm + listState so home button can control both
-            composable(Route.Browse.path)    { BrowseScreen(nav, browseVm, browseListState) }
-            composable(Route.Shorts.path)    { ShortsScreen(nav, shortsVm) }
+            composable(Route.Browse.path)    { BrowseScreen(nav, adEngine, browseVm, browseListState) }
+            composable(Route.Shorts.path)    { ShortsScreen(nav, adEngine, shortsVm) }
             composable(Route.Downloads.path) { DownloadsScreen(nav) }
             composable(Route.Transfer.path)  { TransferScreen() }
             composable(Route.Profile.path)   { ProfileScreen(nav) }
@@ -172,7 +173,7 @@ fun AppNavigation() {
             ) { back ->
                 val id   = back.arguments?.getInt("tmdbId") ?: return@composable
                 val type = if (back.arguments?.getString("mediaType") == "TV") MediaType.TV else MediaType.MOVIE
-                DetailScreen(tmdbId = id, mediaType = type, nav = nav)
+                DetailScreen(tmdbId = id, mediaType = type, nav = nav, adEngine = adEngine)
             }
         }
     }
