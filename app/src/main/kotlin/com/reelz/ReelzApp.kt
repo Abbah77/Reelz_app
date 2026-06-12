@@ -33,12 +33,15 @@ class ReelzApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize ad engine — starts SDK + preloads all ad formats
-        adEngine.initialize(this)
-
-        // Load cache so UI is ready instantly on launch.
+        // Load cache first so ad config (sdk key, toggles, ad unit ids) is
+        // available before the ad SDK initializes.
         appScope.launch {
             remoteConfig.loadLocalConfig()
+
+            // Initialize ad engine — starts SDK + preloads all ad formats.
+            // AdEngine itself checks ads.enabled and the AppLovin SDK key,
+            // so this is a safe no-op until both are configured.
+            adEngine.initialize(this@ReelzApp)
         }
 
         // Periodic background refresh every 6 hours.

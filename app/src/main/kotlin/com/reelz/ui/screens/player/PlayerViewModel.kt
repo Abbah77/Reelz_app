@@ -706,7 +706,9 @@ class PlayerViewModel @Inject constructor(
         // ── Pre-roll gate ─────────────────────────────────────────────────────
         val minutesSince = System.currentTimeMillis() / 60_000L - lastPreRollTimeMinutes
         val isMovie      = type == MediaType.MOVIE
-        if (VastTagProvider.shouldShowPreRoll(
+        val vastUrl      = adEngine.vastTagUrlOrNull()
+        if (vastUrl != null && VastTagProvider.shouldShowPreRoll(
+                config                  = adEngine.prerollConfig(),
                 isMovie                 = isMovie,
                 isFirstPlayThisSession  = isFirstPlayThisSession,
                 minutesSinceLastPreRoll = minutesSince,
@@ -717,7 +719,7 @@ class PlayerViewModel @Inject constructor(
         ) {
             lastPreRollTimeMinutes = System.currentTimeMillis() / 60_000L
             isFirstPlayThisSession = false
-            _ui.update { it.copy(preRollVastUrl = VastTagProvider.getPreRollVastUrl(), isPreRollPlaying = true) }
+            _ui.update { it.copy(preRollVastUrl = vastUrl, isPreRollPlaying = true) }
             // Actual playback continues after IMA fires preRollCompleted() from the Activity
             // — resolveAndPlay is re-entered with isFirstPlayThisSession already false.
             return

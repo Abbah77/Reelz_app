@@ -160,6 +160,16 @@ class RemoteConfigRepository @Inject constructor(
     fun meta(): MetaConfig            = _config.value?.meta ?: MetaConfig()
     fun shortsConfig(): ShortsConfig  = _config.value?.shorts ?: ShortsConfig()
 
+    fun adsConfig(): AdsConfig = _config.value?.ads ?: AdsConfig()
+
+    /** Master switch: both the ads block and the legacy feature flag must allow ads. */
+    fun areAdsEnabled(): Boolean =
+        adsConfig().enabled && featureFlags().adsEnabled
+
+    /** Currently active (first enabled) ad network/mediation config, if any. */
+    fun activeAdNetwork(): AdNetwork? =
+        adsConfig().networks.firstOrNull { it.enabled }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private suspend fun fetchRaw(url: String): Pair<String?, Int> = withContext(Dispatchers.IO) {

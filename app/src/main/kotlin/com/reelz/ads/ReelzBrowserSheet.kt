@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.reelz.ui.theme.Bg
-import com.reelz.ui.theme.Surface
+import com.reelz.ui.theme.BgSurface
 import com.reelz.ui.theme.White60
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ fun ReelzBrowserSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState       = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor   = Surface,
+        containerColor   = BgSurface,
         dragHandle       = null,
         modifier         = Modifier.fillMaxHeight(0.92f),
     ) {

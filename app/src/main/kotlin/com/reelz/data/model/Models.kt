@@ -93,6 +93,23 @@ data class CastMember(
 
 data class HomeSection(val title: String, val items: List<Media>)
 
+// ── Shorts ────────────────────────────────────────────────────────────────────
+data class ShortVideo(
+    val id: String,
+    val title: String,
+    val author: String,
+    val subreddit: String,
+    val hlsUrl: String,
+    val audioUrl: String?,
+    val fallbackUrl: String,
+    val thumbnail: String,
+    val ups: Int,
+    val duration: Int,
+    val hasAudio: Boolean,
+    val width: Int,
+    val height: Int,
+)
+
 // ── Stream ────────────────────────────────────────────────────────────────────
 data class StreamResult(
     val url: String,

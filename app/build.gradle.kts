@@ -17,23 +17,13 @@ android {
         versionCode    = 2
         versionName    = "2.0.0"
 
-        // ── Compile-time fallback keys (used only before remote config loads) ──
-        // Real keys come from the encrypted remote config JSON hosted on your CDNs.
-        buildConfigField("String", "TMDB_KEY_FALLBACK",        "\"1eef1496d59aa06f62e201ddce2741b4\"")
+        // ── Compile-time constants ──────────────────────────────────────────
+        // API keys, ad unit IDs, the AppLovin SDK key, and the VAST tag URL are
+        // NOT compiled in — they are loaded entirely from the remote config
+        // (reelz_config.json) via RemoteConfigRepository / AdEngine at runtime.
         buildConfigField("String", "TMDB_IMG_W500",            "\"https://image.tmdb.org/t/p/w500\"")
         buildConfigField("String", "TMDB_IMG_W342",            "\"https://image.tmdb.org/t/p/w342\"")
         buildConfigField("String", "TMDB_IMG_ORIGINAL",        "\"https://image.tmdb.org/t/p/original\"")
-        buildConfigField("String", "OS_API_KEY_FALLBACK",      "\"C8jjWBqYDBiM4U3QA9xJfmf8BiC2ISyq\"")
-        // Ad IDs: still in BuildConfig (ad SDK needs them at init, before config loads)
-        // Ad unit IDs — replace with real IDs from your AppLovin MAX dashboard before release
-        // Test IDs below work for development builds only
-        buildConfigField("String", "AD_BANNER_ID",       "\"YOUR_MAX_BANNER_AD_UNIT_ID\"")
-        buildConfigField("String", "AD_INTERSTITIAL_ID", "\"YOUR_MAX_INTERSTITIAL_AD_UNIT_ID\"")
-        buildConfigField("String", "AD_REWARDED_ID",     "\"YOUR_MAX_REWARDED_AD_UNIT_ID\"")
-        buildConfigField("String", "AD_NATIVE_ID",       "\"YOUR_MAX_NATIVE_AD_UNIT_ID\"")
-        buildConfigField("String", "AD_APP_OPEN_ID",     "\"YOUR_MAX_APP_OPEN_AD_UNIT_ID\"")
-        // VAST tag URL from your ad network (Pangle / AppLovin MAX)
-        buildConfigField("String", "AD_VAST_TAG_URL",    "\"YOUR_VAST_TAG_URL\"")
 
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {

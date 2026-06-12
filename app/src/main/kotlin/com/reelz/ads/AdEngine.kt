@@ -13,7 +13,9 @@ import com.applovin.mediation.ads.MaxInterstitialAd
 import com.applovin.mediation.ads.MaxRewardedAd
 import com.applovin.sdk.AppLovinSdk
 import com.applovin.sdk.AppLovinSdkConfiguration
-import com.reelz.BuildConfig
+import com.applovin.sdk.AppLovinSdkSettings
+import com.reelz.remoteconfig.AdNetwork
+import com.reelz.remoteconfig.RemoteConfigRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,16 +23,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Frequency cap constants
-// ─────────────────────────────────────────────────────────────────────────────
-
-private const val MIN_MS_BETWEEN_INTERSTITIALS = 180_000L   // 3 minutes
-private const val MAX_INTERSTITIALS_PER_SESSION = 6
-private const val CONTENT_OPENS_BEFORE_FIRST_AD = 2
-private const val INTERSTITIAL_EVERY_N_PLAYS     = 2
-private const val RETRY_DELAY_MS                 = 30_000L
 
 private const val TAG = "AdEngine"
 
@@ -53,11 +45,16 @@ sealed class NativeAdState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AdEngine
+// AdEngine — every ID, toggle and frequency value is read live from
+// RemoteConfigRepository. Nothing about ad networks or ad unit IDs is
+// hard-coded; the config has full authority, including the master on/off
+// switch (ads.enabled) and per-placement toggles (ads.placements.*).
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Singleton
-class AdEngine @Inject constructor() {
+class AdEngine @Inject constructor(
+    private val remoteConfig: RemoteConfigRepository,
+) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -85,24 +82,57 @@ class AdEngine @Inject constructor() {
     private lateinit var appContext: Context
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Config helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun adsConfig() = remoteConfig.adsConfig()
+    private fun network(): AdNetwork? = remoteConfig.activeAdNetwork()
+
+    /** True only when the remote config master switch AND feature flag both allow ads. */
+    private fun adsEnabled(): Boolean = remoteConfig.areAdsEnabled()
+
+    private fun interstitialAdUnitId(): String = network()?.interstitialId.orEmpty()
+    private fun rewardedAdUnitId(): String     = network()?.rewardedId.orEmpty()
+    private fun appOpenAdUnitId(): String      = network()?.appOpenId.orEmpty()
+    private fun bannerAdUnitId(): String       = network()?.bannerId.orEmpty()
+    private fun nativeAdUnitId(): String       = network()?.nativeId.orEmpty()
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Init
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Initializes the mediation SDK and preloads ad formats.
+     * No-ops entirely if [adsEnabled] is false or no SDK key is configured yet —
+     * safe to call even before the mediation SDK key has been set.
+     */
     fun initialize(context: Context) {
         appContext = context.applicationContext
-        AppLovinSdk.getInstance(appContext).apply {
-            mediationProvider = "max"
-            initializeSdk { _: AppLovinSdkConfiguration ->
-                Log.d(TAG, "AppLovin SDK initialized")
-                preloadAll()
-            }
+
+        if (!adsEnabled()) {
+            Log.d(TAG, "Ads disabled via remote config — skipping SDK init")
+            return
+        }
+
+        val sdkKey = adsConfig().applovinSdkKey
+        if (sdkKey.isBlank()) {
+            Log.d(TAG, "No mediation SDK key configured yet — skipping SDK init")
+            return
+        }
+
+        val sdk = AppLovinSdk.getInstance(sdkKey, AppLovinSdkSettings(appContext), appContext)
+        sdk.mediationProvider = adsConfig().mediationProvider.ifBlank { "max" }
+        sdk.initializeSdk { _: AppLovinSdkConfiguration ->
+            Log.d(TAG, "Mediation SDK initialized")
+            preloadAll()
         }
     }
 
     private fun preloadAll() {
-        preloadInterstitial()
-        preloadRewarded()
-        preloadAppOpen()
+        val placements = adsConfig().placements
+        if (placements.interstitialEnabled) preloadInterstitial()
+        // preloadRewarded() is called from setActivity() once an Activity is available
+        if (placements.appOpenEnabled) preloadAppOpen()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -110,7 +140,11 @@ class AdEngine @Inject constructor() {
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun preloadInterstitial() {
-        val ad = MaxInterstitialAd(BuildConfig.AD_INTERSTITIAL_ID, appContext)
+        if (!adsEnabled() || !adsConfig().placements.interstitialEnabled) return
+        val unitId = interstitialAdUnitId()
+        if (unitId.isBlank()) return
+
+        val ad = MaxInterstitialAd(unitId, appContext)
         ad.setListener(object : MaxAdListener {
             override fun onAdLoaded(a: MaxAd) {
                 loadedInterstitial = ad
@@ -119,8 +153,8 @@ class AdEngine @Inject constructor() {
             }
             override fun onAdLoadFailed(id: String, err: MaxError) {
                 isInterstitialReady = false
-                Log.w(TAG, "Interstitial failed: ${err.message}, retrying in 30s")
-                scope.launch { delay(RETRY_DELAY_MS); preloadInterstitial() }
+                Log.w(TAG, "Interstitial failed: ${err.message}, retrying")
+                scope.launch { delay(adsConfig().interstitialFrequency.retryDelayMs); preloadInterstitial() }
             }
             override fun onAdDisplayed(a: MaxAd)       {}
             override fun onAdHidden(a: MaxAd)           { preloadInterstitial() }
@@ -130,8 +164,20 @@ class AdEngine @Inject constructor() {
         ad.loadAd()
     }
 
+    private var cachedActivity: Activity? = null
+
+    fun setActivity(activity: Activity) {
+        cachedActivity = activity
+        if (!isRewardedReady && loadedRewarded == null) preloadRewarded()
+    }
+
     private fun preloadRewarded() {
-        val ad = MaxRewardedAd.getInstance(BuildConfig.AD_REWARDED_ID, appContext)
+        if (!adsEnabled() || !adsConfig().placements.rewardedEnabled) return
+        val unitId = rewardedAdUnitId()
+        if (unitId.isBlank()) return
+
+        val activity = cachedActivity ?: return
+        val ad = MaxRewardedAd.getInstance(unitId, activity)
         ad.setListener(object : MaxRewardedAdListener {
             override fun onAdLoaded(a: MaxAd) {
                 loadedRewarded = ad
@@ -140,7 +186,7 @@ class AdEngine @Inject constructor() {
             }
             override fun onAdLoadFailed(id: String, err: MaxError) {
                 isRewardedReady = false
-                scope.launch { delay(RETRY_DELAY_MS); preloadRewarded() }
+                scope.launch { delay(adsConfig().interstitialFrequency.retryDelayMs); preloadRewarded() }
             }
             override fun onAdDisplayed(a: MaxAd)       {}
             override fun onAdHidden(a: MaxAd)           { preloadRewarded() }
@@ -154,7 +200,11 @@ class AdEngine @Inject constructor() {
     }
 
     private fun preloadAppOpen() {
-        val ad = MaxAppOpenAd(BuildConfig.AD_APP_OPEN_ID, appContext)
+        if (!adsEnabled() || !adsConfig().placements.appOpenEnabled) return
+        val unitId = appOpenAdUnitId()
+        if (unitId.isBlank()) return
+
+        val ad = MaxAppOpenAd(unitId, appContext)
         ad.setListener(object : MaxAdListener {
             override fun onAdLoaded(a: MaxAd) {
                 loadedAppOpen = ad
@@ -163,7 +213,7 @@ class AdEngine @Inject constructor() {
             }
             override fun onAdLoadFailed(id: String, err: MaxError) {
                 isAppOpenReady = false
-                scope.launch { delay(RETRY_DELAY_MS); preloadAppOpen() }
+                scope.launch { delay(adsConfig().interstitialFrequency.retryDelayMs); preloadAppOpen() }
             }
             override fun onAdDisplayed(a: MaxAd)                    {}
             override fun onAdHidden(a: MaxAd)                       { isAppOpenReady = false; preloadAppOpen() }
@@ -174,17 +224,19 @@ class AdEngine @Inject constructor() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Frequency cap gate
+    // Frequency cap gate — every threshold comes from remote config
     // ─────────────────────────────────────────────────────────────────────────
 
     fun shouldShowInterstitial(): Boolean {
+        if (!adsEnabled() || !adsConfig().placements.interstitialEnabled) return false
+        val freq = adsConfig().interstitialFrequency
         val now = System.currentTimeMillis()
         return isInterstitialReady
-            && totalContentOpens >= CONTENT_OPENS_BEFORE_FIRST_AD
-            && totalPlayTaps % INTERSTITIAL_EVERY_N_PLAYS == 0
+            && totalContentOpens >= freq.contentOpensBeforeFirst
+            && totalPlayTaps % freq.everyNPlays == 0
             && totalPlayTaps > 0
-            && (now - lastInterstitialTimeMs) > MIN_MS_BETWEEN_INTERSTITIALS
-            && interstitialShownCount < MAX_INTERSTITIALS_PER_SESSION
+            && (now - lastInterstitialTimeMs) > freq.minMsBetween
+            && interstitialShownCount < freq.maxPerSession
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -197,7 +249,9 @@ class AdEngine @Inject constructor() {
         onFailed: () -> Unit,
     ) {
         val ad = loadedInterstitial
-        if (ad == null || !isInterstitialReady) { onFailed(); return }
+        if (ad == null || !isInterstitialReady || !adsEnabled() || !adsConfig().placements.interstitialEnabled) {
+            onFailed(); return
+        }
 
         isInterstitialReady = false
         lastInterstitialTimeMs = System.currentTimeMillis()
@@ -220,7 +274,9 @@ class AdEngine @Inject constructor() {
         onSkipped: () -> Unit,
     ) {
         val ad = loadedRewarded
-        if (ad == null || !isRewardedReady) { onSkipped(); return }
+        if (ad == null || !isRewardedReady || !adsEnabled() || !adsConfig().placements.rewardedEnabled) {
+            onSkipped(); return
+        }
 
         var userEarnedReward = false
         isRewardedReady = false
@@ -243,6 +299,7 @@ class AdEngine @Inject constructor() {
     }
 
     fun showAppOpenIfReady(activity: Activity) {
+        if (!adsEnabled() || !adsConfig().placements.appOpenEnabled) return
         if (appOpenShownThisSession) return
         val ad = loadedAppOpen ?: return
         if (!isAppOpenReady) return
@@ -258,7 +315,23 @@ class AdEngine @Inject constructor() {
             override fun onAdClicked(a: MaxAd)   {}
             override fun onAdDisplayFailed(a: MaxAd, e: MaxError) { preloadAppOpen() }
         })
-        ad.showAd(activity)
+        ad.showAd()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Banner / Native ad unit IDs — exposed for the composables that render them
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Returns the configured banner ad unit ID, or null if banners are disabled/unset. */
+    fun bannerAdUnitIdOrNull(): String? {
+        if (!adsEnabled() || !adsConfig().placements.bannerEnabled) return null
+        return bannerAdUnitId().takeIf { it.isNotBlank() }
+    }
+
+    /** Returns the configured native ad unit ID, or null if native ads are disabled/unset. */
+    fun nativeAdUnitIdOrNull(): String? {
+        if (!adsEnabled() || !adsConfig().placements.nativeEnabled) return null
+        return nativeAdUnitId().takeIf { it.isNotBlank() }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -269,7 +342,12 @@ class AdEngine @Inject constructor() {
         onLoaded: (NativeAdState.Loaded) -> Unit,
         onFailed: () -> Unit,
     ) {
-        // AppLovin MAX native ads use MaxNativeAdLoader.
+        val unitId = nativeAdUnitIdOrNull()
+        if (unitId == null) {
+            scope.launch { onFailed() }
+            return
+        }
+        // Mediation native ads are loaded via MaxNativeAdLoader using [unitId].
         // Implementation stub — wire in your MaxNativeAdLoader here.
         // The NativeAdState.Loaded data class carries everything the composable needs.
         // For now, emit failure so the card collapses gracefully.
@@ -280,10 +358,17 @@ class AdEngine @Inject constructor() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // VAST tag URL for IMA pre-roll
+    // VAST tag URL for IMA pre-roll — fully config driven
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun getVastTagUrl(): String = BuildConfig.AD_VAST_TAG_URL
+    /** Returns the configured VAST tag URL, or null if pre-roll ads are disabled/unset. */
+    fun vastTagUrlOrNull(): String? {
+        if (!adsEnabled() || !adsConfig().placements.prerollEnabled) return null
+        return network()?.vastTagUrl?.takeIf { it.isNotBlank() }
+    }
+
+    /** Pre-roll timing/skip rules from remote config. */
+    fun prerollConfig() = adsConfig().preroll
 
     // ─────────────────────────────────────────────────────────────────────────
     // Counters

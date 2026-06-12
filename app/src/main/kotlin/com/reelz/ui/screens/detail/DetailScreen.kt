@@ -494,11 +494,13 @@ fun DetailScreen(
             )
         }
 
-        // ── Banner ad — always visible at bottom of DetailScreen ─────────
-        DetailBannerAd(
-            adUnitId = com.reelz.BuildConfig.AD_BANNER_ID,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
-        )
+        // ── Banner ad — visible at bottom of DetailScreen when configured ─
+        adEngine.bannerAdUnitIdOrNull()?.let { bannerUnitId ->
+            DetailBannerAd(
+                adUnitId = bannerUnitId,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+            )
+        }
 
         // ── Download bottom sheet ──────────────────────────────────────
         if (ui.showDownloadSheet) {

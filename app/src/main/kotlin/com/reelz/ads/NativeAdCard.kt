@@ -24,8 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.reelz.ui.theme.Bg
+import com.reelz.ui.theme.BgSurface
 import com.reelz.ui.theme.Primary
-import com.reelz.ui.theme.Surface
 import com.reelz.ui.theme.White60
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ private fun NativeAdContent(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Surface)
+            .background(BgSurface)
             .border(0.5.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
             .clickable(onClick = onCtaClick),
     ) {
@@ -193,7 +193,7 @@ private fun NativeAdSkeleton() {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Surface),
+            .background(BgSurface),
     ) {
         Box(
             Modifier

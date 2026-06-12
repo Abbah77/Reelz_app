@@ -518,8 +518,9 @@ fun PlayerScreen(
         // When the ad finishes or errors we call vm.preRollCompleted() which clears the
         // flag and starts actual content playback.
         if (ui.isPreRollPlaying && ui.preRollVastUrl != null) {
+            val vastUrl = ui.preRollVastUrl!!
             ImaPreRollView(
-                vastUrl         = ui.preRollVastUrl,
+                vastUrl         = vastUrl,
                 onAdCompleted   = { vm.preRollCompleted() },
                 onAdError       = { vm.preRollCompleted() },
                 modifier        = Modifier.fillMaxSize(),

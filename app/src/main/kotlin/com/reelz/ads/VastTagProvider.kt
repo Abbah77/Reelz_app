@@ -1,35 +1,23 @@
 package com.reelz.ads
 
-import com.reelz.BuildConfig
+import com.reelz.remoteconfig.AdPrerollConfig
 
 /**
- * Provides the VAST tag URL for IMA pre-roll ads.
+ * Pure decision logic for IMA pre-roll ads.
  *
- * Replace [BuildConfig.AD_VAST_TAG_URL] with the VAST tag URL from your
- * ad network dashboard (Pangle / AppLovin MAX / etc).
- *
- * Example Pangle VAST URL format:
- *   https://pangle.io/api/vast?app_id=YOUR_APP_ID&placement_id=YOUR_PLACEMENT_ID
- *
- * Example AppLovin MAX VAST URL format:
- *   https://ms.applovin.com/vast?sdk_key=YOUR_SDK_KEY&ad_unit_id=YOUR_UNIT_ID
+ * The VAST tag URL itself is no longer compiled in — it comes from
+ * [AdEngine.vastTagUrlOrNull] (sourced from the active network's
+ * `vast_tag_url` in remote config). All timing/skip rules below come
+ * from [AdPrerollConfig] (`ads.preroll` in remote config).
  */
 object VastTagProvider {
 
-    fun getPreRollVastUrl(): String = BuildConfig.AD_VAST_TAG_URL
-
     /**
-     * Whether a pre-roll should be shown for this playback session.
-     *
-     * Rules (from design doc):
-     *  - Movie playback (long content)
-     *  - First play of the session
-     *  - At least 30 minutes since the last pre-roll
-     *
-     * [isFirstPlayThisSession] is set by AdEngine / PlayerViewModel.
-     * [minutesSinceLastPreRoll] is tracked in PlayerViewModel.
+     * Whether a pre-roll should be shown for this playback session,
+     * based entirely on remote-config-driven [config].
      */
     fun shouldShowPreRoll(
+        config: AdPrerollConfig,
         isMovie: Boolean,
         isFirstPlayThisSession: Boolean,
         minutesSinceLastPreRoll: Long,
@@ -37,9 +25,10 @@ object VastTagProvider {
         isResumingEpisode: Boolean,
         isQualitySwitch: Boolean,
     ): Boolean {
-        if (isOfflinePlayback)    return false
-        if (isResumingEpisode)    return false
-        if (isQualitySwitch)      return false
-        return isMovie && (isFirstPlayThisSession || minutesSinceLastPreRoll >= 30)
+        if (isOfflinePlayback) return false
+        if (config.skipOnResume && isResumingEpisode) return false
+        if (config.skipOnQualitySwitch && isQualitySwitch) return false
+        if (config.showOnMoviesOnly && !isMovie) return false
+        return isFirstPlayThisSession || minutesSinceLastPreRoll >= config.minMinutesBetween
     }
 }

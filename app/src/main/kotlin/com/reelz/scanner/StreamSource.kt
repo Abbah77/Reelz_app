@@ -39,8 +39,9 @@ fun StreamSourceConfig.toStreamSource(): StreamSource = StreamSource(
 /**
  * Dynamic [SourceRegistry] backed by [RemoteConfigRepository].
  *
- * Falls back to the compile-time hard-coded list if remote config hasn't loaded yet,
- * so the app is never broken even on first launch with no network.
+ * Remote config has full authority over stream sources — names, URL
+ * patterns, headers, referer/origin and enabled/priority are all defined
+ * in `stream_sources` and never hard-coded in the app.
  */
 @Singleton
 class SourceRegistry @Inject constructor(
@@ -50,74 +51,13 @@ class SourceRegistry @Inject constructor(
      * Returns the current enabled + sorted list of stream sources.
      * Called every time [StreamEngine] needs to start a race so it always
      * picks up the latest remote config without restarting the app.
+     *
+     * Returns an empty list if remote config hasn't loaded yet — the app
+     * gates on config readiness before reaching the player, so this should
+     * not happen in practice.
      */
-    fun sorted(): List<StreamSource> {
-        val remoteSources = remoteConfig.activeStreamSources()
-        if (remoteSources.isNotEmpty()) {
-            return remoteSources.map { it.toStreamSource() }
-        }
-        // Compile-time fallback — identical to what was previously hard-coded
-        return FALLBACK_SOURCES
-    }
-
-    companion object {
-        /** Hard-coded fallback list — only used when remote config is unavailable. */
-        val FALLBACK_SOURCES: List<StreamSource> = listOf(
-            StreamSource(
-                name = "VidSrc", priority = 0,
-                buildUrl = { id, type, s, e ->
-                    if (type == MediaType.MOVIE) "https://vidsrc.to/embed/movie/$id"
-                    else "https://vidsrc.to/embed/tv/$id/$s/$e"
-                },
-                referer = "https://vidsrc.to/", origin = "https://vidsrc.to",
-                headers = mapOf(
-                    "User-Agent" to StreamHeaders.UA_CHROME_ANDROID,
-                    "Accept" to StreamHeaders.ACCEPT_HTML,
-                    "Accept-Language" to "en-US,en;q=0.9",
-                ),
-            ),
-            StreamSource(
-                name = "VidLink", priority = 1,
-                buildUrl = { id, type, s, e ->
-                    if (type == MediaType.MOVIE) "https://vidlink.pro/movie/$id"
-                    else "https://vidlink.pro/tv/$id/$s/$e"
-                },
-                referer = "https://vidlink.pro/", origin = "https://vidlink.pro",
-                headers = mapOf(
-                    "User-Agent" to StreamHeaders.UA_CHROME_ANDROID,
-                    "Accept" to StreamHeaders.ACCEPT_HTML,
-                    "Accept-Language" to "en-US,en;q=0.9",
-                ),
-            ),
-            StreamSource(
-                name = "VidSrc.me", priority = 2,
-                buildUrl = { id, type, s, e ->
-                    if (type == MediaType.MOVIE) "https://vidsrc.me/embed/movie?tmdb=$id"
-                    else "https://vidsrc.me/embed/tv?tmdb=$id&season=$s&episode=$e"
-                },
-                referer = "https://vidsrc.me/", origin = "https://vidsrc.me",
-                headers = mapOf("User-Agent" to StreamHeaders.UA_CHROME_ANDROID, "Accept" to StreamHeaders.ACCEPT_HTML),
-            ),
-            StreamSource(
-                name = "2Embed", priority = 3,
-                buildUrl = { id, type, s, e ->
-                    if (type == MediaType.MOVIE) "https://www.2embed.cc/embed/$id"
-                    else "https://www.2embed.cc/embedtv/$id&s=$s&e=$e"
-                },
-                referer = "https://www.2embed.cc/", origin = "https://www.2embed.cc",
-                headers = mapOf("User-Agent" to StreamHeaders.UA_CHROME_ANDROID, "Accept" to StreamHeaders.ACCEPT_HTML),
-            ),
-            StreamSource(
-                name = "EmbedSu", priority = 4,
-                buildUrl = { id, type, s, e ->
-                    if (type == MediaType.MOVIE) "https://embed.su/embed/movie/$id"
-                    else "https://embed.su/embed/tv/$id/$s/$e"
-                },
-                referer = "https://embed.su/", origin = "https://embed.su",
-                headers = mapOf("User-Agent" to StreamHeaders.UA_CHROME_ANDROID, "Accept" to StreamHeaders.ACCEPT_HTML),
-            ),
-        )
-    }
+    fun sorted(): List<StreamSource> =
+        remoteConfig.activeStreamSources().map { it.toStreamSource() }
 }
 
 object StreamHeaders {

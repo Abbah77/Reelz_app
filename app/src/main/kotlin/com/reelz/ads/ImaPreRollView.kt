@@ -84,8 +84,12 @@ private fun buildImaAdView(
     val sdkSettings = sdkFactory.createImaSdkSettings().apply {
         language = "en"
     }
-    val adDisplayContainer = sdkFactory.createAdDisplayContainer(root, buildVideoAdPlayer(videoView, onCompleted, onError))
-    val adsLoader          = sdkFactory.createAdsLoader(context, sdkSettings, adDisplayContainer)
+    val videoAdPlayer = buildVideoAdPlayer(videoView, onCompleted, onError)
+    val adDisplayContainer = sdkFactory.createAdDisplayContainer().apply {
+        adContainer = root
+        setPlayer(videoAdPlayer)
+    }
+    val adsLoader = sdkFactory.createAdsLoader(context, sdkSettings, adDisplayContainer)
 
     adsLoader.addAdsLoadedListener { event: AdsManagerLoadedEvent ->
         val adsManager = event.adsManager
@@ -114,7 +118,6 @@ private fun buildImaAdView(
 
     val request: AdsRequest = sdkFactory.createAdsRequest().apply {
         adTagUrl = vastUrl
-        setAdDisplayContainer(adDisplayContainer)
     }
     adsLoader.requestAds(request)
 
@@ -169,10 +172,6 @@ private fun buildVideoAdPlayer(
         override fun pauseAd(adMediaInfo: AdMediaInfo) {
             videoView.pause()
             callbacks.forEach { it.onPause(adMediaInfo) }
-        }
-        override fun resumeAd(adMediaInfo: AdMediaInfo) {
-            videoView.start()
-            callbacks.forEach { it.onResume(adMediaInfo) }
         }
         override fun addCallback(cb: VideoAdPlayer.VideoAdPlayerCallback) {
             callbacks.add(cb)

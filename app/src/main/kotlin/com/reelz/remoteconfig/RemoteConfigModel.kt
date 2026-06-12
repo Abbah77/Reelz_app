@@ -56,7 +56,36 @@ data class SubtitleProvider(
 
 data class AdsConfig(
     val enabled: Boolean = false,
+    @SerializedName("applovin_sdk_key")   val applovinSdkKey: String      = "",
+    @SerializedName("mediation_provider") val mediationProvider: String   = "max",
+    val placements: AdPlacements                                          = AdPlacements(),
+    @SerializedName("interstitial_frequency") val interstitialFrequency: AdInterstitialFrequency = AdInterstitialFrequency(),
+    val preroll: AdPrerollConfig                                          = AdPrerollConfig(),
     val networks: List<AdNetwork> = emptyList(),
+)
+
+data class AdPlacements(
+    @SerializedName("banner_enabled")       val bannerEnabled: Boolean       = true,
+    @SerializedName("interstitial_enabled") val interstitialEnabled: Boolean = true,
+    @SerializedName("rewarded_enabled")     val rewardedEnabled: Boolean     = true,
+    @SerializedName("native_enabled")       val nativeEnabled: Boolean       = true,
+    @SerializedName("app_open_enabled")     val appOpenEnabled: Boolean      = true,
+    @SerializedName("preroll_enabled")      val prerollEnabled: Boolean      = true,
+)
+
+data class AdInterstitialFrequency(
+    @SerializedName("min_ms_between")             val minMsBetween: Long           = 180_000L,
+    @SerializedName("max_per_session")            val maxPerSession: Int           = 6,
+    @SerializedName("content_opens_before_first") val contentOpensBeforeFirst: Int = 2,
+    @SerializedName("every_n_plays")              val everyNPlays: Int             = 2,
+    @SerializedName("retry_delay_ms")             val retryDelayMs: Long           = 30_000L,
+)
+
+data class AdPrerollConfig(
+    @SerializedName("show_on_movies_only")    val showOnMoviesOnly: Boolean    = true,
+    @SerializedName("min_minutes_between")    val minMinutesBetween: Long      = 30,
+    @SerializedName("skip_on_resume")         val skipOnResume: Boolean        = true,
+    @SerializedName("skip_on_quality_switch") val skipOnQualitySwitch: Boolean = true,
 )
 
 data class AdNetwork(
@@ -66,6 +95,8 @@ data class AdNetwork(
     @SerializedName("interstitial_id") val interstitialId: String = "",
     @SerializedName("rewarded_id")     val rewardedId: String     = "",
     @SerializedName("native_id")       val nativeId: String       = "",
+    @SerializedName("app_open_id")     val appOpenId: String      = "",
+    @SerializedName("vast_tag_url")    val vastTagUrl: String     = "",
 )
 
 data class StreamSourceConfig(
@@ -110,27 +141,17 @@ data class FeatureFlags(
     @SerializedName("maintenance_message") val maintenanceMessage: String  = "",
 )
 
-// ── Shorts / Reddit feed config ───────────────────────────────────────────────
+// ── Shorts / discovery feed config ────────────────────────────────────────────
 
 data class ShortsConfig(
-    @SerializedName("reddit_base")       val redditBase: String              = "https://old.reddit.com",
-    @SerializedName("for_you_subs")      val forYouSubs: String              =
-        "nextfuckinglevel+oddlysatisfying+funny+aww+BeAmazed+interestingasfuck+Unexpected+Damnthatsinteresting+sports+NatureIsFuckingLit",
-    val categories: List<ShortCategory>                                      = defaultCategories(),
+    @SerializedName("feed_base_url")     val feedBaseUrl: String             = "",
+    @SerializedName("feed_referer")      val feedReferer: String             = "",
+    @SerializedName("feed_origin")       val feedOrigin: String              = "",
+    @SerializedName("for_you_subs")      val forYouSubs: String              = "",
+    val categories: List<ShortCategory>                                      = emptyList(),
 )
 
 data class ShortCategory(
     val label: String = "",
     val subs: String  = "",
-)
-
-private fun defaultCategories() = listOf(
-    ShortCategory("🔥 Hot",        "nextfuckinglevel+oddlysatisfying+Unexpected+interestingasfuck+BeAmazed"),
-    ShortCategory("😂 Funny",      "funny+facepalm+Whatcouldgowrong+therewasanattempt"),
-    ShortCategory("😮 WOW",        "nextfuckinglevel+BeAmazed+interestingasfuck+Damnthatsinteresting"),
-    ShortCategory("😌 Satisfying", "oddlysatisfying+ASMR+powerwashingporn+Perfectfit"),
-    ShortCategory("🐾 Animals",    "aww+AnimalsBeingBros+rarepuppers+NatureIsFuckingLit"),
-    ShortCategory("⚽ Sports",     "sports+soccer+nba+MMA+skateboarding"),
-    ShortCategory("🎨 Art",        "Art+blackmagicfuckery+specializedtools+crafts"),
-    ShortCategory("🌍 Nature",     "NatureIsFuckingLit+EarthPorn+interestingasfuck+Outdoors"),
 )

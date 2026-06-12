@@ -48,6 +48,7 @@ import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.reelz.data.repository.MediaRepository
+import com.reelz.data.model.ShortVideo
 import com.reelz.remoteconfig.RemoteConfigRepository
 import com.reelz.remoteconfig.ShortCategory
 import com.reelz.scanner.StreamHeaders
@@ -67,22 +68,6 @@ import javax.inject.Inject
 // Data model
 // ─────────────────────────────────────────────────────────────────────────────
 
-data class ShortVideo(
-    val id: String,
-    val title: String,
-    val author: String,
-    val subreddit: String,
-    val hlsUrl: String,
-    val audioUrl: String?,       // separate DASH audio track (Reddit splits video/audio)
-    val fallbackUrl: String,
-    val thumbnail: String,
-    val ups: Int,
-    val duration: Int,
-    val hasAudio: Boolean,
-    val width: Int,
-    val height: Int,
-)
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Feed mode
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,7 +75,7 @@ data class ShortVideo(
 enum class FeedMode { FOR_YOU, DISCOVERY }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Subreddit categories and For You subs are now driven entirely by remote config.
+// Discovery categories and For You subs are driven entirely by remote config.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -188,35 +173,34 @@ private val IconClose: ImageVector get() = ImageVector.Builder("Close", 24.dp, 2
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ViewModel
-// FIX 1: Use old.reddit.com — less aggressively rate-limited than www.reddit.com
+// FIX 1: Base feed URL comes from remote config (shorts.feed_base_url)
 // FIX 2: User-Agent matches a real Chrome browser — no "Reelz/1.0" suffix
 // FIX 3: Surface errors instead of silently swallowing them
 // ─────────────────────────────────────────────────────────────────────────────
 
-@HiltViewModel
 // ── Shorts feed item — either a real video or an ad slot ─────────────────────
 sealed class ShortsItem {
-    data class Video(val video: com.reelz.data.model.ShortVideo) : ShortsItem()
+    data class Video(val video: ShortVideo) : ShortsItem()
     object AdSlot : ShortsItem()
 }
 
 // Helper: merge videos with ad slots every 5 videos
-private fun buildShortsItemList(videos: List<com.reelz.data.model.ShortVideo>): List<ShortsItem> = buildList {
+private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = buildList {
     videos.forEachIndexed { index, video ->
         add(ShortsItem.Video(video))
         if ((index + 1) % 5 == 0) add(ShortsItem.AdSlot)
     }
 }
 
+@HiltViewModel
 class ShortsViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val remoteConfig: RemoteConfigRepository,
 ) : ViewModel() {
 
-    // Reddit base URL and feed config come from remote config; safe defaults are
-    // baked into ShortsConfig so this works even before a sync completes.
-    private val shortsConfig get() = remoteConfig.shortsConfig()
-    private val redditBase   get() = shortsConfig.redditBase
+    // Feed base URL and category config come entirely from remote config.
+    val shortsConfig get() = remoteConfig.shortsConfig()
+    private val feedBaseUrl  get() = shortsConfig.feedBaseUrl
     private val forYouSubs   get() = shortsConfig.forYouSubs
     private val categories   get() = shortsConfig.categories
 
@@ -303,11 +287,11 @@ class ShortsViewModel @Inject constructor(
     private fun loadForYou(after: String? = null) {
         val sorts = listOf("hot", "top", "new", "rising")
         val sort  = sorts.random()
-        val url = "$redditBase/r/$forYouSubs/$sort.json?limit=50${if (after != null) "&after=$after" else ""}"
+        val url = "$feedBaseUrl/r/$forYouSubs/$sort.json?limit=50${if (after != null) "&after=$after" else ""}"
         if (after == null) _ui.update { it.copy(forYouLoading = true, error = null) }
         else _ui.update { it.copy(forYouLoadingMore = true) }
         viewModelScope.launch {
-            val result = fetchReddit(url)
+            val result = fetchFeed(url)
             val shuffled = result.first.shuffled()
             if (after == null) {
                 _ui.update { it.copy(
@@ -324,11 +308,11 @@ class ShortsViewModel @Inject constructor(
 
     private fun loadDiscovery(categoryIndex: Int, after: String? = null) {
         val subs = categories[categoryIndex].subs
-        val url  = "$redditBase/r/$subs/hot.json?limit=25${if (after != null) "&after=$after" else ""}"
+        val url  = "$feedBaseUrl/r/$subs/hot.json?limit=25${if (after != null) "&after=$after" else ""}"
         if (after == null) _ui.update { it.copy(discLoading = true, error = null) }
         else _ui.update { it.copy(discLoadingMore = true) }
         viewModelScope.launch {
-            val result = fetchReddit(url)
+            val result = fetchFeed(url)
             if (after == null) {
                 _ui.update { it.copy(
                     discVideos  = result.first,
@@ -373,9 +357,9 @@ class ShortsViewModel @Inject constructor(
         val extra = if (_ui.value.feedMode == FeedMode.DISCOVERY) {
             "+subreddit:${categories[_ui.value.selectedCategory].subs.replace("+", " OR subreddit:")}"
         } else ""
-        val url = "$redditBase/search.json?q=${query.trim().replace(" ", "+")}$extra&type=link&sort=relevance&limit=25"
+        val url = "$feedBaseUrl/search.json?q=${query.trim().replace(" ", "+")}$extra&type=link&sort=relevance&limit=25"
         viewModelScope.launch {
-            val result = fetchReddit(url)
+            val result = fetchFeed(url)
             val mode   = _ui.value.feedMode
             if (mode == FeedMode.FOR_YOU) {
                 _ui.update { it.copy(forYouVideos = result.first.shuffled(), forYouAfter = result.second, forYouLoading = false, isSearching = false) }
@@ -389,22 +373,22 @@ class ShortsViewModel @Inject constructor(
     fun toggleSave(id: String) { _saved.update { if (id in it) it - id else it + id } }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Reddit fetch
+    // Feed fetch
     // FIX 3: Errors are now surfaced via errorMessage instead of silently dropped
-    // Reddit v.redd.it: hls_url = video-only, DASH_audio.mp4 = audio track
+    // hls_url = video-only, DASH_audio.mp4 = audio track for the merged source
     // Both are merged in ExoPlayer via MergingMediaSource in the Screen
     // ─────────────────────────────────────────────────────────────────────────
 
-    private suspend fun fetchReddit(url: String): Pair<List<ShortVideo>, String?> = withContext(Dispatchers.IO) {
+    private suspend fun fetchFeed(url: String): Pair<List<ShortVideo>, String?> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder().url(url).build()
             val responseBody = okHttp.newCall(request).execute().use { response ->
                 // FIX 3: Surface HTTP errors so the UI can tell the user what went wrong
                 if (!response.isSuccessful) {
                     val reason = when (response.code) {
-                        429  -> "Reddit rate limit hit — wait a moment and refresh"
-                        403  -> "Reddit blocked the request — try again later"
-                        else -> "Reddit returned ${response.code}"
+                        429  -> "Feed rate limit hit — wait a moment and refresh"
+                        403  -> "Feed request blocked — try again later"
+                        else -> "Feed returned ${response.code}"
                     }
                     _ui.update { it.copy(error = reason) }
                     return@withContext Pair(emptyList<ShortVideo>(), null)
@@ -470,9 +454,10 @@ class ShortsViewModel @Inject constructor(
 //   This eliminates the buffering spinner on every swipe, which is the single
 //   biggest UX gap vs TikTok / MovieBox.
 //
-// FIX 4: DefaultHttpDataSource now sends Referer: https://www.reddit.com/
-//   Reddit's DASH audio CDN (v.redd.it) checks this header and returns 403
-//   without it — that was why merged audio was silent even when URLs were correct.
+// FIX 4: DefaultHttpDataSource sends the Referer/Origin configured in
+//   shorts.feed_referer / shorts.feed_origin (remote config) — the feed's
+//   audio CDN checks this header and returns 403 without it, which was why
+//   merged audio was silent even when URLs were correct.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(UnstableApi::class)
@@ -488,13 +473,14 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     val maxPullPx          = with(androidx.compose.ui.platform.LocalDensity.current) { 80.dp.toPx() }
     val pullIndicatorScale = (pullOverscrollPx / maxPullPx).coerceIn(0f, 1f)
 
-    // ── FIX 4: Referer header required by Reddit's audio CDN ─────────────────
-    val httpFactory = remember {
+    // ── FIX 4: Referer/Origin headers required by the feed's audio CDN ───────
+    val shortsConfig = vm.shortsConfig
+    val httpFactory = remember(shortsConfig) {
         DefaultHttpDataSource.Factory()
             .setUserAgent(StreamHeaders.UA_CHROME_ANDROID)          // FIX 2: real browser UA
             .setDefaultRequestProperties(mapOf(
-                "Referer" to "https://www.reddit.com/",             // FIX 4: unlocks DASH audio
-                "Origin"  to "https://www.reddit.com",
+                "Referer" to shortsConfig.feedReferer,              // FIX 4: unlocks DASH audio
+                "Origin"  to shortsConfig.feedOrigin,
             ))
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(8_000)
