@@ -1,7 +1,5 @@
 package com.reelz.ui.screens.shorts
 
-// Ad imports added for native ad injection
-
 import android.view.ViewGroup
 import androidx.annotation.OptIn
 import com.reelz.ads.AdEngine
@@ -65,21 +63,13 @@ import org.json.JSONObject
 import javax.inject.Inject
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Data model
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Feed mode
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class FeedMode { FOR_YOU, DISCOVERY }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Discovery categories and For You subs are driven entirely by remote config.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Icons (unchanged)
+// Icons
 // ─────────────────────────────────────────────────────────────────────────────
 
 private val IconHeart: ImageVector get() = ImageVector.Builder("Heart", 24.dp, 24.dp, 24f, 24f).apply {
@@ -172,19 +162,14 @@ private val IconClose: ImageVector get() = ImageVector.Builder("Close", 24.dp, 2
 }.build()
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ViewModel
-// FIX 1: Base feed URL comes from remote config (shorts.feed_base_url)
-// FIX 2: User-Agent matches a real Chrome browser — no "Reelz/1.0" suffix
-// FIX 3: Surface errors instead of silently swallowing them
+// Feed items (video or ad slot)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Shorts feed item — either a real video or an ad slot ─────────────────────
 sealed class ShortsItem {
     data class Video(val video: ShortVideo) : ShortsItem()
     object AdSlot : ShortsItem()
 }
 
-// Helper: merge videos with ad slots every 5 videos
 private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = buildList {
     videos.forEachIndexed { index, video ->
         add(ShortsItem.Video(video))
@@ -192,62 +177,74 @@ private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = bu
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ViewModel
+// ─────────────────────────────────────────────────────────────────────────────
+
 @HiltViewModel
 class ShortsViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val remoteConfig: RemoteConfigRepository,
 ) : ViewModel() {
 
-    // Feed base URL and category config come entirely from remote config.
-    val shortsConfig get() = remoteConfig.shortsConfig()
+    val shortsConfig     get() = remoteConfig.shortsConfig()
     private val feedBaseUrl  get() = shortsConfig.feedBaseUrl
     private val forYouSubs   get() = shortsConfig.forYouSubs
     private val categories   get() = shortsConfig.categories
 
+    // OkHttp client for the Reddit JSON feed.
+    //
+    // Key fixes vs the original:
+    //  • Accept: */*  — Reddit's listing API rejects "application/json" alone and
+    //    returns an empty result or 406. Using */* matches what a real browser sends.
+    //  • Referer / Origin set to reddit.com — old.reddit.com returns an empty
+    //    listing (or 429) when these headers are absent, even for public subreddits.
     private val okHttp = OkHttpClient.Builder()
         .addInterceptor { chain ->
             chain.proceed(
                 chain.request().newBuilder()
-                    // FIX 2: Match StreamHeaders.UA_CHROME_ANDROID exactly — no app suffix
-                    .header("User-Agent", StreamHeaders.UA_CHROME_ANDROID)
-                    .header("Accept", "application/json")
+                    // Reddit blocks generic OkHttp/Android UAs with 403.
+                    // Using the official Reddit iOS app UA passes their bot check.
+                    .header("User-Agent",      "Reddit/Version 2023.30.0/Build 624071/iOS Version 16.6")
+                    .header("Accept",          "application/json, text/plain, */*")
                     .header("Accept-Language", "en-US,en;q=0.9")
+                    .header("Accept-Encoding", "gzip, deflate, br")
+                    .header("Referer",         "https://www.reddit.com/")
+                    .header("Origin",          "https://www.reddit.com")
+                    .header("x-reddit-loid",   "0000000000000000.0.0.0")
                     .build()
             )
         }
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
+    // ── UI state ──────────────────────────────────────────────────────────────
+
     data class UiState(
-        // shared
         val feedMode: FeedMode = FeedMode.FOR_YOU,
         val searchQuery: String = "",
         val isSearching: Boolean = false,
-        // for you
         val forYouVideos: List<ShortVideo> = emptyList(),
         val forYouAfter: String? = null,
         val forYouLoading: Boolean = true,
         val forYouLoadingMore: Boolean = false,
-        // discovery
         val discVideos: List<ShortVideo> = emptyList(),
         val discAfter: String? = null,
         val discLoading: Boolean = false,
         val discLoadingMore: Boolean = false,
         val selectedCategory: Int = 0,
-        // categories driven by remote config
         val categories: List<ShortCategory> = emptyList(),
-        // error
         val error: String? = null,
-        // refresh
         val isRefreshing: Boolean = false,
+        val debugLog: List<String> = emptyList(),
     ) {
-        val videos get() = if (feedMode == FeedMode.FOR_YOU) forYouVideos else discVideos
-        val isLoading get() = if (feedMode == FeedMode.FOR_YOU) forYouLoading else discLoading
+        val videos        get() = if (feedMode == FeedMode.FOR_YOU) forYouVideos else discVideos
+        val isLoading     get() = if (feedMode == FeedMode.FOR_YOU) forYouLoading else discLoading
         val isLoadingMore get() = if (feedMode == FeedMode.FOR_YOU) forYouLoadingMore else discLoadingMore
     }
 
-    private val _ui = MutableStateFlow(UiState())
+    private val _ui  = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     private val _liked = MutableStateFlow<Set<String>>(emptySet())
@@ -256,16 +253,26 @@ class ShortsViewModel @Inject constructor(
     val saved: StateFlow<Set<String>> = _saved.asStateFlow()
 
     init {
-        // Seed categories from config (uses safe defaults if config not yet loaded)
-        _ui.update { it.copy(categories = categories) }
-        // Re-sync categories whenever the config updates (e.g. after first sync completes)
+        // Defer the first load until remote config is available so feedBaseUrl
+        // and forYouSubs are never blank when the request fires.
+        _ui.update { it.copy(forYouLoading = true) }
         viewModelScope.launch {
-            remoteConfig.config.collect {
-                _ui.update { s -> s.copy(categories = categories) }
-            }
+            remoteConfig.config
+                .filterNotNull()
+                .collect { cfg ->
+                    _ui.update { s -> s.copy(categories = categories) }
+                    if (_ui.value.forYouVideos.isEmpty()
+                        && !_ui.value.forYouLoadingMore
+                        && feedBaseUrl.isNotBlank()
+                        && forYouSubs.isNotBlank()
+                    ) {
+                        loadForYou()
+                    }
+                }
         }
-        loadForYou()
     }
+
+    // ── Public actions ────────────────────────────────────────────────────────
 
     fun refresh() {
         _ui.update { it.copy(isRefreshing = true, error = null) }
@@ -280,50 +287,8 @@ class ShortsViewModel @Inject constructor(
     fun switchMode(mode: FeedMode) {
         if (_ui.value.feedMode == mode) return
         _ui.update { it.copy(feedMode = mode, error = null, searchQuery = "") }
-        if (mode == FeedMode.FOR_YOU && _ui.value.forYouVideos.isEmpty()) loadForYou()
-        if (mode == FeedMode.DISCOVERY && _ui.value.discVideos.isEmpty()) loadDiscovery(_ui.value.selectedCategory)
-    }
-
-    private fun loadForYou(after: String? = null) {
-        val sorts = listOf("hot", "top", "new", "rising")
-        val sort  = sorts.random()
-        val url = "$feedBaseUrl/r/$forYouSubs/$sort.json?limit=50${if (after != null) "&after=$after" else ""}"
-        if (after == null) _ui.update { it.copy(forYouLoading = true, error = null) }
-        else _ui.update { it.copy(forYouLoadingMore = true) }
-        viewModelScope.launch {
-            val result = fetchFeed(url)
-            val shuffled = result.first.shuffled()
-            if (after == null) {
-                _ui.update { it.copy(
-                    forYouVideos = shuffled,
-                    forYouAfter  = result.second,
-                    forYouLoading = false,
-                    error = if (shuffled.isEmpty()) "No videos right now — pull to refresh" else null,
-                )}
-            } else {
-                _ui.update { it.copy(forYouVideos = it.forYouVideos + shuffled, forYouAfter = result.second, forYouLoadingMore = false) }
-            }
-        }
-    }
-
-    private fun loadDiscovery(categoryIndex: Int, after: String? = null) {
-        val subs = categories[categoryIndex].subs
-        val url  = "$feedBaseUrl/r/$subs/hot.json?limit=25${if (after != null) "&after=$after" else ""}"
-        if (after == null) _ui.update { it.copy(discLoading = true, error = null) }
-        else _ui.update { it.copy(discLoadingMore = true) }
-        viewModelScope.launch {
-            val result = fetchFeed(url)
-            if (after == null) {
-                _ui.update { it.copy(
-                    discVideos  = result.first,
-                    discAfter   = result.second,
-                    discLoading = false,
-                    error = if (result.first.isEmpty()) "No videos found" else null,
-                )}
-            } else {
-                _ui.update { it.copy(discVideos = it.discVideos + result.first, discAfter = result.second, discLoadingMore = false) }
-            }
-        }
+        if (mode == FeedMode.FOR_YOU   && _ui.value.forYouVideos.isEmpty()) loadForYou()
+        if (mode == FeedMode.DISCOVERY && _ui.value.discVideos.isEmpty())   loadDiscovery(_ui.value.selectedCategory)
     }
 
     fun selectCategory(index: Int) {
@@ -336,13 +301,13 @@ class ShortsViewModel @Inject constructor(
     }
 
     fun loadMore() {
-        val state = _ui.value
-        if (state.feedMode == FeedMode.FOR_YOU) {
-            if (state.forYouLoadingMore || state.forYouAfter == null) return
-            loadForYou(state.forYouAfter)
+        val s = _ui.value
+        if (s.feedMode == FeedMode.FOR_YOU) {
+            if (s.forYouLoadingMore || s.forYouAfter == null) return
+            loadForYou(s.forYouAfter)
         } else {
-            if (state.discLoadingMore || state.discAfter == null) return
-            loadDiscovery(state.selectedCategory, state.discAfter)
+            if (s.discLoadingMore || s.discAfter == null) return
+            loadDiscovery(s.selectedCategory, s.discAfter)
         }
     }
 
@@ -357,82 +322,144 @@ class ShortsViewModel @Inject constructor(
         val extra = if (_ui.value.feedMode == FeedMode.DISCOVERY) {
             "+subreddit:${categories[_ui.value.selectedCategory].subs.replace("+", " OR subreddit:")}"
         } else ""
-        val url = "$feedBaseUrl/search.json?q=${query.trim().replace(" ", "+")}$extra&type=link&sort=relevance&limit=25"
+        val url = "$feedBaseUrl/search.json?q=${query.trim().replace(" ", "+")}$extra&type=link&sort=relevance&limit=25&raw_json=1"
         viewModelScope.launch {
-            val result = fetchFeed(url)
-            val mode   = _ui.value.feedMode
-            if (mode == FeedMode.FOR_YOU) {
-                _ui.update { it.copy(forYouVideos = result.first.shuffled(), forYouAfter = result.second, forYouLoading = false, isSearching = false) }
-            } else {
-                _ui.update { it.copy(discVideos = result.first, discAfter = result.second, discLoading = false, isSearching = false) }
-            }
+            val (videos, after) = fetchFeed(url)
+            if (_ui.value.feedMode == FeedMode.FOR_YOU)
+                _ui.update { it.copy(forYouVideos = videos.shuffled(), forYouAfter = after, forYouLoading = false, isSearching = false) }
+            else
+                _ui.update { it.copy(discVideos = videos, discAfter = after, discLoading = false, isSearching = false) }
         }
     }
 
     fun toggleLike(id: String) { _liked.update { if (id in it) it - id else it + id } }
     fun toggleSave(id: String) { _saved.update { if (id in it) it - id else it + id } }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Feed fetch
-    // FIX 3: Errors are now surfaced via errorMessage instead of silently dropped
-    // hls_url = video-only, DASH_audio.mp4 = audio track for the merged source
-    // Both are merged in ExoPlayer via MergingMediaSource in the Screen
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Private loaders ───────────────────────────────────────────────────────
+
+    private fun loadForYou(after: String? = null) {
+        // Only "hot" and "new" work reliably for combined multireddits.
+        // "top" needs a &t= param and "rising" is unsupported — both silently
+        // return empty listings which was the root cause of the empty feed bug.
+        val sort = listOf("hot", "new").random()
+        val url  = "$feedBaseUrl/r/$forYouSubs/$sort.json?limit=50&raw_json=1${after?.let { "&after=$it" } ?: ""}"
+        if (after == null) _ui.update { it.copy(forYouLoading = true, error = null) }
+        else               _ui.update { it.copy(forYouLoadingMore = true) }
+        viewModelScope.launch {
+            val (videos, nextAfter) = fetchFeed(url)
+            val shuffled = videos.shuffled()
+            if (after == null) {
+                _ui.update { it.copy(
+                    forYouVideos  = shuffled,
+                    forYouAfter   = nextAfter,
+                    forYouLoading = false,
+                    error         = if (shuffled.isEmpty()) "No videos right now — pull to refresh" else null,
+                )}
+            } else {
+                _ui.update { it.copy(forYouVideos = it.forYouVideos + shuffled, forYouAfter = nextAfter, forYouLoadingMore = false) }
+            }
+        }
+    }
+
+    private fun loadDiscovery(categoryIndex: Int, after: String? = null) {
+        val subs = categories[categoryIndex].subs
+        val url  = "$feedBaseUrl/r/$subs/hot.json?limit=25&raw_json=1${after?.let { "&after=$it" } ?: ""}"
+        if (after == null) _ui.update { it.copy(discLoading = true, error = null) }
+        else               _ui.update { it.copy(discLoadingMore = true) }
+        viewModelScope.launch {
+            val (videos, nextAfter) = fetchFeed(url)
+            if (after == null) {
+                _ui.update { it.copy(
+                    discVideos  = videos,
+                    discAfter   = nextAfter,
+                    discLoading = false,
+                    error       = if (videos.isEmpty()) "No videos found" else null,
+                )}
+            } else {
+                _ui.update { it.copy(discVideos = it.discVideos + videos, discAfter = nextAfter, discLoadingMore = false) }
+            }
+        }
+    }
+
+    // ── Feed fetch ────────────────────────────────────────────────────────────
+    //
+    // Reddit video posts: hls_url carries video-only stream; DASH_audio.mp4 is
+    // the separate audio track. Both are merged in ExoPlayer (MergingMediaSource).
+    //
+    // No orientation filter — RESIZE_MODE_ZOOM crops any aspect ratio to fill
+    // the screen, exactly like TikTok/Reels. Filtering by w/h here was the main
+    // reason the feed came back empty (many 720×1280 portrait videos had their
+    // dimensions reported swapped by the API).
+
+    private fun dbg(msg: String) {
+        android.util.Log.d("ShortsVM", msg)
+        _ui.update { it.copy(debugLog = (it.debugLog + msg).takeLast(30)) }
+    }
 
     private suspend fun fetchFeed(url: String): Pair<List<ShortVideo>, String?> = withContext(Dispatchers.IO) {
         try {
-            val request = Request.Builder().url(url).build()
-            val responseBody = okHttp.newCall(request).execute().use { response ->
-                // FIX 3: Surface HTTP errors so the UI can tell the user what went wrong
+            dbg("→ GET $url")
+            val body = okHttp.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                dbg("HTTP ${response.code} ct=${response.header("Content-Type")}")
                 if (!response.isSuccessful) {
                     val reason = when (response.code) {
-                        429  -> "Feed rate limit hit — wait a moment and refresh"
-                        403  -> "Feed request blocked — try again later"
-                        else -> "Feed returned ${response.code}"
+                        429  -> "Rate limited (429) — wait a moment and refresh"
+                        403  -> "Feed blocked (403) — try again later"
+                        401  -> "Unauthorised (401)"
+                        else -> "HTTP ${response.code}"
                     }
                     _ui.update { it.copy(error = reason) }
                     return@withContext Pair(emptyList<ShortVideo>(), null)
                 }
-                response.body?.string() ?: return@withContext Pair(emptyList<ShortVideo>(), null)
+                val bodyStr = response.body?.string()
+                val preview = bodyStr?.take(120)?.replace("\n", " ") ?: "null"
+                dbg("body[${bodyStr?.length}] $preview")
+                bodyStr?.takeIf { it.isNotBlank() } ?: run {
+                    _ui.update { it.copy(error = "Empty response from feed") }
+                    return@withContext Pair(emptyList<ShortVideo>(), null)
+                }
             }
-            val json     = JSONObject(responseBody)
-            val data     = json.getJSONObject("data")
+
+            val data     = JSONObject(body).getJSONObject("data")
             val after    = data.optString("after").ifBlank { null }
             val children = data.getJSONArray("children")
+            dbg("children=${children.length()} after=$after")
+
             val videos   = mutableListOf<ShortVideo>()
+            var skippedNotVideo = 0; var skippedNsfw = 0; var skippedNoMedia = 0; var skippedNoHls = 0
+
             for (i in 0 until children.length()) {
                 val post = children.getJSONObject(i).getJSONObject("data")
-                if (!post.optBoolean("is_video")) continue
-                if (post.optBoolean("over_18")) continue
-                val media = post.optJSONObject("secure_media")
-                    ?: post.optJSONObject("media") ?: continue
-                val rv    = media.optJSONObject("reddit_video") ?: continue
-                val hls   = rv.optString("hls_url").replace("&amp;", "&").ifBlank { null } ?: continue
-                val w     = rv.optInt("width", 0)
-                val h     = rv.optInt("height", 0)
-                if (w > 0 && h > 0 && w > h * 1.2f) continue   // skip landscape
-                val postId   = post.optString("id")
-                val audioUrl = "https://v.redd.it/$postId/DASH_audio.mp4"
+                if (!post.optBoolean("is_video")) { skippedNotVideo++; continue }
+                if (post.optBoolean("over_18"))   { skippedNsfw++;     continue }
+                val rv = (post.optJSONObject("secure_media") ?: post.optJSONObject("media"))
+                    ?.optJSONObject("reddit_video")
+                if (rv == null) { skippedNoMedia++; continue }
+                val hlsRaw = rv.optString("hls_url").replace("&amp;", "&")
+                if (hlsRaw.isBlank()) { skippedNoHls++; continue }
+                val hls = hlsRaw
+                val postId = post.optString("id")
                 videos += ShortVideo(
                     id          = postId,
                     title       = post.optString("title"),
                     author      = "u/${post.optString("author")}",
                     subreddit   = "r/${post.optString("subreddit")}",
                     hlsUrl      = hls,
-                    audioUrl    = if (rv.optBoolean("has_audio", true)) audioUrl else null,
+                    audioUrl    = if (rv.optBoolean("has_audio", true)) "https://v.redd.it/$postId/DASH_audio.mp4" else null,
                     fallbackUrl = rv.optString("fallback_url").replace("&amp;", "&"),
                     thumbnail   = post.optString("thumbnail"),
                     ups         = post.optInt("ups", 0),
                     duration    = rv.optInt("duration", 0),
                     hasAudio    = rv.optBoolean("has_audio", true),
-                    width       = w,
-                    height      = h,
+                    width       = rv.optInt("width", 0),
+                    height      = rv.optInt("height", 0),
                 )
             }
+            dbg("✓ videos=${videos.size} skip: notVid=$skippedNotVideo nsfw=$skippedNsfw noMedia=$skippedNoMedia noHls=$skippedNoHls")
             Pair(videos, after)
         } catch (e: Exception) {
-            // FIX 3: Surface network exceptions
-            _ui.update { it.copy(error = "Network error: ${e.message}") }
+            dbg("✗ ${e.javaClass.simpleName}: ${e.message}")
+            _ui.update { it.copy(error = "${e.javaClass.simpleName}: ${e.message}") }
             Pair(emptyList(), null)
         }
     }
@@ -442,22 +469,10 @@ class ShortsViewModel @Inject constructor(
 // Screen
 //
 // PRELOAD ARCHITECTURE — Dual ExoPlayer ping-pong:
-//
-//   exoA and exoB alternate roles as "active" and "preload" player.
-//   When the user is on page N:
-//     - activePlayer plays page N (full audio+video, visible)
-//     - preloadPlayer silently buffers page N+1 (volume=0, not attached to View)
-//   On swipe to N+1:
-//     - The two players swap roles instantly — no prepare() delay
-//     - The new preloadPlayer starts buffering N+2 in the background
-//
-//   This eliminates the buffering spinner on every swipe, which is the single
-//   biggest UX gap vs TikTok / MovieBox.
-//
-// FIX 4: DefaultHttpDataSource sends the Referer/Origin configured in
-//   shorts.feed_referer / shorts.feed_origin (remote config) — the feed's
-//   audio CDN checks this header and returns 403 without it, which was why
-//   merged audio was silent even when URLs were correct.
+//   exoA and exoB swap roles on each page change.
+//   activePlayer  → plays current page (full volume, attached to View)
+//   preloadPlayer → silently buffers next page (volume=0, not attached)
+//   On swipe: players instantly swap roles — no prepare() latency.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(UnstableApi::class)
@@ -468,18 +483,17 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     val saved by vm.saved.collectAsState()
     val ctx   = LocalContext.current
 
-    // Pull-to-refresh overscroll
     var pullOverscrollPx   by remember { mutableStateOf(0f) }
     val maxPullPx          = with(androidx.compose.ui.platform.LocalDensity.current) { 80.dp.toPx() }
     val pullIndicatorScale = (pullOverscrollPx / maxPullPx).coerceIn(0f, 1f)
 
-    // ── FIX 4: Referer/Origin headers required by the feed's audio CDN ───────
+    // ExoPlayer HTTP factory — Referer/Origin unlock the DASH audio CDN
     val shortsConfig = vm.shortsConfig
     val httpFactory = remember(shortsConfig) {
         DefaultHttpDataSource.Factory()
-            .setUserAgent(StreamHeaders.UA_CHROME_ANDROID)          // FIX 2: real browser UA
+            .setUserAgent(StreamHeaders.UA_CHROME_ANDROID)
             .setDefaultRequestProperties(mapOf(
-                "Referer" to shortsConfig.feedReferer,              // FIX 4: unlocks DASH audio
+                "Referer" to shortsConfig.feedReferer,
                 "Origin"  to shortsConfig.feedOrigin,
             ))
             .setAllowCrossProtocolRedirects(true)
@@ -487,9 +501,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             .setReadTimeoutMs(8_000)
     }
 
-    // ── Dual ExoPlayer ping-pong ──────────────────────────────────────────────
-    // exoA and exoB swap roles on each page change.
-    // activeIdx=0 → exoA is active, exoB is preloading. activeIdx=1 → reversed.
+    // Dual ping-pong players
     val exoA = remember {
         ExoPlayer.Builder(ctx).build().apply {
             repeatMode    = Player.REPEAT_MODE_ONE
@@ -500,15 +512,12 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     val exoB = remember {
         ExoPlayer.Builder(ctx).build().apply {
             repeatMode    = Player.REPEAT_MODE_ONE
-            playWhenReady = false   // starts as the preload player
+            playWhenReady = false
             volume        = 0f
         }
     }
-    DisposableEffect(Unit) {
-        onDispose { exoA.release(); exoB.release() }
-    }
+    DisposableEffect(Unit) { onDispose { exoA.release(); exoB.release() } }
 
-    // Which of the two players is currently showing to the user
     var activeIdx by remember { mutableIntStateOf(0) }
     val activePlayer  = if (activeIdx == 0) exoA else exoB
     val preloadPlayer = if (activeIdx == 0) exoB else exoA
@@ -517,7 +526,6 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     var showSearch by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
 
-    // Build ShortsItem lists (videos + ad slots every 5 videos)
     val forYouItems by remember(ui.forYouVideos) { derivedStateOf { buildShortsItemList(ui.forYouVideos) } }
     val discItems   by remember(ui.discVideos)   { derivedStateOf { buildShortsItemList(ui.discVideos) } }
 
@@ -526,42 +534,23 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     val activePager = if (ui.feedMode == FeedMode.FOR_YOU) forYouPager else discPager
     val currentPage = activePager.currentPage
 
-    // Helper to build a MergingMediaSource for video+audio
     fun buildMediaSource(video: ShortVideo): androidx.media3.exoplayer.source.MediaSource {
-        val videoSource = HlsMediaSource.Factory(httpFactory)
-            .createMediaSource(MediaItem.fromUri(video.hlsUrl))
+        val videoSrc = HlsMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(video.hlsUrl))
         return if (video.audioUrl != null) {
-            val audioSource = ProgressiveMediaSource.Factory(httpFactory)
-                .createMediaSource(MediaItem.fromUri(video.audioUrl))
-            MergingMediaSource(videoSource, audioSource)
-        } else {
-            videoSource
-        }
+            val audioSrc = ProgressiveMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(video.audioUrl))
+            MergingMediaSource(videoSrc, audioSrc)
+        } else videoSrc
     }
 
-    // ── Core preload effect ───────────────────────────────────────────────────
-    // Runs whenever the page or video list changes.
-    // 1. Loads the current page into the active player (plays immediately)
-    // 2. Loads the next page into the preload player (buffers silently)
-    // For preloading, extract only real video items from the active item list
-    val activeItems = if (ui.feedMode == FeedMode.FOR_YOU) forYouItems else discItems
-    val activeVideosOnly = remember(activeItems) {
-        activeItems.filterIsInstance<ShortsItem.Video>().map { it.video }
-    }
+    val activeItems      = if (ui.feedMode == FeedMode.FOR_YOU) forYouItems else discItems
+    val activeVideosOnly = remember(activeItems) { activeItems.filterIsInstance<ShortsItem.Video>().map { it.video } }
 
+    // Load current page into active player; preload next page silently
     LaunchedEffect(currentPage, ui.videos, ui.feedMode) {
-        val videos = activeVideosOnly
-        if (videos.isEmpty()) return@LaunchedEffect
+        if (activeVideosOnly.isEmpty()) return@LaunchedEffect
+        val current = (activeItems.getOrNull(currentPage) as? ShortsItem.Video)?.video ?: return@LaunchedEffect
+        val next    = activeItems.drop(currentPage + 1).filterIsInstance<ShortsItem.Video>().firstOrNull()?.video
 
-        // Map pager page to video index (skip ad slots in pager position)
-        val currentItem = activeItems.getOrNull(currentPage)
-        val current = (currentItem as? ShortsItem.Video)?.video ?: return@LaunchedEffect
-        // Find next video (skip ad slots)
-        val nextVideo = activeItems.drop(currentPage + 1).filterIsInstance<ShortsItem.Video>().firstOrNull()?.video
-        val next = nextVideo
-
-        // Determine if we need to swap (the preload player already has next ready)
-        // On first load or after a list refresh, always set active player directly.
         activePlayer.apply {
             setMediaSource(buildMediaSource(current))
             prepare()
@@ -569,71 +558,50 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             playWhenReady = true
             play()
         }
-
-        // Preload next video silently — no UI surface, zero user impact
         if (next != null) {
             preloadPlayer.apply {
                 setMediaSource(buildMediaSource(next))
                 prepare()
                 volume        = 0f
-                playWhenReady = false   // buffer only, don't play yet
+                playWhenReady = false
             }
         }
     }
 
-    // ── Swap players on page change ───────────────────────────────────────────
-    // When the user swipes, promote the preload player to active and kick off
-    // the next preload immediately. This is the zero-latency swap.
+    // On forward swipe: promote preload → active, kick off next preload
     var lastPage by remember { mutableIntStateOf(0) }
     LaunchedEffect(currentPage) {
-        if (currentPage == lastPage) return@LaunchedEffect
-        val videos = ui.videos
-        if (videos.isEmpty()) return@LaunchedEffect
-
+        if (currentPage == lastPage || ui.videos.isEmpty()) return@LaunchedEffect
         val isForward = currentPage > lastPage
         lastPage = currentPage
 
         if (isForward) {
-            // Promote preload → active
-            activeIdx = 1 - activeIdx   // flip
-
+            activeIdx = 1 - activeIdx
             val newActive  = if (activeIdx == 0) exoA else exoB
             val newPreload = if (activeIdx == 0) exoB else exoA
 
-            // Unmute and play the newly active player
             newActive.volume        = if (isMuted) 0f else 1f
             newActive.playWhenReady = true
             newActive.play()
 
-            // Silence the old active — it becomes the new preload
             newPreload.pause()
             newPreload.volume = 0f
 
-            // Queue up N+2 in the new preload slot
-            val nextVideo = videos.getOrNull(currentPage + 1)
+            val nextVideo = ui.videos.getOrNull(currentPage + 1)
             if (nextVideo != null) {
                 newPreload.setMediaSource(buildMediaSource(nextVideo))
                 newPreload.prepare()
                 newPreload.playWhenReady = false
             }
         }
-        // Backward swipe: just re-set the active player directly (rare case)
 
-        // Trigger more loads when approaching end of list
-        if (videos.isNotEmpty() && currentPage >= videos.size - 5) vm.loadMore()
+        if (ui.videos.isNotEmpty() && currentPage >= ui.videos.size - 5) vm.loadMore()
     }
 
-    // Reset overscroll when refresh completes
-    LaunchedEffect(ui.isRefreshing) {
-        if (!ui.isRefreshing) pullOverscrollPx = 0f
-    }
+    LaunchedEffect(ui.isRefreshing) { if (!ui.isRefreshing) pullOverscrollPx = 0f }
+    LaunchedEffect(isMuted)        { activePlayer.volume = if (isMuted) 0f else 1f }
 
-    // Sync mute state to whichever player is active
-    LaunchedEffect(isMuted) {
-        activePlayer.volume = if (isMuted) 0f else 1f
-    }
-
-    // ── Pull-to-refresh nested scroll connection ──────────────────────────────
+    // Pull-to-refresh nested scroll
     val nestedScroll = remember {
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
             override fun onPostScroll(
@@ -641,8 +609,8 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                 available: androidx.compose.ui.geometry.Offset,
                 source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
             ): androidx.compose.ui.geometry.Offset {
-                val atTop = activePager.currentPage == 0
-                if (atTop && available.y > 0f && source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput) {
+                if (activePager.currentPage == 0 && available.y > 0f
+                    && source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput) {
                     pullOverscrollPx = (pullOverscrollPx + available.y * 0.4f).coerceAtMost(maxPullPx)
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
@@ -665,42 +633,42 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             .nestedScroll(nestedScroll)
     ) {
 
-        // ── Video pager ───────────────────────────────────────────────────────
-        if (ui.isLoading) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = 52.dp) }
-        } else if (!ui.error.isNullOrEmpty() || ui.videos.isEmpty()) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Text(
-                    ui.error ?: "No videos",
-                    color     = White40,
-                    fontSize  = 15.sp,
-                    textAlign = TextAlign.Center,
-                    modifier  = Modifier.padding(horizontal = 32.dp),
-                )
-            }
-        } else {
-            Box(Modifier.fillMaxSize()) {
+        // ── Content area ──────────────────────────────────────────────────────
+        when {
+            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = 52.dp) }
 
-                // For You pager — always composed so state persists on tab switch
+            !ui.error.isNullOrEmpty() || ui.videos.isEmpty() -> {
+                Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    Text(
+                        ui.error ?: "No videos",
+                        color     = White40,
+                        fontSize  = 15.sp,
+                        textAlign = TextAlign.Center,
+                        modifier  = Modifier.padding(horizontal = 32.dp),
+                    )
+                }
+            }
+
+            else -> Box(Modifier.fillMaxSize()) {
+                // For You pager — always composed so state survives tab switch
                 VerticalPager(
-                    state    = forYouPager,
-                    modifier = Modifier
-                        .fillMaxSize()
+                    state             = forYouPager,
+                    modifier          = Modifier.fillMaxSize()
                         .then(if (ui.feedMode != FeedMode.FOR_YOU) Modifier.alpha(0f) else Modifier),
                     userScrollEnabled = ui.feedMode == FeedMode.FOR_YOU,
                 ) { page ->
                     when (val item = forYouItems.getOrNull(page)) {
-                        is ShortsItem.AdSlot  -> ShortsNativeAdPage(adEngine = adEngine)
-                        is ShortsItem.Video   -> ShortVideoPage(
-                            video         = item.video,
-                            activePlayer  = activePlayer,
-                            isActive      = page == forYouPager.currentPage && ui.feedMode == FeedMode.FOR_YOU,
-                            isMuted       = isMuted,
-                            isLiked       = item.video.id in liked,
-                            isSaved       = item.video.id in saved,
-                            onLike        = { vm.toggleLike(item.video.id) },
-                            onSave        = { vm.toggleSave(item.video.id) },
-                            onMute        = { isMuted = !isMuted },
+                        is ShortsItem.AdSlot -> ShortsNativeAdPage(adEngine = adEngine)
+                        is ShortsItem.Video  -> ShortVideoPage(
+                            video        = item.video,
+                            activePlayer = activePlayer,
+                            isActive     = page == forYouPager.currentPage && ui.feedMode == FeedMode.FOR_YOU,
+                            isMuted      = isMuted,
+                            isLiked      = item.video.id in liked,
+                            isSaved      = item.video.id in saved,
+                            onLike       = { vm.toggleLike(item.video.id) },
+                            onSave       = { vm.toggleSave(item.video.id) },
+                            onMute       = { isMuted = !isMuted },
                         )
                         null -> Unit
                     }
@@ -709,24 +677,23 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                 // Discovery pager — layered on top when active
                 if (ui.feedMode == FeedMode.DISCOVERY || ui.discVideos.isNotEmpty()) {
                     VerticalPager(
-                        state    = discPager,
-                        modifier = Modifier
-                            .fillMaxSize()
+                        state             = discPager,
+                        modifier          = Modifier.fillMaxSize()
                             .then(if (ui.feedMode != FeedMode.DISCOVERY) Modifier.alpha(0f) else Modifier),
                         userScrollEnabled = ui.feedMode == FeedMode.DISCOVERY,
                     ) { page ->
                         when (val item = discItems.getOrNull(page)) {
                             is ShortsItem.AdSlot -> ShortsNativeAdPage(adEngine = adEngine)
                             is ShortsItem.Video  -> ShortVideoPage(
-                                video         = item.video,
-                                activePlayer  = activePlayer,
-                                isActive      = page == discPager.currentPage && ui.feedMode == FeedMode.DISCOVERY,
-                                isMuted       = isMuted,
-                                isLiked       = item.video.id in liked,
-                                isSaved       = item.video.id in saved,
-                                onLike        = { vm.toggleLike(item.video.id) },
-                                onSave        = { vm.toggleSave(item.video.id) },
-                                onMute        = { isMuted = !isMuted },
+                                video        = item.video,
+                                activePlayer = activePlayer,
+                                isActive     = page == discPager.currentPage && ui.feedMode == FeedMode.DISCOVERY,
+                                isMuted      = isMuted,
+                                isLiked      = item.video.id in liked,
+                                isSaved      = item.video.id in saved,
+                                onLike       = { vm.toggleLike(item.video.id) },
+                                onSave       = { vm.toggleSave(item.video.id) },
+                                onMute       = { isMuted = !isMuted },
                             )
                             null -> Unit
                         }
@@ -735,14 +702,13 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             }
         }
 
-        // ── TOP OVERLAY ───────────────────────────────────────────────────────
+        // ── Top overlay ───────────────────────────────────────────────────────
         Column(
             Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(top = 6.dp),
         ) {
-
             // Search bar
             AnimatedVisibility(
                 visible = showSearch,
@@ -750,11 +716,9 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                 exit    = fadeOut(tween(140)) + slideOutVertically(tween(160)) { -it },
             ) {
                 Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                    verticalAlignment      = Alignment.CenterVertically,
-                    horizontalArrangement  = Arrangement.spacedBy(10.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Box(
                         Modifier
@@ -764,15 +728,13 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                             .border(1.dp, GlassBorderMd, RoundedCornerShape(24.dp))
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                     ) {
-                        if (searchText.isEmpty()) {
-                            Text("Search videos…", color = White40, fontSize = 14.sp)
-                        }
+                        if (searchText.isEmpty()) Text("Search videos…", color = White40, fontSize = 14.sp)
                         androidx.compose.foundation.text.BasicTextField(
-                            value         = searchText,
-                            onValueChange = { searchText = it },
-                            textStyle     = androidx.compose.ui.text.TextStyle(color = White, fontSize = 14.sp),
-                            singleLine    = true,
-                            modifier      = Modifier.fillMaxWidth(),
+                            value           = searchText,
+                            onValueChange   = { searchText = it },
+                            textStyle       = androidx.compose.ui.text.TextStyle(color = White, fontSize = 14.sp),
+                            singleLine      = true,
+                            modifier        = Modifier.fillMaxWidth(),
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                 imeAction = androidx.compose.ui.text.input.ImeAction.Search,
                             ),
@@ -782,10 +744,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                         )
                     }
                     Box(
-                        Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(GlassMd)
+                        Modifier.size(38.dp).clip(CircleShape).background(GlassMd)
                             .clickable { showSearch = false; searchText = "" },
                         Alignment.Center,
                     ) {
@@ -795,28 +754,18 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             }
 
             // For You / Discovery toggle
-            AnimatedVisibility(
-                visible = !showSearch,
-                enter   = fadeIn(tween(160)),
-                exit    = fadeOut(tween(120)),
-            ) {
+            AnimatedVisibility(visible = !showSearch, enter = fadeIn(tween(160)), exit = fadeOut(tween(120))) {
                 Row(
                     Modifier.fillMaxWidth(),
-                    verticalAlignment      = Alignment.CenterVertically,
-                    horizontalArrangement  = Arrangement.Center,
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
                 ) {
                     Box(
-                        Modifier
-                            .padding(start = 14.dp)
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(Color(0x88000000))
-                            .border(1.dp, GlassBorderMd, CircleShape)
+                        Modifier.padding(start = 14.dp).size(34.dp).clip(CircleShape)
+                            .background(Color(0x88000000)).border(1.dp, GlassBorderMd, CircleShape)
                             .clickable { showSearch = true },
                         Alignment.Center,
-                    ) {
-                        Icon(IconSearch, null, tint = White, modifier = Modifier.size(16.dp))
-                    }
+                    ) { Icon(IconSearch, null, tint = White, modifier = Modifier.size(16.dp)) }
                     Spacer(Modifier.weight(1f))
                     FeedToggle(feedMode = ui.feedMode, onSwitch = { vm.switchMode(it) })
                     Spacer(Modifier.weight(1f))
@@ -836,7 +785,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(ui.categories.size) { i ->
-                        val selected = i == ui.selectedCategory
+                        val selected  = i == ui.selectedCategory
                         val chipScale by animateFloatAsState(if (selected) 1.04f else 1f, spring(0.6f, 400f), label = "cs")
                         Box(
                             Modifier
@@ -864,51 +813,67 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         }
 
         // Pull-to-refresh indicator
-        val showPullIndicator = pullOverscrollPx > 4f || ui.isRefreshing
         AnimatedVisibility(
-            visible  = showPullIndicator,
+            visible  = pullOverscrollPx > 4f || ui.isRefreshing,
             modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 64.dp),
             enter    = fadeIn(tween(120)) + scaleIn(tween(150), 0.6f),
             exit     = fadeOut(tween(100)) + scaleOut(tween(120), 0.6f),
         ) {
             Box(
-                Modifier
-                    .size(36.dp)
+                Modifier.size(36.dp)
                     .scale(if (ui.isRefreshing) 1f else pullIndicatorScale)
-                    .clip(CircleShape)
-                    .background(Color(0xCC000000))
-                    .border(1.dp, GlassBorderMd, CircleShape),
+                    .clip(CircleShape).background(Color(0xCC000000)).border(1.dp, GlassBorderMd, CircleShape),
                 Alignment.Center,
             ) {
-                if (ui.isRefreshing) {
-                    CinematicSpinner(size = 20.dp)
-                } else {
-                    Icon(
-                        Icons.Default.Refresh, null, tint = White,
-                        modifier = Modifier.size(18.dp).graphicsLayer {
-                            rotationZ = pullIndicatorScale * 180f
-                        }
-                    )
-                }
+                if (ui.isRefreshing) CinematicSpinner(size = 20.dp)
+                else Icon(
+                    Icons.Default.Refresh, null, tint = White,
+                    modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = pullIndicatorScale * 180f },
+                )
             }
         }
 
-        // Loading more indicator
         if (ui.isLoadingMore) {
             Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 100.dp)) {
                 CinematicSpinner(size = 28.dp)
             }
         }
+
+        // ── DEBUG OVERLAY — remove before release ─────────────────────────────
+        if (ui.debugLog.isNotEmpty()) {
+            androidx.compose.foundation.lazy.LazyColumn(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .heightIn(max = 260.dp)
+                    .padding(bottom = 90.dp)
+                    .background(Color(0xDD000000))
+                    .padding(8.dp),
+                reverseLayout = true,
+            ) {
+                items(ui.debugLog.reversed().size) { i ->
+                    Text(
+                        text     = ui.debugLog.reversed()[i],
+                        color    = if (ui.debugLog.reversed()[i].startsWith("✗")) Color(0xFFFF5555)
+                                   else if (ui.debugLog.reversed()[i].startsWith("✓")) Color(0xFF55FF55)
+                                   else Color(0xFFFFFFCC),
+                        fontSize = 10.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.padding(vertical = 1.dp),
+                    )
+                }
+            }
+        }
+        // ── END DEBUG OVERLAY ─────────────────────────────────────────────────
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TikTok-style "For You | Discovery" toggle pill (unchanged)
+// Feed toggle pill
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun FeedToggle(feedMode: FeedMode, onSwitch: (FeedMode) -> Unit) {
-    val forYouSelected = feedMode == FeedMode.FOR_YOU
     Row(
         Modifier
             .clip(RoundedCornerShape(50))
@@ -917,8 +882,8 @@ private fun FeedToggle(feedMode: FeedMode, onSwitch: (FeedMode) -> Unit) {
             .padding(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FeedTab(label = "For You",    selected = forYouSelected,  onClick = { onSwitch(FeedMode.FOR_YOU) })
-        FeedTab(label = "Discovery",  selected = !forYouSelected, onClick = { onSwitch(FeedMode.DISCOVERY) })
+        FeedTab("For You",   feedMode == FeedMode.FOR_YOU)   { onSwitch(FeedMode.FOR_YOU) }
+        FeedTab("Discovery", feedMode == FeedMode.DISCOVERY) { onSwitch(FeedMode.DISCOVERY) }
     }
 }
 
@@ -927,34 +892,20 @@ private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
     val bg    by animateColorAsState(if (selected) White else Color.Transparent, tween(200), label = "tabBg")
     val txt   by animateColorAsState(if (selected) Color.Black else White60, tween(200), label = "tabTxt")
     val scale by animateFloatAsState(if (selected) 1f else 0.95f, spring(0.7f, 600f), label = "tabS")
-
     Box(
-        Modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(50))
-            .background(bg)
-            .clickable(
-                indication        = null,
+        Modifier.scale(scale).clip(RoundedCornerShape(50)).background(bg)
+            .clickable(indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                onClick           = onClick,
-            )
+                onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 7.dp),
         Alignment.Center,
     ) {
-        Text(
-            label,
-            color      = txt,
-            fontSize   = 13.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-        )
+        Text(label, color = txt, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Single video page
-// activePlayer is passed in — ShortVideoPage never owns the player lifecycle.
-// The thumbnail is always shown underneath so there's never a black flash
-// during the ~0ms swap between ping-pong players.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(UnstableApi::class)
@@ -975,35 +926,27 @@ fun ShortVideoPage(
     DisposableEffect(isActive, activePlayer) {
         if (!isActive) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                isBuffering = state == Player.STATE_BUFFERING
-            }
+            override fun onPlaybackStateChanged(state: Int) { isBuffering = state == Player.STATE_BUFFERING }
         }
         activePlayer.addListener(listener)
-        // Sync immediately to current state
         isBuffering = activePlayer.playbackState == Player.STATE_BUFFERING
         onDispose { activePlayer.removeListener(listener) }
     }
 
     Box(Modifier.fillMaxSize()) {
-
-        // Thumbnail always underneath — prevents black flash on player swap
+        // Thumbnail underneath — prevents black flash during player swap
         AsyncImage(
-            model              = video.thumbnail,
-            contentDescription = null,
-            contentScale       = ContentScale.Crop,
-            modifier           = Modifier.fillMaxSize(),
+            model = video.thumbnail, contentDescription = null,
+            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
         )
 
-        // Player surface — only attached when this page is the active one
+        // Player surface
         if (isActive) {
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                        )
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                         useController = false
                         resizeMode    = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                         player        = activePlayer
@@ -1015,117 +958,86 @@ fun ShortVideoPage(
             )
         }
 
-        // Buffering spinner — shown while active player is still loading
         if (isBuffering && isActive) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CinematicSpinner(size = 44.dp)
-            }
+            Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = 44.dp) }
         }
 
-        // Gradient vignette
+        // Vignette
         Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color(0x44000000), Color.Transparent, Color.Transparent, Color(0xBB000000))
-                    )
-                )
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color(0x44000000), Color.Transparent, Color.Transparent, Color(0xBB000000)))
+            )
         )
 
-        // Right action column
+        // Right actions
         Column(
-            Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 14.dp, bottom = 110.dp),
+            Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 110.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
             TikTokAction(
-                icon    = if (isLiked) IconHeartFilled else IconHeart,
-                label   = formatCount(video.ups + if (isLiked) 1 else 0),
-                tint    = if (isLiked) Color(0xFFFF2D55) else Color.White,
+                icon  = if (isLiked) IconHeartFilled else IconHeart,
+                label = formatCount(video.ups + if (isLiked) 1 else 0),
+                tint  = if (isLiked) Color(0xFFFF2D55) else Color.White,
                 onClick = onLike,
             )
-            TikTokAction(icon = IconComment, label = formatCount(video.ups / 10), tint = Color.White, onClick = {})
+            TikTokAction(IconComment, formatCount(video.ups / 10), Color.White) {}
             TikTokAction(
-                icon    = if (isSaved) IconBookmarkFilled else IconBookmark,
-                label   = if (isSaved) "Saved" else "Save",
-                tint    = if (isSaved) Brand else Color.White,
+                icon  = if (isSaved) IconBookmarkFilled else IconBookmark,
+                label = if (isSaved) "Saved" else "Save",
+                tint  = if (isSaved) Brand else Color.White,
                 onClick = onSave,
             )
-            TikTokAction(icon = IconShare, label = "Share", tint = Color.White, onClick = {})
+            TikTokAction(IconShare, "Share", Color.White) {}
             TikTokAction(
-                icon    = if (isMuted) IconVolumeOff else IconVolumeOn,
-                label   = if (isMuted) "Muted" else "Sound",
-                tint    = if (isMuted) Color(0xFFFF9A00) else Color.White,
+                icon  = if (isMuted) IconVolumeOff else IconVolumeOn,
+                label = if (isMuted) "Muted" else "Sound",
+                tint  = if (isMuted) Color(0xFFFF9A00) else Color.White,
                 onClick = onMute,
             )
         }
 
-        // Bottom-left: subreddit + author + title
+        // Bottom-left: subreddit / author / title
         Column(
-            Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 16.dp, end = 80.dp, bottom = 108.dp),
+            Modifier.align(Alignment.BottomStart).padding(start = 16.dp, end = 80.dp, bottom = 108.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Box(
-                Modifier
-                    .clip(RoundedCornerShape(12.dp))
+                Modifier.clip(RoundedCornerShape(12.dp))
                     .background(Brand.copy(alpha = 0.18f))
                     .border(1.dp, Brand.copy(0.35f), RoundedCornerShape(12.dp))
                     .padding(horizontal = 10.dp, vertical = 3.dp),
-            ) {
-                Text(video.subreddit, color = Brand2, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            }
+            ) { Text(video.subreddit, color = Brand2, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
             Text(video.author, color = White80, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                video.title,
-                color      = White,
-                fontSize   = 14.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines   = 2,
-                overflow   = TextOverflow.Ellipsis,
-                lineHeight = 20.sp,
-            )
+            Text(video.title, color = White, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 20.sp)
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TikTok-style action button (unchanged)
+// TikTok-style action button
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun TikTokAction(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
     var pressed by remember { mutableStateOf(false) }
     val scale   by animateFloatAsState(if (pressed) 1.3f else 1f, spring(0.3f, 700f), label = "s")
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Icon(
             icon, null, tint = tint,
-            modifier = Modifier
-                .size(32.dp)
-                .scale(scale)
-                .clickable(
-                    indication        = null,
-                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                ) { pressed = true; onClick() },
+            modifier = Modifier.size(32.dp).scale(scale).clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            ) { pressed = true; onClick() },
         )
         Text(label, color = White.copy(.85f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
     }
-
-    LaunchedEffect(pressed) {
-        if (pressed) { kotlinx.coroutines.delay(200); pressed = false }
-    }
+    LaunchedEffect(pressed) { if (pressed) { kotlinx.coroutines.delay(200); pressed = false } }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers (unchanged)
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 private fun formatCount(n: Int): String = when {

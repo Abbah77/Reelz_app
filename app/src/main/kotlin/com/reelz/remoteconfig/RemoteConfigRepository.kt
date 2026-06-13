@@ -34,8 +34,8 @@ private val KEY_CONFIG_VERSION = longPreferencesKey("cached_config_version")
 
 private val CDN_URLS = listOf(
     "https://raw.githubusercontent.com/Abbah77/reelz-config/main/reelz_config.json",
-    "https://falling-credit-954c.yakubuyakson77.workers.dev/",
-    "https://cdn.jsdelivr.net/gh/Abbah77/reelz-config@main/reelz_config.json",
+    "https://falling-credit-954c.yakubuyakson777.workers.dev/",
+    "https://cdn.jsdelivr.net/gh/Abbah777/reelz-config@main/reelz_config.json",
 )
 
 /** Three-state readiness so the UI never races against DataStore. */
@@ -173,10 +173,20 @@ class RemoteConfigRepository @Inject constructor(
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private suspend fun fetchRaw(url: String): Pair<String?, Int> = withContext(Dispatchers.IO) {
+        // CDNs like jsdelivr and raw.githubusercontent.com aggressively cache
+        // branch-resolved files at the edge (sometimes for hours), so a config
+        // update can silently fail to reach the app without this. Appending a
+        // unique query param forces every request to be treated as a fresh
+        // resource, bypassing edge caches without affecting the user's own
+        // worker endpoint (it simply ignores the extra param).
+        val cacheBustedUrl = url + (if (url.contains("?")) "&" else "?") + "cb=" + System.currentTimeMillis()
+
         val req = Request.Builder()
-            .url(url)
+            .url(cacheBustedUrl)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
             .header("Accept", "application/json, text/plain, */*")
+            .header("Cache-Control", "no-cache, no-store")
+            .header("Pragma", "no-cache")
             .build()
         http.newCall(req).execute().use { resp ->
             Log.d(tag, "fetchRaw $url -> HTTP ${resp.code}")
