@@ -2,7 +2,6 @@ package com.reelz.ui.screens.downloads
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -24,8 +23,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
-import com.reelz.BuildConfig
-import com.reelz.data.local.DownloadDao
+import com.reelz.BuildConfigimport com.reelz.data.local.DownloadDao
 import com.reelz.data.model.*
 import com.reelz.data.repository.DownloadRepository
 import com.reelz.service.DownloadService
@@ -48,6 +46,7 @@ class DownloadsViewModel @Inject constructor(
 
     fun delete(item: DownloadItem, ctx: Context) { viewModelScope.launch { repo.delete(ctx, item) } }
     fun resume(ctx: Context, item: DownloadItem)  { viewModelScope.launch { repo.resume(ctx, item) } }
+    fun pause(ctx: Context, item: DownloadItem)   { viewModelScope.launch { repo.pause(ctx, item) } }
 }
 
 @Composable
@@ -123,6 +122,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                         onPlay   = { playDownload(ctx, dl) },
                         onDelete = { vm.delete(dl, ctx) },
                         onResume = { vm.resume(ctx, dl) },
+                        onPause  = { vm.pause(ctx, dl) },
                     )
                 }
                 item { Spacer(Modifier.height(90.dp)) }
@@ -132,21 +132,29 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
 }
 
 private fun playDownload(ctx: Context, dl: DownloadItem) {
-    val intent = Intent(ctx, PlayerActivity::class.java).apply {
-        putExtra("tmdbId", dl.tmdbId); putExtra("mediaType", dl.mediaType)
-        putExtra("season", dl.season); putExtra("episode", dl.episode)
-        putExtra("title", dl.title);   putExtra("posterPath", dl.posterPath)
+    val base = Intent(ctx, PlayerActivity::class.java).apply {
+        putExtra("tmdbId",      dl.tmdbId)
+        putExtra("mediaType",   dl.mediaType)
+        putExtra("season",      dl.season)
+        putExtra("episode",     dl.episode)
+        putExtra("title",       dl.title)
+        putExtra("posterPath",  dl.posterPath)
+        putExtra("downloadId",  dl.id)   // tells player this is offline mode
     }
     when {
-        dl.status == DownloadStatus.DONE.name && dl.filePath.isNotBlank() ->
-            intent.data = Uri.fromFile(File(dl.filePath))
-        dl.localPlaylistPath.isNotBlank() -> {
-            intent.data = Uri.fromFile(File(dl.localPlaylistPath))
-            intent.putExtra("isLocalHls", true)
+        // Fully downloaded MP4 — play directly as progressive
+        dl.status == DownloadStatus.DONE.name && dl.filePath.isNotBlank() -> {
+            base.putExtra("streamUrl",   "file://${dl.filePath}")
+            base.putExtra("streamIsHls", false)
+            ctx.startActivity(base)
         }
-        else -> return
+        // Partial download with a local HLS playlist — play in-progress content
+        dl.localPlaylistPath.isNotBlank() -> {
+            base.putExtra("streamUrl",   "file://${dl.localPlaylistPath}")
+            base.putExtra("streamIsHls", true)
+            ctx.startActivity(base)
+        }
     }
-    ctx.startActivity(intent)
 }
 
 @Composable
@@ -155,12 +163,14 @@ fun DownloadCard(
     onPlay: () -> Unit,
     onDelete: () -> Unit,
     onResume: () -> Unit,
+    onPause: () -> Unit,
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val isDownloading  = item.status == DownloadStatus.DOWNLOADING.name
     val isDone         = item.status == DownloadStatus.DONE.name
     val isPaused       = item.status == DownloadStatus.PAUSED.name
+    val isQueued       = item.status == DownloadStatus.QUEUED.name
     val isError        = item.status == DownloadStatus.ERROR.name
     val canPlayPartial = item.localPlaylistPath.isNotBlank()
     val canPlay        = isDone || canPlayPartial
@@ -172,7 +182,6 @@ fun DownloadCard(
     }
     val pctInt = (pct * 100).toInt()
 
-    // Animated progress
     val animPct by animateFloatAsState(pct, tween(600), label = "prog")
 
     Box(
@@ -186,7 +195,7 @@ fun DownloadCard(
                 RoundedCornerShape(18.dp)
             )
     ) {
-        // Active download shimmer edge
+        // Active download shimmer top edge
         if (isDownloading) {
             val shimmer = rememberInfiniteTransition(label = "shimmer")
             val sx by shimmer.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), "sx")
@@ -207,7 +216,7 @@ fun DownloadCard(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.Top,
             ) {
-                // Poster
+                // ── Poster ─────────────────────────────────────────────────
                 Box(
                     Modifier.width(66.dp).height(94.dp)
                         .clip(RoundedCornerShape(10.dp))
@@ -237,6 +246,7 @@ fun DownloadCard(
                     }
                 }
 
+                // ── Info column ───────────────────────────────────────────
                 Column(Modifier.weight(1f)) {
                     Text(
                         item.title, color = White, fontWeight = FontWeight.Bold,
@@ -257,11 +267,11 @@ fun DownloadCard(
                         }
                     }
 
-                    // Progress section
-                    if (isDownloading) {
-                        Spacer(Modifier.height(8.dp))
+                    // ── Active download progress ──────────────────────────
+                    if (isDownloading || isQueued) {
+                        Spacer(Modifier.height(10.dp))
                         Box(
-                            Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp))
+                            Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp))
                                 .background(GlassMd)
                         ) {
                             Box(
@@ -269,8 +279,8 @@ fun DownloadCard(
                                     .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
                             )
                         }
-                        Spacer(Modifier.height(5.dp))
-                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             val progressLabel = when {
                                 item.totalSegments > 0 -> "${item.segmentsDone}/${item.totalSegments} · $pctInt%"
                                 item.sizeBytes > 0     -> "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
@@ -281,47 +291,77 @@ fun DownloadCard(
                                 Text(formatSpeed(item.networkSpeedBps), color = Brand, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
                         }
-                        if (canPlayPartial && pct >= 0.05f) {
-                            Spacer(Modifier.height(6.dp))
-                            Row(
-                                Modifier.clip(RoundedCornerShape(8.dp))
-                                    .background(AmberGlass)
-                                    .border(1.dp, AmberBorder, RoundedCornerShape(8.dp))
-                                    .clickable(onClick = onPlay)
-                                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            ) {
-                                Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(11.dp))
-                                Text("Watch $pctInt% now", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Pause button
+                            if (isDownloading) {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(GlassMd)
+                                        .border(1.dp, GlassBorderMd, RoundedCornerShape(8.dp))
+                                        .clickable(onClick = onPause)
+                                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                                ) {
+                                    Text("⏸ Pause", color = White60, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                            // Watch partial button (5%+ downloaded)
+                            if (canPlayPartial && pct >= 0.05f) {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(AmberGlass)
+                                        .border(1.dp, AmberBorder, RoundedCornerShape(8.dp))
+                                        .clickable(onClick = onPlay)
+                                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                                ) {
+                                    Text("▶ Watch $pctInt%", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                }
                             }
                         }
                     }
 
+                    // ── Paused / Error state ──────────────────────────────
                     if (isPaused || isError) {
-                        Spacer(Modifier.height(7.dp))
+                        Spacer(Modifier.height(8.dp))
                         if (pct > 0f) {
-                            Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
+                            Box(Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)).background(GlassMd)) {
                                 Box(Modifier.fillMaxWidth(animPct).fillMaxHeight().background(White40))
                             }
-                            Spacer(Modifier.height(5.dp))
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "${pctInt}% downloaded",
+                                color = White40, fontSize = 10.sp,
+                            )
+                            Spacer(Modifier.height(6.dp))
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                if (isPaused) "Paused" else "Failed",
+                                if (isPaused) "Paused" else "Download failed",
                                 color = if (isPaused) White40 else Error, fontSize = 10.sp,
                             )
                             Box(
-                                Modifier.clip(RoundedCornerShape(8.dp)).background(AmberGlass)
+                                Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(AmberGlass)
                                     .border(1.dp, AmberBorder, RoundedCornerShape(8.dp))
                                     .clickable(onClick = onResume)
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) { Text("Resume", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
+                                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    "▶ Resume",
+                                    color = Brand,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
                         }
                     }
                 }
 
-                // Delete
+                // ── Delete button ─────────────────────────────────────────
                 Box(
                     Modifier.size(32.dp).clip(CircleShape).background(GlassMd)
                         .border(1.dp, GlassBorderMd, CircleShape)
