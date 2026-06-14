@@ -10,7 +10,6 @@ import com.reelz.data.local.DownloadDao
 import com.reelz.data.model.DownloadStatus
 import com.reelz.remoteconfig.ConfigSyncWorker
 import com.reelz.remoteconfig.RemoteConfigRepository
-import com.reelz.brain.TasteSyncWorker
 import com.reelz.ads.AdEngine
 import com.reelz.service.DownloadService
 import dagger.hilt.android.HiltAndroidApp
@@ -47,9 +46,6 @@ class ReelzApp : Application(), ImageLoaderFactory {
 
         // Periodic background refresh every 6 hours.
         ConfigSyncWorker.schedule(this)
-
-        // Periodic background sync of the local taste profile (Reelz Brain).
-        TasteSyncWorker.schedule(this)
 
         // ── Recover downloads stuck in QUEUED/DOWNLOADING state ──────────────
         recoverStuckDownloads()

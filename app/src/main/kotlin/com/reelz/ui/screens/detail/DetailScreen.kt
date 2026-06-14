@@ -39,8 +39,6 @@ import com.reelz.data.repository.DownloadRepository
 import com.reelz.data.repository.MediaRepository
 import com.reelz.scanner.NativeBridge
 import com.reelz.scanner.StreamEngine
-import com.reelz.brain.TasteEngine
-import com.reelz.brain.UserAction
 import com.reelz.ui.components.*
 import com.reelz.ui.screens.downloads.formatSize
 import com.reelz.ui.screens.player.PlayerActivity
@@ -122,7 +120,6 @@ class DetailViewModel @Inject constructor(
     private val downloadRepo: DownloadRepository,
     private val engine: StreamEngine,
     private val adEngine: com.reelz.ads.AdEngine,
-    private val tasteEngine: TasteEngine,
     @javax.inject.Named("download") private val httpClient: okhttp3.OkHttpClient,
 ) : ViewModel() {
 
@@ -193,11 +190,7 @@ class DetailViewModel @Inject constructor(
                     backdropPath = detail.backdropPath, releaseDate = detail.releaseDate,
                     voteAverage = detail.voteAverage, voteCount = detail.voteCount,
                     popularity = 0.0, mediaType = mediaType,
-                    genreIds = detail.genres.map { it.id },
-                    originalLanguage = detail.originalLanguage,
                 )
-                // Reelz Brain — silent "viewed detail" signal (weak, curiosity-level)
-                tasteEngine.track(currentMedia!!, UserAction.VIEW_DETAIL)
                 // Screen is now visible — isLoading = false, extrasLoading = true
                 _ui.update { it.copy(
                     isLoading     = false,
@@ -276,9 +269,6 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             val now = repo.toggleWatchlist(m)
             _ui.update { it.copy(isInWatchlist = now) }
-            // Reelz Brain — saving = high intent, removing = mild "changed my mind" signal
-            if (now) tasteEngine.track(m, UserAction.SAVE_WATCHLIST)
-            else tasteEngine.track(m, UserAction.REMOVE_WATCHLIST)
         }
     }
 
@@ -287,8 +277,6 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             val now = repo.toggleLike(m)
             _ui.update { it.copy(isLiked = now) }
-            // Reelz Brain — liking is the strongest explicit positive signal
-            if (now) tasteEngine.track(m, UserAction.LIKE)
         }
     }
 
@@ -383,9 +371,6 @@ class DetailViewModel @Inject constructor(
                 qualityTracks   = qualityTracks,
             )
             _ui.update { it.copy(downloadEnqueued = true) }
-
-            // Reelz Brain — downloading is a strong positive signal (intent to watch later)
-            currentMedia?.let { tasteEngine.track(it, UserAction.DOWNLOAD) }
         }
     }
 
@@ -465,8 +450,6 @@ fun DetailScreen(
                 putExtra("episode",    episode)
                 putExtra("title",      if (epName.isNotBlank()) epName else d.title)
                 putExtra("posterPath", d.posterPath)
-                putExtra("genreIds",   d.genres.map { it.id }.toIntArray())
-                putExtra("originalLanguage", d.originalLanguage)
                 readyStream?.let { stream ->
                     putExtra("streamUrl",     stream.url)
                     putExtra("streamIsHls",   stream.isHls)

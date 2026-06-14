@@ -113,35 +113,4 @@ interface TmdbApi {
         @Query("sort_by")                sort: String = "popularity.desc",
         @Query("page")                   page: Int = 1,
     ): TmdbPageDto<TmdbMovieDto>
-
-    // ── Discovery: Hidden Gems ─────────────────────────────────────────────────
-    // High quality (≥7.5), not over-exposed (≤1000 votes), enough votes (≥50)
-    @GET("discover/movie")
-    suspend fun getHiddenGemsMovies(
-        @Query("vote_average.gte") voteAverageGte: Double = 7.5,
-        @Query("vote_count.lte")   voteCountLte: Int = 1000,
-        @Query("vote_count.gte")   voteCountGte: Int = 50,
-        @Query("sort_by")          sortBy: String = "vote_average.desc",
-        @Query("page")             page: Int = 1,
-    ): TmdbPageDto<TmdbMovieDto>
-
-    // ── Discovery: World Cinema ────────────────────────────────────────────────
-    // Quality filter by unexplored original language
-    @GET("discover/movie")
-    suspend fun getWorldCinemaMovies(
-        @Query("with_original_language") language: String,
-        @Query("vote_average.gte")       voteAverageGte: Double = 6.5,
-        @Query("sort_by")                sortBy: String = "vote_average.desc",
-        @Query("page")                   page: Int = 1,
-    ): TmdbPageDto<TmdbMovieDto>
-
-    // ── Discovery: Award Winners (critically acclaimed) ────────────────────────
-    // Top-rated with substantial vote base = proven quality
-    @GET("discover/movie")
-    suspend fun getAwardWinnersMovies(
-        @Query("vote_average.gte") voteAverageGte: Double = 8.0,
-        @Query("vote_count.gte")   voteCountGte: Int = 500,
-        @Query("sort_by")          sortBy: String = "vote_average.desc",
-        @Query("page")             page: Int = 1,
-    ): TmdbPageDto<TmdbMovieDto>
 }

@@ -57,7 +57,6 @@ data class MediaDetail(
     val budget: Long = 0,
     val revenue: Long = 0,
     val similar: List<Media> = emptyList(),
-    val originalLanguage: String = "en",
 )
 
 data class Genre(val id: Int, val name: String)

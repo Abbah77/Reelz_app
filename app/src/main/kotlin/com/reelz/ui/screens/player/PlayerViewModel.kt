@@ -33,8 +33,6 @@ import com.reelz.data.repository.MediaRepository
 import com.reelz.data.repository.OpenSubtitlesRepository
 import com.reelz.scanner.PrefetchState
 import com.reelz.scanner.StreamEngine
-import com.reelz.brain.TasteEngine
-import com.reelz.brain.UserAction
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -144,7 +142,6 @@ class PlayerViewModel @Inject constructor(
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val openSubtitlesRepo: OpenSubtitlesRepository,
     private val adEngine: AdEngine,
-    private val tasteEngine: TasteEngine,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PlayerUiState())
@@ -170,14 +167,6 @@ class PlayerViewModel @Inject constructor(
     private var lastPreRollTimeMinutes   = -30L   // allows pre-roll on very first play
     private var trackSelector: DefaultTrackSelector? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-
-    // ── Reelz Brain — taste tracking fields ───────────────────────────────────
-    private var currentGenreIds: List<Int> = emptyList()
-    private var currentLanguage: String = "en"
-    private var hasSentEarlyQuit: Boolean = false
-    private var hasSent30SecSignal: Boolean = false
-    private var hasSent50PctSignal: Boolean = false
-    private var hasSent90PctSignal: Boolean = false
 
     // ─────────────────────────────────────────────────────────────────────────
     // Network monitoring
@@ -260,8 +249,6 @@ class PlayerViewModel @Inject constructor(
         streamReferer: String = "",
         streamOrigin: String = "",
         downloadId: String? = null,
-        genreIds: List<Int> = emptyList(),
-        originalLanguage: String = "en",
     ) {
         currentTmdbId    = tmdbId
         currentType      = mediaType
@@ -270,9 +257,6 @@ class PlayerViewModel @Inject constructor(
         currentTitle     = title
         currentPoster    = posterPath
         currentDownloadId = downloadId
-
-        // ── Reelz Brain — start a fresh tracking session for this title ────────
-        initTasteTracking(genreIds, originalLanguage)
 
         val isOffline = downloadId != null
         val epLabel   = if (season > 0) "S${season} E${episode}" else ""
@@ -860,66 +844,6 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Reelz Brain — taste tracking
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /** Called from init() — resets the per-session signal flags for a new title. */
-    private fun initTasteTracking(genreIds: List<Int>, originalLanguage: String) {
-        currentGenreIds = genreIds
-        currentLanguage = originalLanguage
-        hasSentEarlyQuit = false
-        hasSent30SecSignal = false
-        hasSent50PctSignal = false
-        hasSent90PctSignal = false
-    }
-
-    /** Lightweight Media stub carrying just the fields TasteEngine.scoreMedia() needs. */
-    private fun trackingMedia() = com.reelz.data.model.Media(
-        id = currentTmdbId,
-        tmdbId = currentTmdbId,
-        title = _ui.value.title,
-        overview = "",
-        posterPath = currentPoster,
-        backdropPath = null,
-        releaseDate = null,
-        voteAverage = 0.0,
-        voteCount = 0,
-        popularity = 0.0,
-        genreIds = currentGenreIds,
-        mediaType = currentType,
-        originalLanguage = currentLanguage,
-    )
-
-    /** Called every ~500ms from PlayerActivity's polling loop — feeds the taste engine silently. */
-    fun onPlaybackProgress(positionMs: Long, durationMs: Long) {
-        if (durationMs <= 0 || currentTmdbId <= 0) return
-        val pct = positionMs.toFloat() / durationMs
-
-        if (!hasSent30SecSignal && positionMs >= 30_000L) {
-            hasSent30SecSignal = true
-            tasteEngine.track(trackingMedia(), UserAction.WATCH_PROGRESS, 0.10f)
-        }
-        if (!hasSent50PctSignal && pct >= 0.50f) {
-            hasSent50PctSignal = true
-            tasteEngine.track(trackingMedia(), UserAction.WATCH_PROGRESS, 0.50f)
-        }
-        if (!hasSent90PctSignal && pct >= 0.90f) {
-            hasSent90PctSignal = true
-            tasteEngine.track(trackingMedia(), UserAction.WATCH_PROGRESS, 0.90f)
-        }
-    }
-
-    /** Called when playback stops/releases — detects an early "bounce" (mild negative signal). */
-    private fun onPlayerStopped(positionMs: Long, durationMs: Long) {
-        if (currentTmdbId <= 0) return
-        val pct = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
-        if (positionMs < 10_000L && pct < 0.10f && !hasSent30SecSignal && !hasSentEarlyQuit) {
-            hasSentEarlyQuit = true
-            tasteEngine.track(trackingMedia(), UserAction.QUIT_EARLY)
-        }
-    }
-
     fun pollPosition() {
         val p = exoPlayer ?: return
         val pos = p.currentPosition.coerceAtLeast(0)
@@ -932,7 +856,6 @@ class PlayerViewModel @Inject constructor(
             )
         }
         if (dur > 0) {
-            onPlaybackProgress(pos, dur)
             viewModelScope.launch {
                 repo.saveProgress(
                     currentTmdbId, currentTitle, currentPoster,
@@ -1007,7 +930,6 @@ class PlayerViewModel @Inject constructor(
         stopNetworkMonitor(context)
         // IMPORTANT: stream subtitles are intentionally NOT saved here.
         // Only downloaded-video subtitles (DownloadSubtitle) are already in Room DB.
-        exoPlayer?.let { onPlayerStopped(it.currentPosition.coerceAtLeast(0), it.duration.coerceAtLeast(0)) }
         exoPlayer?.stop()
         exoPlayer?.clearMediaItems()
         exoPlayer?.release()

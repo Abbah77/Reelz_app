@@ -299,8 +299,6 @@ class PlayerActivity : ComponentActivity() {
         val streamReferer = intent.getStringExtra("streamReferer") ?: ""
         val streamOrigin  = intent.getStringExtra("streamOrigin") ?: ""
         val downloadId    = intent.getStringExtra("downloadId")
-        val genreIds      = intent.getIntArrayExtra("genreIds")?.toList() ?: emptyList()
-        val originalLanguage = intent.getStringExtra("originalLanguage") ?: "en"
 
         setContent {
             MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(primary = Brand)) {
@@ -313,7 +311,6 @@ class PlayerActivity : ComponentActivity() {
                     streamUrl   = streamUrl, streamIsHls = streamIsHls,
                     streamReferer = streamReferer, streamOrigin = streamOrigin,
                     downloadId  = downloadId,
-                    genreIds    = genreIds, originalLanguage = originalLanguage,
                 )
             }
         }
@@ -346,8 +343,6 @@ fun PlayerScreen(
     streamReferer: String = "",
     streamOrigin: String = "",
     downloadId: String? = null,
-    genreIds: List<Int> = emptyList(),
-    originalLanguage: String = "en",
 ) {
     val ctx     = LocalContext.current
     val ui      by vm.ui.collectAsState()
@@ -357,8 +352,7 @@ fun PlayerScreen(
 
     LaunchedEffect(tmdbId, season, episode) {
         vm.init(ctx, tmdbId, mediaType, season, episode, title, poster,
-            streamUrl, streamIsHls, streamReferer, streamOrigin, downloadId,
-            genreIds, originalLanguage)
+            streamUrl, streamIsHls, streamReferer, streamOrigin, downloadId)
     }
     LaunchedEffect(Unit) { while (true) { vm.pollPosition(); delay(500) } }
     LaunchedEffect(ui.showControls) {

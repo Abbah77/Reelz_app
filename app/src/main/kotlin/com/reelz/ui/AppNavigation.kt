@@ -26,7 +26,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import com.reelz.data.model.MediaType
 import com.reelz.ui.components.*
 import com.reelz.ads.AdEngine
-import com.reelz.brain.TasteEngine
 import com.reelz.ui.screens.browse.BrowseScreen
 import com.reelz.ui.screens.browse.BrowseViewModel
 import com.reelz.ui.screens.shorts.ShortsScreen
@@ -36,14 +35,10 @@ import com.reelz.ui.screens.transfer.TransferScreen
 import com.reelz.ui.screens.profile.ProfileScreen
 import com.reelz.ui.screens.detail.DetailScreen
 import com.reelz.ui.screens.search.SearchScreen
-import com.reelz.ui.screens.onboarding.OnboardingScreen
 import com.reelz.ui.theme.*
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.ViewModel
-import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 // ── Route definitions ─────────────────────────────────────────────────────────
 sealed class Route(val path: String) {
@@ -53,19 +48,10 @@ sealed class Route(val path: String) {
     object Transfer : Route("transfer")
     object Profile  : Route("profile")
     object Search   : Route("search")
-    object Onboarding: Route("onboarding")
     object Detail   : Route("detail/{tmdbId}/{mediaType}") {
         fun go(id: Int, type: MediaType) = "detail/$id/${type.name}"
     }
 }
-
-// ── Tiny gate ViewModel — exposes whether the user has completed the
-//    Reelz Brain cold-start onboarding, so AppNavigation can pick the
-//    correct start destination on first launch. ─────────────────────────────
-@HiltViewModel
-class TasteGateViewModel @Inject constructor(
-    val tasteEngine: TasteEngine,
-) : ViewModel()
 
 data class NavTab(
     val route: String,
@@ -97,12 +83,6 @@ fun AppNavigation(adEngine: AdEngine) {
 
     // Shared ShortsViewModel so the Shorts bottom tab can scroll-to-top + refresh
     val shortsVm: ShortsViewModel = hiltViewModel()
-
-    // Reelz Brain — show the cold-start taste picker once, on first launch.
-    val tasteGateVm: TasteGateViewModel = hiltViewModel()
-    val startDestination = remember {
-        if (tasteGateVm.tasteEngine.profile.value.isOnboarded) Route.Browse.path else Route.Onboarding.path
-    }
 
     // Home button state — drives TikTok-style spinner in bottom nav
     var isHomeRefreshing by remember { mutableStateOf(false) }
@@ -170,23 +150,13 @@ fun AppNavigation(adEngine: AdEngine) {
     ) { padding ->
         NavHost(
             navController    = nav,
-            startDestination = startDestination,
+            startDestination = Route.Browse.path,
             modifier         = Modifier.padding(padding),
             enterTransition  = { fadeIn(tween(280)) + scaleIn(tween(280), 0.97f) },
             exitTransition   = { fadeOut(tween(200)) + scaleOut(tween(200), 1.02f) },
             popEnterTransition  = { fadeIn(tween(280)) + scaleIn(tween(280), 0.97f) },
             popExitTransition   = { fadeOut(tween(200)) + scaleOut(tween(200), 0.96f) },
         ) {
-            // ── Reelz Brain: cold-start taste picker (first launch only) ───────
-            composable(Route.Onboarding.path) {
-                OnboardingScreen(
-                    onDone = {
-                        nav.navigate(Route.Browse.path) {
-                            popUpTo(Route.Onboarding.path) { inclusive = true }
-                        }
-                    }
-                )
-            }
             // Pass shared vm + listState so home button can control both
             composable(Route.Browse.path)    { BrowseScreen(nav, adEngine, browseVm, browseListState) }
             composable(Route.Shorts.path)    { ShortsScreen(nav, adEngine, shortsVm) }

@@ -20,6 +20,7 @@ class MediaRepository @Inject constructor(
 
     // ── Home sections ─────────────────────────────────────────────────────────
     suspend fun getHomeSections(forceRefresh: Boolean = false): List<HomeSection> {
+        // Try cache first (fast offline path)
         val cacheCount = cachedMediaDao.count()
         if (!forceRefresh && cacheCount > 0) {
             return buildSectionsFromCache()
@@ -65,6 +66,7 @@ class MediaRepository @Inject constructor(
     private suspend fun cacheHomeSections(sections: List<HomeSection>) {
         val all = sections.flatMap { it.items }.map { it.toCached() }
         cachedMediaDao.insertAll(all)
+        // Evict entries older than 48h
         cachedMediaDao.evict(System.currentTimeMillis() - 48 * 60 * 60 * 1000L)
     }
 
@@ -81,68 +83,14 @@ class MediaRepository @Inject constructor(
     suspend fun getMovieGenres(): List<Genre> = api.getMovieGenres().genres.map { Genre(it.id, it.name) }
     suspend fun getTvGenres(): List<Genre>    = api.getTvGenres().genres.map { Genre(it.id, it.name) }
 
-    // ── Discovery rows ────────────────────────────────────────────────────────
-
-    /**
-     * Trending: combines trending movies + TV, sorted by popularity.
-     * Social FOMO row — same for all users. Bypasses taste entirely.
-     */
-    suspend fun getTrending(): List<Media> {
-        val movies = api.getTrendingMovies().results.map { it.toMedia(MediaType.MOVIE) }
-        val tv     = api.getTrendingTv().results.map { it.toMedia(MediaType.TV) }
-        return (movies + tv)
-            .sortedByDescending { it.popularity }
-            .take(20)
-    }
-
-    /**
-     * Hidden Gems: high vote_average (≥7.5) but low vote_count (≤1000).
-     * Quality + scarcity = treasure hunt psychology.
-     * Quality floor ≥50 votes so we don't surface brand-new unknowns.
-     */
-    suspend fun getHiddenGems(): List<Media> =
-        api.getHiddenGemsMovies().results
-            .map { it.toMedia(MediaType.MOVIE) }
-            .filter { it.voteAverage >= 7.5 && it.voteCount in 50..1000 }
-
-    /**
-     * World Cinema: movies from unexplored languages, ranked by quality.
-     * Language discovery — Korean drama fans often love Turkish drama.
-     *
-     * @param unexploredLangKeys Internal language keys from getUnexploredGenres
-     *        (e.g. ["lang_korean", "lang_turkish"]) — we map to ISO codes.
-     */
-    suspend fun getWorldCinema(unexploredLangKeys: List<String>): List<Media> {
-        val langCodes = unexploredLangKeys
-            .mapNotNull { langKeyToIsoCode(it) }
-            .distinct()
-            .take(3) // cap network calls
-        if (langCodes.isEmpty()) return emptyList()
-
-        val results = mutableListOf<Media>()
-        for (lang in langCodes) {
-            runCatching {
-                val items = api.getWorldCinemaMovies(language = lang).results
-                    .map { it.toMedia(MediaType.MOVIE) }
-                results.addAll(items.take(6))
-            }
-        }
-        return results.distinctBy { it.tmdbId }
-    }
-
-    /**
-     * Award Winners: critically acclaimed films with substantial vote base.
-     * Trusted third-party authority removes the "algorithm chose this" feeling.
-     */
-    suspend fun getAwardWinners(): List<Media> =
-        api.getAwardWinnersMovies().results.map { it.toMedia(MediaType.MOVIE) }
-
     // ── Detail ────────────────────────────────────────────────────────────────
 
+    /** Fast — no append_to_response. Returns in ~300ms. Shows the screen immediately. */
     suspend fun getDetailFast(tmdbId: Int, type: MediaType): MediaDetail =
         if (type == MediaType.MOVIE) api.getMovieDetail(tmdbId).toDetail()
         else api.getTvDetail(tmdbId).toDetail()
 
+    /** Extras — credits, videos, similar. Heavier, loads after screen is visible. */
     suspend fun getDetailExtras(tmdbId: Int, type: MediaType): MediaDetail =
         if (type == MediaType.MOVIE) api.getMovieExtras(tmdbId).toDetail()
         else api.getTvExtras(tmdbId).toDetail()
@@ -211,24 +159,6 @@ class MediaRepository @Inject constructor(
             positionMs = positionMs, durationMs = durationMs,
         ))
     }
-
-    // ── Internal helpers ──────────────────────────────────────────────────────
-    private fun langKeyToIsoCode(key: String): String? = when (key) {
-        "lang_japanese"    -> "ja"
-        "lang_korean"      -> "ko"
-        "lang_hindi"       -> "hi"
-        "lang_french"      -> "fr"
-        "lang_spanish"     -> "es"
-        "lang_turkish"     -> "tr"
-        "lang_arabic"      -> "ar"
-        "lang_chinese"     -> "zh"
-        "lang_portuguese"  -> "pt"
-        "lang_german"      -> "de"
-        "lang_thai"        -> "th"
-        "lang_tamil"       -> "ta"
-        "lang_telugu"      -> "te"
-        else               -> null
-    }
 }
 
 // ── DTO → Domain mappers ──────────────────────────────────────────────────────
@@ -265,7 +195,6 @@ fun TmdbMovieDetailDto.toDetail(): MediaDetail {
         spokenLanguages = spokenLanguages.map { it.englishName },
         productionCountries = productionCountries.map { it.name },
         similar = similar?.results?.take(12)?.map { it.toMedia(MediaType.MOVIE) } ?: emptyList(),
-        originalLanguage = originalLanguage,
     )
 }
 
@@ -288,7 +217,6 @@ fun TmdbTvDetailDto.toDetail(): MediaDetail {
         } ?: emptyList(),
         trailerKey = trailer, imdbId = externalIds?.imdbId,
         similar = similar?.results?.take(12)?.map { it.toMedia(MediaType.TV) } ?: emptyList(),
-        originalLanguage = originalLanguage,
     )
 }
 

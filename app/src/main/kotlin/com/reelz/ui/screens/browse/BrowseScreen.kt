@@ -37,9 +37,6 @@ import coil.compose.AsyncImage
 import com.reelz.BuildConfig
 import com.reelz.data.model.*
 import com.reelz.data.repository.MediaRepository
-import com.reelz.brain.TasteEngine
-import com.reelz.brain.TmdbGenreMap
-import com.reelz.brain.UserAction
 import com.reelz.ui.Route
 import com.reelz.ui.components.*
 import com.reelz.ui.theme.*
@@ -55,41 +52,14 @@ import kotlin.math.roundToInt
 // ── ViewModel ─────────────────────────────────────────────────────────────────
 
 sealed class FeedRow {
-    // ── Existing rows ──────────────────────────────────────────────────────────
     data class Section(val section: HomeSection) : FeedRow()
     data class InfinitePage(val items: List<Media>, val page: Int) : FeedRow()
-    data class MoodRow(val mood: String, val items: List<Media>) : FeedRow()
     object NativeAdPlacement : FeedRow()
-
-    // ── Discovery rows (Anti-Filter-Bubble Architecture) ───────────────────────
-
-    /** Zone 2: Social proof — same for all users. Pure FOMO. */
-    data class TrendingRow(val items: List<Media>) : FeedRow()
-
-    /** Zone 2: Quality + scarcity. High rating, low vote count. */
-    data class HiddenGems(val items: List<Media>) : FeedRow()
-
-    /** Zone 2: Language and cultural discovery. */
-    data class WorldCinema(val items: List<Media>) : FeedRow()
-
-    /** Zone 2: Trusted external authority signal. */
-    data class AwardWinners(val items: List<Media>) : FeedRow()
-
-    /**
-     * Zone 3: Labeled exploration. Honest about what it is.
-     * "You've Never Tried Horror — Here's the Best"
-     */
-    data class BraveExplore(
-        val genreLabel: String,
-        val headline: String,
-        val items: List<Media>,
-    ) : FeedRow()
 }
 
 @HiltViewModel
 class BrowseViewModel @Inject constructor(
     private val repo: MediaRepository,
-    private val tasteEngine: TasteEngine,
 ) : ViewModel() {
 
     data class UiState(
@@ -107,7 +77,6 @@ class BrowseViewModel @Inject constructor(
         val continueWatching: List<WatchHistory> = emptyList(),
         val isLoadingMore: Boolean = false,
         val isCacheLoaded: Boolean = false,
-        val moodLabel: String? = null,  // e.g., "😱 Scary tonight"
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -115,103 +84,42 @@ class BrowseViewModel @Inject constructor(
 
     private var infinitePage = 1
     private var isInfiniteExhausted = false
+    private var categorySections: List<HomeSection> = emptyList()
     private var categorySectionsEmitted = false
 
     init {
         load(forceRefresh = false)
-
         viewModelScope.launch {
             repo.getHistory().collect { h ->
                 _ui.update { it.copy(continueWatching = h) }
-            }
-        }
-
-        // React to taste profile changes (e.g., after onboarding completes)
-        viewModelScope.launch {
-            tasteEngine.profile.drop(1).collect { // drop(1) = skip initial value
-                try {
-                    // Re-sort existing feed if profile changes significantly
-                    _ui.update { state ->
-                        val reranked = rerankFeed(state.feedRows)
-                        state.copy(feedRows = reranked)
-                    }
-                } catch (_: Exception) {
-                    // Re-ranking is a nice-to-have — never let it break the feed
-                }
             }
         }
     }
 
     fun load(forceRefresh: Boolean = true) {
         viewModelScope.launch {
-            if (forceRefresh) _ui.update { it.copy(isRefreshing = true, error = null) }
-            else _ui.update { it.copy(isLoading = true, error = null) }
-
+            if (forceRefresh) {
+                _ui.update { it.copy(isRefreshing = true, error = null) }
+            } else {
+                _ui.update { it.copy(isLoading = true, error = null) }
+            }
             infinitePage = 1
             isInfiniteExhausted = false
             categorySectionsEmitted = false
-
             try {
-                // ── Parallel fetches ──────────────────────────────────────────
-                // Home sections + discovery data all in parallel — no sequential bottleneck.
-                val sectionsDeferred     = async { repo.getHomeSections(forceRefresh) }
-                val genresDeferred       = async { runCatching { repo.getMovieGenres() }.getOrElse { emptyList() } }
-                val trendingDeferred     = async { runCatching { repo.getTrending() }.getOrElse { emptyList() } }
-                val hiddenGemsDeferred   = async { runCatching { repo.getHiddenGems() }.getOrElse { emptyList() } }
-                val worldCinemaDeferred  = async { runCatching { repo.getWorldCinema(tasteEngine.getUnexploredGenres()) }.getOrElse { emptyList() } }
-                val awardsDeferred       = async { runCatching { repo.getAwardWinners() }.getOrElse { emptyList() } }
-
-                val sections        = sectionsDeferred.await()
-                val genres          = genresDeferred.await()
-                val trendingItems   = trendingDeferred.await()
-                val hiddenGems      = hiddenGemsDeferred.await()
-                    .sortedByDescending { tasteEngine.discoveryScore(it) }
-                val worldCinema     = worldCinemaDeferred.await()
-                    .sortedByDescending { tasteEngine.discoveryScore(it) }
-                val awardItems      = awardsDeferred.await()
-
-                // ── Taste-aware section reordering ────────────────────────────
-                val rankedSections = rankSections(sections)
-
-                // ── Mood row ──────────────────────────────────────────────────
-                val tasteCard = tasteEngine.getTasteCard()
-                val moodRow: FeedRow.MoodRow? = if (
-                    tasteCard.isOnboarded && tasteCard.totalWatched >= 5 && tasteCard.dominantMood != null
-                ) {
-                    val moodGenreKey = moodKeyFromLabel(tasteCard.dominantMood)
-                    val moodItems = sections.flatMap { it.items }
-                        .filter { media ->
-                            val genreMap = if (media.mediaType == MediaType.TV)
-                                TmdbGenreMap.tvGenres else TmdbGenreMap.movieGenres
-                            moodGenreKey in media.genreIds.mapNotNull { genreMap[it] }
-                        }
-                        .take(20)
-                        .let { tasteEngine.rankMedia(it) }
-                    if (moodItems.isNotEmpty()) FeedRow.MoodRow(tasteCard.dominantMood, moodItems) else null
-                } else null
-
-                // ── Hero banner: taste-ranked top items ───────────────────────
-                val allItems = sections.flatMap { it.items }
-                val featured = tasteEngine.rankMedia(allItems).take(6)
-                    .ifEmpty { sections.firstOrNull()?.items?.take(6) ?: emptyList() }
-
-                // ── Smart feed: 3-zone Discovery Architecture ─────────────────
-                val maturity  = tasteEngine.tasteMaturity()
-                val diversity = tasteEngine.genreDiversityScore()
-                val unexplored = tasteEngine.getUnexploredGenres()
-
-                val feedRows = buildSmartFeed(
-                    sections         = rankedSections,
-                    moodRow          = moodRow,
-                    trendingItems    = trendingItems,
-                    hiddenGems       = hiddenGems,
-                    worldCinemaItems = worldCinema,
-                    awardItems       = awardItems,
-                    maturity         = maturity,
-                    diversity        = diversity,
-                    unexploredGenres = unexplored,
-                )
-
+                val sections = repo.getHomeSections(forceRefresh)
+                categorySections = sections
+                val featured = sections.firstOrNull()?.items?.take(6) ?: emptyList()
+                val genres   = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
+                // Build feed rows, injecting a native ad every 3 section rows
+                val rawRows = sections.map { FeedRow.Section(it) }
+                val feedRows = buildList {
+                    rawRows.forEachIndexed { index, row ->
+                        add(row)
+                        // Inject ad after every 3rd section (index 2, 5, 8 …)
+                        if ((index + 1) % 3 == 0) add(FeedRow.NativeAdPlacement)
+                    }
+                }
                 _ui.update {
                     it.copy(
                         isLoading    = false,
@@ -220,182 +128,36 @@ class BrowseViewModel @Inject constructor(
                         featured     = featured,
                         genres       = genres,
                         isCacheLoaded = true,
-                        moodLabel    = tasteCard.dominantMood,
                     )
                 }
                 categorySectionsEmitted = true
-
             } catch (e: Exception) {
                 _ui.update { it.copy(isLoading = false, isRefreshing = false, error = e.message ?: "Failed to load") }
             }
         }
     }
 
-    /**
-     * Three-Zone Discovery Feed Builder.
-     *
-     * Zone 1 (Comfort 40%)   — known genres, user feels understood
-     * Zone 2 (Warm 35%)      — adjacent genres, quality signals, social proof
-     * Zone 3 (Brave 25%)     — unexplored, honest labels, chosen freely
-     *
-     * Ratios shift dynamically based on taste maturity + bubble detection.
-     */
-    private fun buildSmartFeed(
-        sections: List<HomeSection>,
-        moodRow: FeedRow.MoodRow?,
-        trendingItems: List<Media>,
-        hiddenGems: List<Media>,
-        worldCinemaItems: List<Media>,
-        awardItems: List<Media>,
-        maturity: Float,
-        diversity: Float,
-        unexploredGenres: List<String>,
-    ): List<FeedRow> = buildList {
-
-        // ════════════════════════════════════════════════════
-        // ZONE 1 — COMFORT (personalised, user feels seen)
-        // ════════════════════════════════════════════════════
-
-        // Mood row — personal, time-aware, always leads
-        moodRow?.let { add(it) }
-
-        // Top 2 personalised genre sections
-        sections.getOrNull(0)?.let { add(FeedRow.Section(it)) }
-        sections.getOrNull(1)?.let { add(FeedRow.Section(it)) }
-
-        // ════════════════════════════════════════════════════
-        // ZONE 2 — WARM DISCOVERY (quality signals + social proof)
-        // ════════════════════════════════════════════════════
-
-        // Trending — social FOMO, identical for all users (Netflix's secret weapon)
-        if (trendingItems.isNotEmpty()) add(FeedRow.TrendingRow(trendingItems))
-
-        // Third personalised section
-        sections.getOrNull(2)?.let { add(FeedRow.Section(it)) }
-
-        // Hidden Gems — treasure hunt psychology
-        if (hiddenGems.isNotEmpty()) add(FeedRow.HiddenGems(hiddenGems))
-
-        add(FeedRow.NativeAdPlacement)
-
-        // Fourth personalised section
-        sections.getOrNull(3)?.let { add(FeedRow.Section(it)) }
-
-        // World Cinema — cultural discovery
-        if (worldCinemaItems.isNotEmpty()) add(FeedRow.WorldCinema(worldCinemaItems))
-
-        // Award Winners — trusted authority bypasses "algorithm chose this" feeling
-        if (awardItems.isNotEmpty()) add(FeedRow.AwardWinners(awardItems))
-
-        // ════════════════════════════════════════════════════
-        // ZONE 3 — BRAVE EXPLORATION (honest labels, user's choice)
-        // Show when mature enough OR when in a narrow bubble
-        // ════════════════════════════════════════════════════
-
-        val showExplore = maturity > 0.3f || diversity < 0.3f
-        if (showExplore && unexploredGenres.isNotEmpty()) {
-            val genre = unexploredGenres.first()
-            val genreLabel = genre.replaceFirstChar { it.uppercase() }
-            // Items will be populated dynamically from existing section data
-            val braveItems = sections.flatMap { it.items }
-                .filter { media ->
-                    val genreMap = if (media.mediaType == MediaType.TV)
-                        TmdbGenreMap.tvGenres else TmdbGenreMap.movieGenres
-                    genre in media.genreIds.mapNotNull { genreMap[it] }
-                }
-                .sortedByDescending { tasteEngine.discoveryScore(it) }
-                .take(15)
-            if (braveItems.isNotEmpty()) {
-                add(FeedRow.BraveExplore(
-                    genreLabel = genreLabel,
-                    headline   = "You've Never Tried $genreLabel — Here's the Best",
-                    items      = braveItems,
-                ))
-            }
-        }
-
-        add(FeedRow.NativeAdPlacement)
-
-        // Remaining personalised sections after exploration
-        sections.drop(4).forEachIndexed { i, s ->
-            add(FeedRow.Section(s))
-            if ((i + 1) % 3 == 0) add(FeedRow.NativeAdPlacement)
-        }
-    }
-
-    // ── Rank sections by user taste ───────────────────────────────────────────
-    private fun rankSections(sections: List<HomeSection>): List<HomeSection> {
-        val profile = tasteEngine.profile.value
-        if (profile.totalInteractions < 5) return sections // Not enough data yet
-
-        // Score each section by averaging the taste scores of its items
-        return sections.sortedByDescending { section ->
-            val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-            section.items.take(5).map { media ->
-                profile.scoreMedia(
-                    genreIds         = media.genreIds,
-                    originalLanguage = media.originalLanguage,
-                    mediaType        = media.mediaType.name,
-                    isAnime          = TmdbGenreMap.isAnime(media.originalLanguage, media.genreIds),
-                    currentHour      = hour,
-                    voteAverage      = media.voteAverage,
-                    popularity       = media.popularity,
-                )
-            }.average()
-        }.map { section ->
-            // Also re-rank items within each section
-            section.copy(items = tasteEngine.rankMedia(section.items))
-        }
-    }
-
-    // ── Re-rank existing feed without re-fetching ─────────────────────────────
-    private fun rerankFeed(rows: List<FeedRow>): List<FeedRow> {
-        return rows.map { row ->
-            when (row) {
-                is FeedRow.Section      -> row.copy(section = row.section.copy(items = tasteEngine.rankMedia(row.section.items)))
-                is FeedRow.InfinitePage -> row.copy(items = tasteEngine.rankMedia(row.items))
-                is FeedRow.MoodRow      -> row.copy(items = tasteEngine.rankMedia(row.items))
-                is FeedRow.TrendingRow  -> row // Trending intentionally bypasses taste — don't re-rank
-                is FeedRow.HiddenGems   -> row.copy(items = row.items.sortedByDescending { tasteEngine.discoveryScore(it) })
-                is FeedRow.WorldCinema  -> row.copy(items = row.items.sortedByDescending { tasteEngine.discoveryScore(it) })
-                is FeedRow.AwardWinners -> row // Award winners rank by quality, not taste
-                is FeedRow.BraveExplore -> row.copy(items = row.items.sortedByDescending { tasteEngine.discoveryScore(it) })
-                else                    -> row
-            }
-        }
-    }
-
-    // ── Infinite scroll — taste-biased discovery ──────────────────────────────
     fun loadMoreInfinite() {
         if (_ui.value.isLoadingMore || isInfiniteExhausted) return
         viewModelScope.launch {
             _ui.update { it.copy(isLoadingMore = true) }
             try {
                 val nextPage = infinitePage + 1
-                val profile = tasteEngine.profile.value
-
-                // Pick the media type based on what user tends to watch more
-                val tvScore = profile.genres["anime"]?.effectiveScore?.toDouble() ?: 0.0
-
-                val items: List<Media> = when {
-                    // If user loves anime, inject anime pages
-                    tvScore > 30.0 && nextPage % 3 == 0 -> repo.getAnime(nextPage)
-                    nextPage % 2 == 0 -> repo.discoverMovies(genreId = null, page = nextPage)
-                    else -> repo.discoverTv(genreId = null, page = nextPage)
+                val items: List<Media> = if (nextPage % 2 == 0) {
+                    repo.discoverMovies(genreId = null, page = nextPage)
+                } else {
+                    repo.discoverTv(genreId = null, page = nextPage)
                 }
-
                 if (items.isEmpty()) {
                     isInfiniteExhausted = true
                     _ui.update { it.copy(isLoadingMore = false) }
                     return@launch
                 }
-
                 infinitePage = nextPage
-                // Rank the page before inserting
-                val ranked = tasteEngine.rankMedia(items)
-                val newRow = FeedRow.InfinitePage(ranked, nextPage)
-                _ui.update { st -> st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false) }
-
+                val newRow = FeedRow.InfinitePage(items, nextPage)
+                _ui.update { st ->
+                    st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false)
+                }
             } catch (_: Exception) {
                 _ui.update { it.copy(isLoadingMore = false) }
             }
@@ -411,7 +173,7 @@ class BrowseViewModel @Inject constructor(
         _ui.update { it.copy(selectedGenreId = genreId, genreItems = emptyList(), genrePage = 1, hasMoreGenrePages = true, isGenreLoading = true) }
         viewModelScope.launch {
             try {
-                val items = tasteEngine.rankMedia(repo.discoverMovies(genreId, page = 1))
+                val items = repo.discoverMovies(genreId, page = 1)
                 _ui.update { it.copy(genreItems = items, isGenreLoading = false) }
             } catch (_: Exception) { _ui.update { it.copy(isGenreLoading = false) } }
         }
@@ -424,7 +186,7 @@ class BrowseViewModel @Inject constructor(
             _ui.update { it.copy(isGenreLoading = true) }
             try {
                 val nextPage = st.genrePage + 1
-                val items = tasteEngine.rankMedia(repo.discoverMovies(st.selectedGenreId, page = nextPage))
+                val items = repo.discoverMovies(st.selectedGenreId, page = nextPage)
                 _ui.update { it.copy(
                     genreItems        = it.genreItems + items,
                     genrePage         = nextPage,
@@ -433,33 +195,6 @@ class BrowseViewModel @Inject constructor(
                 ) }
             } catch (_: Exception) { _ui.update { it.copy(isGenreLoading = false) } }
         }
-    }
-
-    // ── Track user actions from Browse screen ─────────────────────────────────
-    fun onMediaLiked(media: Media) {
-        tasteEngine.track(media, UserAction.LIKE)
-    }
-
-    fun onMediaSaved(media: Media) {
-        tasteEngine.track(media, UserAction.SAVE_WATCHLIST)
-    }
-
-    fun onMediaRemovedFromWatchlist(media: Media) {
-        tasteEngine.track(media, UserAction.REMOVE_WATCHLIST)
-    }
-
-    // ── Helper ────────────────────────────────────────────────────────────────
-    private fun moodKeyFromLabel(label: String) = when {
-        label.contains("horror", ignoreCase = true) || label.contains("Scary") -> "horror"
-        label.contains("laugh") || label.contains("Comedy") -> "comedy"
-        label.contains("badass") || label.contains("Action") -> "action"
-        label.contains("Romantic") || label.contains("Romance") -> "romance"
-        label.contains("edge") || label.contains("Thriller") -> "thriller"
-        label.contains("Mind") || label.contains("Sci") -> "scifi"
-        label.contains("Emotional") || label.contains("Drama") -> "drama"
-        label.contains("Anime") -> "anime"
-        label.contains("Crime") -> "crime"
-        else -> "drama"
     }
 }
 
@@ -693,20 +428,11 @@ fun BrowseScreen(
 
                         ui.feedRows.forEachIndexed { feedRowIdx, row ->
                             when (row) {
-                                is FeedRow.MoodRow -> {
-                                    item(key = "mood_row_$feedRowIdx") {
-                                        com.reelz.ui.components.MoodRow(
-                                            mood = row.mood,
-                                            items = row.items,
-                                            onItemClick = { m -> goDetail(m.tmdbId, m.mediaType) },
-                                        )
-                                    }
-                                }
                                 is FeedRow.Section -> {
-                                    item(key = "hdr_${row.section.title}_$feedRowIdx") {
+                                    item(key = "hdr_${row.section.title}") {
                                         SectionHeader(row.section.title, "See All")
                                     }
-                                    item(key = "row_${row.section.title}_$feedRowIdx") {
+                                    item(key = "row_${row.section.title}") {
                                         LazyRow(
                                             contentPadding = PaddingValues(horizontal = 16.dp),
                                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -718,8 +444,7 @@ fun BrowseScreen(
                                     }
                                 }
                                 is FeedRow.NativeAdPlacement -> {
-                                    // ✅ FIX: use feedRowIdx so every ad placement has a unique key
-                                    item(key = "native_ad_$feedRowIdx") {
+                                    item(key = "native_ad_") {
                                         NativeAdCard(adEngine = adEngine)
                                     }
                                 }
@@ -735,79 +460,6 @@ fun BrowseScreen(
                                                 MediaRowCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
                                             }
                                         }
-                                    }
-                                }
-                                is FeedRow.TrendingRow -> {
-                                    item(key = "trending_hdr_$feedRowIdx") {
-                                        SectionHeader("Top 10 This Week", "")
-                                    }
-                                    item(key = "trending_row_$feedRowIdx") {
-                                        LazyRow(
-                                            contentPadding = PaddingValues(horizontal = 16.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(0.dp),
-                                        ) {
-                                            itemsIndexed(row.items.take(10)) { idx, m ->
-                                                TrendingNumberCard(
-                                                    rank    = idx + 1,
-                                                    media   = m,
-                                                    onClick = { goDetail(m.tmdbId, m.mediaType) },
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                is FeedRow.HiddenGems -> {
-                                    item(key = "gems_hdr_$feedRowIdx") {
-                                        SectionHeader("💎 Hidden Gems Worth Your Time", "")
-                                    }
-                                    item(key = "gems_row_$feedRowIdx") {
-                                        LazyRow(
-                                            contentPadding = PaddingValues(horizontal = 16.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                        ) {
-                                            items(row.items, key = { "gem_${it.tmdbId}" }) { m ->
-                                                HiddenGemCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
-                                            }
-                                        }
-                                    }
-                                }
-                                is FeedRow.WorldCinema -> {
-                                    item(key = "world_hdr_$feedRowIdx") {
-                                        SectionHeader("🌍 From Around the World", "")
-                                    }
-                                    item(key = "world_row_$feedRowIdx") {
-                                        LazyRow(
-                                            contentPadding = PaddingValues(horizontal = 16.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                        ) {
-                                            items(row.items, key = { "world_${it.tmdbId}" }) { m ->
-                                                WorldCinemaCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
-                                            }
-                                        }
-                                    }
-                                }
-                                is FeedRow.AwardWinners -> {
-                                    item(key = "awards_hdr_$feedRowIdx") {
-                                        SectionHeader("⭐ Critics' Picks", "")
-                                    }
-                                    item(key = "awards_row_$feedRowIdx") {
-                                        LazyRow(
-                                            contentPadding = PaddingValues(horizontal = 16.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                        ) {
-                                            items(row.items, key = { "award_${it.tmdbId}" }) { m ->
-                                                AwardWinnerCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
-                                            }
-                                        }
-                                    }
-                                }
-                                is FeedRow.BraveExplore -> {
-                                    item(key = "brave_$feedRowIdx") {
-                                        BraveExploreSection(
-                                            headline = row.headline,
-                                            items    = row.items,
-                                            onClick  = { m -> goDetail(m.tmdbId, m.mediaType) },
-                                        )
                                     }
                                 }
                             }
@@ -1262,328 +914,5 @@ fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
         Spacer(Modifier.height(6.dp))
         Text(h.title, color = White80, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
         if (h.season > 0) Text("S${h.season} · E${h.episode}", color = Brand.copy(.8f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  DISCOVERY ROW COMPOSABLES
-//  Each row has a distinct visual identity to match its psychological purpose.
-// ══════════════════════════════════════════════════════════════════════════════
-
-// ── Trending: Netflix Top-10 style numbered posters ───────────────────────────
-//  The number overlaps the poster — big, bold, unmistakable.
-//  Psychology: Social FOMO. "Everyone's watching this."
-@Composable
-fun TrendingNumberCard(
-    rank: Int,
-    media: Media,
-    onClick: () -> Unit,
-) {
-    Box(
-        Modifier
-            .width(140.dp)
-            .height(200.dp)
-            .clickable(onClick = onClick)
-    ) {
-        // Poster (shifted right to make room for number)
-        Box(
-            Modifier
-                .align(Alignment.CenterEnd)
-                .width(115.dp)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(10.dp))
-        ) {
-            AsyncImage(
-                model              = BuildConfig.TMDB_IMG_W342 + media.posterPath,
-                contentDescription = media.title,
-                contentScale       = ContentScale.Crop,
-                modifier           = Modifier.fillMaxSize(),
-            )
-            // Subtle gradient at bottom
-            Box(
-                Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color(0x99000000))
-                )
-            )
-        }
-
-        // Rank number — huge, stroked, overlapping bottom-left
-        Text(
-            text       = rank.toString(),
-            modifier   = Modifier
-                .align(Alignment.BottomStart)
-                .offset(x = (-2).dp, y = 6.dp),
-            style      = MaterialTheme.typography.headlineLarge.copy(
-                fontSize     = 72.sp,
-                fontWeight   = FontWeight.Black,
-                letterSpacing = (-4).sp,
-                brush = Brush.linearGradient(
-                    listOf(Color.White.copy(0.95f), Color.White.copy(0.55f))
-                ),
-            ),
-        )
-    }
-}
-
-// ── Hidden Gems: quality poster with gem badge ────────────────────────────────
-//  Psychology: Treasure hunt. "High quality, not yet discovered."
-@Composable
-fun HiddenGemCard(media: Media, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .width(130.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
-        AsyncImage(
-            model              = BuildConfig.TMDB_IMG_W342 + media.posterPath,
-            contentDescription = media.title,
-            contentScale       = ContentScale.Crop,
-            modifier           = Modifier.fillMaxWidth().aspectRatio(0.67f),
-        )
-        // Gradient overlay
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color(0xCC000000))
-            )
-        )
-        // Gem badge — top right corner
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .padding(6.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF1A3A5C), Color(0xFF0E6BA8))))
-                .border(1.dp, Color(0xFF4FC3F7).copy(0.6f), RoundedCornerShape(6.dp))
-                .padding(horizontal = 6.dp, vertical = 3.dp),
-        ) {
-            Text("💎 GEM", color = Color(0xFF90CAF9), fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-        }
-        // Rating at bottom
-        Row(
-            Modifier.align(Alignment.BottomStart).padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Text("★", color = Color(0xFFFFD700), fontSize = 10.sp)
-            Text(
-                String.format("%.1f", media.voteAverage),
-                color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-            )
-        }
-    }
-}
-
-// ── World Cinema: poster with language flag pill ──────────────────────────────
-//  Psychology: Adventure framing. "From around the world."
-@Composable
-fun WorldCinemaCard(media: Media, onClick: () -> Unit) {
-    val langFlag = languageToFlag(media.originalLanguage)
-    Box(
-        Modifier
-            .width(130.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
-        AsyncImage(
-            model              = BuildConfig.TMDB_IMG_W342 + media.posterPath,
-            contentDescription = media.title,
-            contentScale       = ContentScale.Crop,
-            modifier           = Modifier.fillMaxWidth().aspectRatio(0.67f),
-        )
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color(0xCC000000))
-            )
-        )
-        // Language flag badge — top right
-        if (langFlag.isNotEmpty()) {
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0x99000000))
-                    .border(1.dp, Color.White.copy(0.2f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
-            ) {
-                Text(langFlag, fontSize = 12.sp)
-            }
-        }
-        // Title at bottom
-        Text(
-            text     = media.title,
-            color    = Color.White,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
-        )
-    }
-}
-
-private fun languageToFlag(lang: String) = when (lang) {
-    "ja" -> "🇯🇵"
-    "ko" -> "🇰🇷"
-    "hi" -> "🇮🇳"
-    "fr" -> "🇫🇷"
-    "es" -> "🇪🇸"
-    "de" -> "🇩🇪"
-    "it" -> "🇮🇹"
-    "pt" -> "🇧🇷"
-    "tr" -> "🇹🇷"
-    "zh" -> "🇨🇳"
-    "ar" -> "🇸🇦"
-    "th" -> "🇹🇭"
-    "ru" -> "🇷🇺"
-    else -> ""
-}
-
-// ── Award Winners: poster with gold star badge ────────────────────────────────
-//  Psychology: Trusted authority removes the "algorithm chose this" feeling.
-@Composable
-fun AwardWinnerCard(media: Media, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .width(130.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
-        AsyncImage(
-            model              = BuildConfig.TMDB_IMG_W342 + media.posterPath,
-            contentDescription = media.title,
-            contentScale       = ContentScale.Crop,
-            modifier           = Modifier.fillMaxWidth().aspectRatio(0.67f),
-        )
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(0.5f to Color.Transparent, 1f to Color(0xDD000000))
-            )
-        )
-        // Gold badge — top right
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .padding(6.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF3D2B00), Color(0xFF5C3D00))))
-                .border(1.dp, Color(0xFFFFD700).copy(0.7f), RoundedCornerShape(6.dp))
-                .padding(horizontal = 6.dp, vertical = 3.dp),
-        ) {
-            Text("⭐ ACCLAIMED", color = Color(0xFFFFD700), fontSize = 7.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-        }
-        // Rating bottom left
-        Row(
-            Modifier.align(Alignment.BottomStart).padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Text("★", color = Color(0xFFFFD700), fontSize = 10.sp)
-            Text(
-                String.format("%.1f", media.voteAverage),
-                color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-            )
-        }
-    }
-}
-
-// ── Brave Explore: Zone 3 — landscape cards, warm accent ─────────────────────
-//  Psychology: Growth framing. Honest label + distinct visual = "chosen freely."
-//  The different card orientation signals to the user: this is different territory.
-@Composable
-fun BraveExploreSection(
-    headline: String,
-    items: List<Media>,
-    onClick: (Media) -> Unit,
-) {
-    Column {
-        // Section header with warm amber accent (signals "different")
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier.width(3.dp).height(18.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Brush.verticalGradient(listOf(Color(0xFFFF8C00), Color(0xFFFF6B00))))
-            )
-            Spacer(Modifier.width(10.dp))
-            Column {
-                Text(
-                    "STEP OUTSIDE YOUR COMFORT ZONE",
-                    color = Color(0xFFFF8C00).copy(0.8f),
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                )
-                Text(
-                    headline,
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-
-        // Landscape cards — visually different from the portrait posters above
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(items, key = { "brave_${it.tmdbId}" }) { m ->
-                Box(
-                    Modifier
-                        .width(220.dp)
-                        .height(130.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(
-                            1.dp,
-                            Brush.linearGradient(listOf(Color(0x55FF8C00), Color(0x22FF6B00))),
-                            RoundedCornerShape(10.dp),
-                        )
-                        .clickable { onClick(m) }
-                ) {
-                    AsyncImage(
-                        model              = BuildConfig.TMDB_IMG_W342 + (m.backdropPath ?: m.posterPath),
-                        contentDescription = m.title,
-                        contentScale       = ContentScale.Crop,
-                        modifier           = Modifier.fillMaxSize(),
-                    )
-                    Box(
-                        Modifier.fillMaxSize().background(
-                            Brush.verticalGradient(
-                                0f to Color.Transparent,
-                                0.5f to Color(0x55000000),
-                                1f to Color(0xDD000000),
-                            )
-                        )
-                    )
-                    // Amber left accent line
-                    Box(
-                        Modifier
-                            .align(Alignment.CenterStart)
-                            .width(3.dp)
-                            .height(40.dp)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(Brush.verticalGradient(listOf(Color(0xFFFF8C00), Color(0xFFFF6B00))))
-                    )
-                    Column(
-                        Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 8.dp, bottom = 10.dp)
-                    ) {
-                        Text(m.title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("★", color = Color(0xFFFFD700), fontSize = 9.sp)
-                            Text(String.format("%.1f", m.voteAverage), color = Color.White.copy(0.7f), fontSize = 9.sp)
-                            Box(Modifier.size(2.dp).clip(CircleShape).background(Color.White.copy(0.3f)))
-                            Text(m.releaseDate?.take(4) ?: "", color = Color.White.copy(0.5f), fontSize = 9.sp)
-                        }
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
     }
 }
