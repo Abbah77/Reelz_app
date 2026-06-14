@@ -19,6 +19,21 @@ class MediaRepository @Inject constructor(
 ) {
 
     // ── Home sections ─────────────────────────────────────────────────────────
+    // Returns true if there is any locally-cached media data available.
+    suspend fun hasCachedData(): Boolean = cachedMediaDao.count() > 0
+
+    // Returns cached sections immediately — never hits the network.
+    // Use this for the instant-display phase of stale-while-revalidate.
+    suspend fun getHomeSectionsFromCacheOnly(): List<HomeSection> = buildSectionsFromCache()
+
+    // Fetches fresh data from the network, caches it, and returns the result.
+    // Use this for the silent background-refresh phase of stale-while-revalidate.
+    suspend fun getHomeSectionsFromNetwork(): List<HomeSection> {
+        val sections = fetchHomeSectionsFromNetwork()
+        cacheHomeSections(sections)
+        return sections
+    }
+
     suspend fun getHomeSections(forceRefresh: Boolean = false): List<HomeSection> {
         // Try cache first (fast offline path)
         val cacheCount = cachedMediaDao.count()
