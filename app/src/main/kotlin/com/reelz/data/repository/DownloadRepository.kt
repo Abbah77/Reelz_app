@@ -66,6 +66,14 @@ class DownloadRepository @Inject constructor(
         DownloadService.start(ctx, item.id)
     }
 
+    /** Cancel an active download and mark it PAUSED so it can be resumed later. */
+    suspend fun pause(ctx: Context, item: DownloadItem) {
+        DownloadService.pause(ctx, item.id)
+        // DB is updated to PAUSED inside DownloadService.ACTION_PAUSE handler,
+        // but set it here too as a safety net in case the service isn't running.
+        dao.markPaused(item.id)
+    }
+
     suspend fun delete(ctx: Context, item: DownloadItem) {
         if (item.filePath.isNotBlank()) {
             try { java.io.File(item.filePath).delete() } catch (_: Exception) {}
