@@ -104,10 +104,14 @@ class BrowseViewModel @Inject constructor(
         // React to taste profile changes (e.g., after onboarding completes)
         viewModelScope.launch {
             tasteEngine.profile.drop(1).collect { // drop(1) = skip initial value
-                // Re-sort existing feed if profile changes significantly
-                _ui.update { state ->
-                    val reranked = rerankFeed(state.feedRows)
-                    state.copy(feedRows = reranked)
+                try {
+                    // Re-sort existing feed if profile changes significantly
+                    _ui.update { state ->
+                        val reranked = rerankFeed(state.feedRows)
+                        state.copy(feedRows = reranked)
+                    }
+                } catch (_: Exception) {
+                    // Re-ranking is a nice-to-have — never let it break the feed
                 }
             }
         }

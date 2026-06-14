@@ -58,8 +58,12 @@ class TasteEngine @Inject constructor(
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
             )
-        } catch (_: Exception) {
-            // Fallback to regular prefs if encryption fails (unlikely on modern Android)
+        } catch (_: Throwable) {
+            // Fallback to regular prefs if encryption fails for ANY reason —
+            // including LinkageError/NoSuchMethodError from Tink/keystore
+            // version conflicts, which are Errors, not Exceptions, and would
+            // otherwise crash the app at startup (TasteEngine is injected
+            // eagerly into MainActivity).
             context.getSharedPreferences("reelz_taste_profile_fallback", Context.MODE_PRIVATE)
         }
     }
@@ -79,11 +83,18 @@ class TasteEngine @Inject constructor(
 
     // ── Load / Save ───────────────────────────────────────────────────────────
     private fun loadProfile(): UserTasteProfile {
-        val json = prefs.getString(PREF_PROFILE, null)
-        val profile = if (json != null) UserTasteProfile.fromJson(json) else null
-        val loaded = profile ?: UserTasteProfile.blank()
-        // Apply decay if needed on load
-        return maybeDecay(loaded)
+        return try {
+            val json = prefs.getString(PREF_PROFILE, null)
+            val profile = if (json != null) UserTasteProfile.fromJson(json) else null
+            val loaded = profile ?: UserTasteProfile.blank()
+            // Apply decay if needed on load
+            maybeDecay(loaded)
+        } catch (_: Throwable) {
+            // Never let a corrupt/incompatible stored profile crash app startup —
+            // this runs synchronously in the constructor of a Singleton that's
+            // injected into MainActivity before any UI is shown.
+            UserTasteProfile.blank()
+        }
     }
 
     private fun save(profile: UserTasteProfile) {
@@ -142,50 +153,55 @@ class TasteEngine @Inject constructor(
      */
     fun track(media: Media, action: UserAction, watchPct: Float = 0f) {
         engineScope.launch {
-            val p = _profile.value
-            val score = scoreForAction(action, watchPct)
-            val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-            val timeWindow = TimeWindow.fromHour(currentHour)
+            try {
+                val p = _profile.value
+                val score = scoreForAction(action, watchPct)
+                val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                val timeWindow = TimeWindow.fromHour(currentHour)
 
-            // Determine genre keys
-            val genreMap = if (media.mediaType == MediaType.TV) TmdbGenreMap.tvGenres else TmdbGenreMap.movieGenres
-            val genreKeys = media.genreIds.mapNotNull { genreMap[it] }.toMutableList()
-            val isAnime = TmdbGenreMap.isAnime(media.originalLanguage, media.genreIds)
-            if (isAnime) genreKeys += "anime"
+                // Determine genre keys
+                val genreMap = if (media.mediaType == MediaType.TV) TmdbGenreMap.tvGenres else TmdbGenreMap.movieGenres
+                val genreKeys = media.genreIds.mapNotNull { genreMap[it] }.toMutableList()
+                val isAnime = TmdbGenreMap.isAnime(media.originalLanguage, media.genreIds)
+                if (isAnime) genreKeys += "anime"
 
-            // Language key
-            val langKey = LanguageMap.toKey(media.originalLanguage)
+                // Language key
+                val langKey = LanguageMap.toKey(media.originalLanguage)
 
-            // ── Update genre dimensions ────────────────────────────────────────
-            for (key in genreKeys) {
-                val current = p.genres.getOrDefault(key, TasteDimension())
-                p.genres[key] = current.boosted(score)
+                // ── Update genre dimensions ────────────────────────────────────────
+                for (key in genreKeys) {
+                    val current = p.genres.getOrDefault(key, TasteDimension())
+                    p.genres[key] = current.boosted(score)
 
-                // Update time-of-day pattern (only for positive signals)
-                if (score > 0) {
-                    val timeKey = "${timeWindow}_${key}"
-                    val current = p.timePatterns.getOrDefault(timeKey, 0f)
-                    // Time patterns use a simpler EMA (exponential moving average)
-                    p.timePatterns[timeKey] = (current * 0.85f + score * 0.15f).coerceIn(0f, 100f)
+                    // Update time-of-day pattern (only for positive signals)
+                    if (score > 0) {
+                        val timeKey = "${timeWindow}_${key}"
+                        val current = p.timePatterns.getOrDefault(timeKey, 0f)
+                        // Time patterns use a simpler EMA (exponential moving average)
+                        p.timePatterns[timeKey] = (current * 0.85f + score * 0.15f).coerceIn(0f, 100f)
+                    }
+
+                    // Track completion rate per genre
+                    if (action == UserAction.WATCH_PROGRESS && watchPct >= 0.9f) {
+                        val prev = p.completionRates.getOrDefault(key, 0f)
+                        p.completionRates[key] = (prev * 0.9f + 1f * 0.1f).coerceIn(0f, 1f)
+                    }
                 }
 
-                // Track completion rate per genre
-                if (action == UserAction.WATCH_PROGRESS && watchPct >= 0.9f) {
-                    val prev = p.completionRates.getOrDefault(key, 0f)
-                    p.completionRates[key] = (prev * 0.9f + 1f * 0.1f).coerceIn(0f, 1f)
-                }
+                // ── Update language dimension ──────────────────────────────────────
+                val currentLang = p.languages.getOrDefault(langKey, TasteDimension())
+                p.languages[langKey] = currentLang.boosted(score * 0.7f) // Language has less weight than genre
+
+                // ── Interaction count ──────────────────────────────────────────────
+                val updated = p.copy(
+                    totalInteractions = p.totalInteractions + 1,
+                    lastUpdatedAt = System.currentTimeMillis(),
+                )
+                save(updated)
+            } catch (_: Throwable) {
+                // Taste tracking is a silent background enhancement — it must
+                // never be able to take down the app over a bad data point.
             }
-
-            // ── Update language dimension ──────────────────────────────────────
-            val currentLang = p.languages.getOrDefault(langKey, TasteDimension())
-            p.languages[langKey] = currentLang.boosted(score * 0.7f) // Language has less weight than genre
-
-            // ── Interaction count ──────────────────────────────────────────────
-            val updated = p.copy(
-                totalInteractions = p.totalInteractions + 1,
-                lastUpdatedAt = System.currentTimeMillis(),
-            )
-            save(updated)
         }
     }
 
