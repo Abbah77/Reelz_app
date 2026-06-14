@@ -63,8 +63,9 @@ class BrowseViewModel @Inject constructor(
 ) : ViewModel() {
 
     data class UiState(
-        val isLoading: Boolean = true,
-        val isRefreshing: Boolean = false,
+        val isLoading: Boolean = true,           // true only on very first launch with no cache
+        val isRefreshing: Boolean = false,        // true only during user-triggered pull-to-refresh
+        val isBackgroundRefreshing: Boolean = false, // silent refresh while cache is already shown
         val error: String? = null,
         val featured: List<Media> = emptyList(),
         val feedRows: List<FeedRow> = emptyList(),
@@ -88,7 +89,7 @@ class BrowseViewModel @Inject constructor(
     private var categorySectionsEmitted = false
 
     init {
-        load(forceRefresh = false)
+        initLoad()
         viewModelScope.launch {
             repo.getHistory().collect { h ->
                 _ui.update { it.copy(continueWatching = h) }
@@ -96,43 +97,124 @@ class BrowseViewModel @Inject constructor(
         }
     }
 
-    fun load(forceRefresh: Boolean = true) {
+    /**
+     * Stale-while-revalidate strategy:
+     *  Phase 1 — show cached data instantly if available (no spinner, no delay).
+     *  Phase 2 — refresh from network in the background; silently update UI when done.
+     *  If there is no cache at all, show the full loading state and fetch from network.
+     */
+    private fun initLoad() {
         viewModelScope.launch {
-            if (forceRefresh) {
-                _ui.update { it.copy(isRefreshing = true, error = null) }
+            infinitePage = 1
+            isInfiniteExhausted = false
+            categorySectionsEmitted = false
+
+            val hasCached = try { repo.hasCachedData() } catch (_: Exception) { false }
+
+            if (hasCached) {
+                // ── Phase 1: instant cache display ────────────────────────────
+                try {
+                    val cached  = repo.getHomeSectionsFromCacheOnly()
+                    val genres  = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
+                    categorySections = cached
+                    _ui.update {
+                        it.copy(
+                            isLoading            = false,
+                            isCacheLoaded        = true,
+                            featured             = cached.firstOrNull()?.items?.take(6) ?: emptyList(),
+                            feedRows             = buildFeedRows(cached),
+                            genres               = genres,
+                            isBackgroundRefreshing = true,   // show subtle top indicator
+                        )
+                    }
+                    categorySectionsEmitted = true
+                } catch (_: Exception) {
+                    // Cache read failed — fall through to network
+                    _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
+                }
+
+                // ── Phase 2: silent background network refresh ─────────────
+                try {
+                    val fresh  = repo.getHomeSectionsFromNetwork()
+                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
+                    categorySections = fresh
+                    _ui.update {
+                        it.copy(
+                            isLoading              = false,
+                            isCacheLoaded          = true,
+                            isBackgroundRefreshing = false,
+                            featured               = fresh.firstOrNull()?.items?.take(6) ?: emptyList(),
+                            feedRows               = buildFeedRows(fresh),
+                            genres                 = genres.ifEmpty { it.genres },
+                        )
+                    }
+                    categorySectionsEmitted = true
+                } catch (_: Exception) {
+                    // Network failed — cache content is already visible; no error banner needed.
+                    _ui.update { it.copy(isBackgroundRefreshing = false) }
+                }
             } else {
+                // ── No cache: full loading state until network responds ────
                 _ui.update { it.copy(isLoading = true, error = null) }
+                try {
+                    val sections = repo.getHomeSectionsFromNetwork()
+                    val genres   = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
+                    categorySections = sections
+                    _ui.update {
+                        it.copy(
+                            isLoading     = false,
+                            isCacheLoaded = true,
+                            featured      = sections.firstOrNull()?.items?.take(6) ?: emptyList(),
+                            feedRows      = buildFeedRows(sections),
+                            genres        = genres,
+                        )
+                    }
+                    categorySectionsEmitted = true
+                } catch (e: Exception) {
+                    _ui.update {
+                        it.copy(isLoading = false, error = e.message ?: "Failed to load")
+                    }
+                }
             }
+        }
+    }
+
+    /** User-triggered pull-to-refresh: show the indicator, then fetch fresh data. */
+    fun load(forceRefresh: Boolean = true) {
+        if (!forceRefresh) { initLoad(); return }
+        viewModelScope.launch {
+            _ui.update { it.copy(isRefreshing = true, error = null) }
             infinitePage = 1
             isInfiniteExhausted = false
             categorySectionsEmitted = false
             try {
-                val sections = repo.getHomeSections(forceRefresh)
+                val sections = repo.getHomeSectionsFromNetwork()
+                val genres   = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
                 categorySections = sections
-                val featured = sections.firstOrNull()?.items?.take(6) ?: emptyList()
-                val genres   = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
-                // Build feed rows, injecting a native ad every 3 section rows
-                val rawRows = sections.map { FeedRow.Section(it) }
-                val feedRows = buildList {
-                    rawRows.forEachIndexed { index, row ->
-                        add(row)
-                        // Inject ad after every 3rd section (index 2, 5, 8 …)
-                        if ((index + 1) % 3 == 0) add(FeedRow.NativeAdPlacement)
-                    }
-                }
                 _ui.update {
                     it.copy(
-                        isLoading    = false,
-                        isRefreshing = false,
-                        feedRows     = feedRows,
-                        featured     = featured,
-                        genres       = genres,
+                        isRefreshing  = false,
                         isCacheLoaded = true,
+                        featured      = sections.firstOrNull()?.items?.take(6) ?: emptyList(),
+                        feedRows      = buildFeedRows(sections),
+                        genres        = genres.ifEmpty { it.genres },
                     )
                 }
                 categorySectionsEmitted = true
             } catch (e: Exception) {
-                _ui.update { it.copy(isLoading = false, isRefreshing = false, error = e.message ?: "Failed to load") }
+                _ui.update {
+                    it.copy(isRefreshing = false, error = e.message ?: "Failed to load")
+                }
+            }
+        }
+    }
+
+    private fun buildFeedRows(sections: List<HomeSection>): List<FeedRow> {
+        val rawRows = sections.map { FeedRow.Section(it) }
+        return buildList {
+            rawRows.forEachIndexed { index, row ->
+                add(row)
+                if ((index + 1) % 3 == 0) add(FeedRow.NativeAdPlacement)
             }
         }
     }
@@ -295,13 +377,31 @@ fun BrowseScreen(
     }
 
     // ── Infinite scroll trigger ───────────────────────────────────────────────
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            val layout = listState.layoutInfo
-            val total  = layout.totalItemsCount
-            val last   = layout.visibleItemsInfo.lastOrNull()?.index ?: 0
-            total > 0 && last >= total - 3
-        }.distinctUntilChanged().filter { it }.collect {
+    // derivedStateOf is more efficient than snapshotFlow for scroll-position reads:
+    // it only recomposes when the boolean result actually flips, and it re-reads
+    // whenever listState.layoutInfo changes (every scroll frame).
+    //
+    // Threshold: last-visible index >= total - 8.  Each section is 2 LazyColumn
+    // items (header + row), so "total - 8" gives ~4 sections of pre-load headroom.
+    // This means loading starts well before the user reaches the visible end —
+    // no hard-swipe needed.
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val info  = listState.layoutInfo
+            val total = info.totalItemsCount
+            if (total == 0) false
+            else {
+                val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                lastVisible >= total - 8
+            }
+        }
+    }
+
+    // Re-run whenever shouldLoadMore flips OR isLoadingMore/isGenreLoading settle to false.
+    // This ensures a fresh check after each page finishes loading, so if the user is
+    // still near the bottom the next page kicks off automatically.
+    LaunchedEffect(shouldLoadMore, ui.isLoadingMore, ui.isGenreLoading) {
+        if (shouldLoadMore && !ui.isLoadingMore && !ui.isGenreLoading) {
             if (ui.selectedGenreId != null) vm.loadMoreGenre()
             else vm.loadMoreInfinite()
         }
@@ -444,7 +544,7 @@ fun BrowseScreen(
                                     }
                                 }
                                 is FeedRow.NativeAdPlacement -> {
-                                    item(key = "native_ad_") {
+                                    item(key = "native_ad_$feedRowIdx") {
                                         NativeAdCard(adEngine = adEngine)
                                     }
                                 }
@@ -489,6 +589,32 @@ fun BrowseScreen(
                     translationY = -collapseOffsetPx
                 },
         )
+
+        // ── Background-refresh shimmer bar ────────────────────────────────────
+        // Shown when cached data is already visible and a silent network refresh
+        // is in progress. Ultra-thin so it doesn't interrupt the user.
+        if (ui.isBackgroundRefreshing) {
+            val inf   = rememberInfiniteTransition(label = "bgRefresh")
+            val sweep by inf.animateFloat(
+                0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), "sweep"
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .align(Alignment.TopCenter)
+                    .graphicsLayer { translationY = appBarHeightPx - collapseOffsetPx }
+                    .background(
+                        Brush.horizontalGradient(
+                            colorStops = arrayOf(
+                                (sweep - 0.35f).coerceIn(0f, 1f) to Color.Transparent,
+                                sweep.coerceIn(0f, 1f)          to Brand.copy(0.9f),
+                                (sweep + 0.35f).coerceIn(0f, 1f) to Color.Transparent,
+                            )
+                        )
+                    )
+            )
+        }
 
         // ── Pull-to-refresh indicator ─────────────────────────────────────────
         val showPullIndicator = pullOverscrollPx > 4f || ui.isRefreshing
