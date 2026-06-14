@@ -462,6 +462,17 @@ fun BrowseScreen(
                         item(key = "heroBannerSkeleton") { SkeletonBannerLoader() }
                     }
 
+                    // ── Genre bar (scrolls with content under collapsing bar) ──
+                    if (ui.genres.isNotEmpty()) {
+                        item(key = "genreBar") {
+                            PremiumGenreBar(
+                                genres     = ui.genres,
+                                selectedId = ui.selectedGenreId,
+                                onSelect   = { vm.selectGenre(it) },
+                            )
+                        }
+                    }
+
                     // ── Genre grid mode ───────────────────────────────────────
                     if (ui.selectedGenreId != null) {
                         if (ui.genreItems.isEmpty() && ui.isGenreLoading) {
@@ -569,7 +580,6 @@ fun BrowseScreen(
             Modifier
                 .align(Alignment.TopCenter)
                 .onGloballyPositioned { coords ->
-                    // Allow update so genre strip height is included once genres load
                     val h = coords.size.height.toFloat()
                     if (h != appBarHeightPx) appBarHeightPx = h
                 }
@@ -579,13 +589,6 @@ fun BrowseScreen(
                 collapseProgress = collapseProgress,
                 onSearchClick    = { nav.navigate(Route.Search.path) },
             )
-            if (ui.genres.isNotEmpty()) {
-                StickyGlassGenreBar(
-                    genres     = ui.genres,
-                    selectedId = ui.selectedGenreId,
-                    onSelect   = { vm.selectGenre(it) },
-                )
-            }
         }
 
         // ── Background-refresh shimmer bar ────────────────────────────────────
@@ -1190,3 +1193,4 @@ fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
         if (h.season > 0) Text("S${h.season} · E${h.episode}", color = Brand.copy(.8f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
     }
 }
+
