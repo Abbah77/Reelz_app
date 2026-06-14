@@ -99,9 +99,6 @@ android {
 }
 
 dependencies {
-    // Reelz Brain — encrypted local taste profile storage
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-
     // Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -161,6 +158,9 @@ dependencies {
     implementation(libs.datastore)
     implementation(libs.gson)
     implementation(libs.palette)
+
+    // Reelz Brain — encrypted local taste profile storage
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Auth
     implementation(libs.google.auth)

@@ -59,6 +59,7 @@ data class TmdbMovieDetailDto(
     @SerializedName("spoken_languages") val spokenLanguages: List<TmdbLanguageDto> = emptyList(),
     @SerializedName("production_countries") val productionCountries: List<TmdbCountryDto> = emptyList(),
     val similar: TmdbPageDto<TmdbMovieDto>? = null,
+    @SerializedName("original_language") val originalLanguage: String = "en",
 )
 
 data class TmdbTvDetailDto(
@@ -80,6 +81,7 @@ data class TmdbTvDetailDto(
     val videos: TmdbVideosDto? = null,
     @SerializedName("external_ids") val externalIds: TmdbExternalIds? = null,
     val similar: TmdbPageDto<TmdbTvDto>? = null,
+    @SerializedName("original_language") val originalLanguage: String = "en",
 )
 
 data class TmdbGenreDto(val id: Int = 0, val name: String = "")

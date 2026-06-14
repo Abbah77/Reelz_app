@@ -31,6 +31,10 @@ import com.reelz.data.local.LikedDao
 import com.reelz.data.local.WatchlistDao
 import com.reelz.data.local.WatchHistoryDao
 import com.reelz.data.model.*
+import com.reelz.brain.TasteEngine
+import com.reelz.brain.TasteAuthStore
+import com.reelz.brain.TasteSyncWorker
+import com.reelz.brain.TasteCard
 import com.reelz.ui.components.*
 import com.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -118,6 +122,9 @@ class ProfileViewModel @Inject constructor(
     private val watchlistDao: WatchlistDao,
     private val likedDao: LikedDao,
     private val historyDao: WatchHistoryDao,
+    private val tasteEngine: TasteEngine,
+    private val tasteAuthStore: TasteAuthStore,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
 ) : ViewModel() {
     data class UiState(
         val profile: UserProfile = UserProfile(),
@@ -125,6 +132,7 @@ class ProfileViewModel @Inject constructor(
         val liked: List<LikedItem> = emptyList(),
         val history: List<WatchHistory> = emptyList(),
         val activeTab: Int = 0,
+        val tasteCard: TasteCard = TasteCard(emptyList(), emptyList(), 0, false, null),
     )
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -133,13 +141,26 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch { watchlistDao.getAll().collect { wl -> _ui.update { it.copy(watchlist = wl) } } }
         viewModelScope.launch { likedDao.getAll().collect { l -> _ui.update { it.copy(liked = l) } } }
         viewModelScope.launch { historyDao.getRecent().collect { h -> _ui.update { it.copy(history = h) } } }
+        // Reelz Brain — "Your Taste DNA" card, kept in sync with the local profile
+        viewModelScope.launch {
+            tasteEngine.profile.collect { _ ->
+                _ui.update { it.copy(tasteCard = tasteEngine.getTasteCard()) }
+            }
+        }
     }
 
     fun setTab(i: Int) { _ui.update { it.copy(activeTab = i) } }
-    fun onSignIn(name: String, email: String, photoUrl: String?) {
+    fun onSignIn(name: String, email: String, photoUrl: String?, idToken: String? = null) {
         _ui.update { it.copy(profile = UserProfile(name, email, photoUrl, true)) }
+        // Reelz Brain — once signed in, save the token and pull down any
+        // taste profile that was previously synced from another device.
+        idToken?.let { tasteAuthStore.saveToken(it) }
+        TasteSyncWorker.downloadNow(appContext)
     }
-    fun signOut() { _ui.update { it.copy(profile = UserProfile()) } }
+    fun signOut() {
+        _ui.update { it.copy(profile = UserProfile()) }
+        tasteAuthStore.clearToken()
+    }
     fun clearHistory() { viewModelScope.launch { historyDao.clear() } }
 }
 
@@ -219,7 +240,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             color = White60, fontSize = 12.sp, textAlign = TextAlign.Center, lineHeight = 18.sp,
                         )
                         Spacer(Modifier.height(16.dp))
-                        GoogleSignInButton(ctx = ctx) { name, email, photo -> vm.onSignIn(name, email, photo) }
+                        GoogleSignInButton(ctx = ctx) { name, email, photo, idToken -> vm.onSignIn(name, email, photo, idToken) }
                     }
                 }
             }
@@ -235,6 +256,14 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                 StatCard("Saved",   ui.watchlist.size.toString(), IconBookmarkSolid, Modifier.weight(1f))
                 StatCard("Liked",   ui.liked.size.toString(),     IconHeartSolid,    Modifier.weight(1f))
                 StatCard("Watched", ui.history.size.toString(),   IconHistory,       Modifier.weight(1f))
+            }
+        }
+
+        // ── Reelz Brain — "Your Taste DNA" card ───────────────────────
+        item {
+            Spacer(Modifier.height(14.dp))
+            Box(Modifier.padding(horizontal = 16.dp)) {
+                TasteProfileCard(ui.tasteCard)
             }
         }
 
@@ -308,7 +337,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
 }
 
 @Composable
-fun GoogleSignInButton(ctx: Context, onSignedIn: (String, String, String?) -> Unit) {
+fun GoogleSignInButton(ctx: Context, onSignedIn: (String, String, String?, String?) -> Unit) {
     val scope = rememberCoroutineScope()
     Box(
         Modifier.fillMaxWidth()
@@ -329,7 +358,7 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String, String, String?) -> Un
                         val credential = result.credential
                         if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                             val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
-                            onSignedIn(googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString())
+                            onSignedIn(googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString(), googleCred.idToken)
                         }
                     } catch (_: Exception) {}
                 }

@@ -34,6 +34,9 @@ import com.reelz.remoteconfig.ConfigSyncWorker
 import com.reelz.remoteconfig.SyncState
 import com.reelz.ui.screens.update.MaintenanceScreen
 import com.reelz.ui.screens.update.UpdateScreen
+import com.reelz.brain.TasteEngine
+import com.reelz.brain.TasteAuthStore
+import com.reelz.brain.TasteSyncWorker
 import com.reelz.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
@@ -45,6 +48,8 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var remoteConfig: RemoteConfigRepository
     @Inject lateinit var adEngine: AdEngine
+    @Inject lateinit var tasteEngine: TasteEngine
+    @Inject lateinit var tasteAuthStore: TasteAuthStore
 
     // Track cold start — App Open ad fires ONCE on cold start, not every resume
     private var isColdStart = true
@@ -57,6 +62,15 @@ class MainActivity : ComponentActivity() {
         if (isColdStart) {
             isColdStart = false
             adEngine.showAppOpenIfReady(this)
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Reelz Brain — opportunistically push the local taste profile to the
+        // cloud when the user is signed in and something changed this session.
+        if (tasteAuthStore.isLoggedIn() && tasteEngine.isDirty) {
+            TasteSyncWorker.uploadNow(this)
         }
     }
 

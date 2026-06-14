@@ -195,6 +195,7 @@ fun TmdbMovieDetailDto.toDetail(): MediaDetail {
         spokenLanguages = spokenLanguages.map { it.englishName },
         productionCountries = productionCountries.map { it.name },
         similar = similar?.results?.take(12)?.map { it.toMedia(MediaType.MOVIE) } ?: emptyList(),
+        originalLanguage = originalLanguage,
     )
 }
 
@@ -217,6 +218,7 @@ fun TmdbTvDetailDto.toDetail(): MediaDetail {
         } ?: emptyList(),
         trailerKey = trailer, imdbId = externalIds?.imdbId,
         similar = similar?.results?.take(12)?.map { it.toMedia(MediaType.TV) } ?: emptyList(),
+        originalLanguage = originalLanguage,
     )
 }
 

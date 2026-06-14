@@ -37,6 +37,9 @@ import coil.compose.AsyncImage
 import com.reelz.BuildConfig
 import com.reelz.data.model.*
 import com.reelz.data.repository.MediaRepository
+import com.reelz.brain.TasteEngine
+import com.reelz.brain.TmdbGenreMap
+import com.reelz.brain.UserAction
 import com.reelz.ui.Route
 import com.reelz.ui.components.*
 import com.reelz.ui.theme.*
@@ -54,12 +57,14 @@ import kotlin.math.roundToInt
 sealed class FeedRow {
     data class Section(val section: HomeSection) : FeedRow()
     data class InfinitePage(val items: List<Media>, val page: Int) : FeedRow()
+    data class MoodRow(val mood: String, val items: List<Media>) : FeedRow()
     object NativeAdPlacement : FeedRow()
 }
 
 @HiltViewModel
 class BrowseViewModel @Inject constructor(
     private val repo: MediaRepository,
+    private val tasteEngine: TasteEngine,
 ) : ViewModel() {
 
     data class UiState(
@@ -77,6 +82,7 @@ class BrowseViewModel @Inject constructor(
         val continueWatching: List<WatchHistory> = emptyList(),
         val isLoadingMore: Boolean = false,
         val isCacheLoaded: Boolean = false,
+        val moodLabel: String? = null,  // e.g., "😱 Scary tonight"
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -84,42 +90,88 @@ class BrowseViewModel @Inject constructor(
 
     private var infinitePage = 1
     private var isInfiniteExhausted = false
-    private var categorySections: List<HomeSection> = emptyList()
     private var categorySectionsEmitted = false
 
     init {
         load(forceRefresh = false)
+
         viewModelScope.launch {
             repo.getHistory().collect { h ->
                 _ui.update { it.copy(continueWatching = h) }
+            }
+        }
+
+        // React to taste profile changes (e.g., after onboarding completes)
+        viewModelScope.launch {
+            tasteEngine.profile.drop(1).collect { // drop(1) = skip initial value
+                // Re-sort existing feed if profile changes significantly
+                _ui.update { state ->
+                    val reranked = rerankFeed(state.feedRows)
+                    state.copy(feedRows = reranked)
+                }
             }
         }
     }
 
     fun load(forceRefresh: Boolean = true) {
         viewModelScope.launch {
-            if (forceRefresh) {
-                _ui.update { it.copy(isRefreshing = true, error = null) }
-            } else {
-                _ui.update { it.copy(isLoading = true, error = null) }
-            }
+            if (forceRefresh) _ui.update { it.copy(isRefreshing = true, error = null) }
+            else _ui.update { it.copy(isLoading = true, error = null) }
+
             infinitePage = 1
             isInfiniteExhausted = false
             categorySectionsEmitted = false
+
             try {
                 val sections = repo.getHomeSections(forceRefresh)
-                categorySections = sections
-                val featured = sections.firstOrNull()?.items?.take(6) ?: emptyList()
-                val genres   = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
-                // Build feed rows, injecting a native ad every 3 section rows
-                val rawRows = sections.map { FeedRow.Section(it) }
+                val genres   = runCatching { repo.getMovieGenres() }.getOrElse { emptyList() }
+
+                // ── Taste-aware section reordering ────────────────────────────
+                // Sort sections so the genres user loves come first.
+                // "Continue Watching" is always first (handled in UI layer).
+                val rankedSections = rankSections(sections)
+
+                // ── Mood row (only when profile has enough data) ───────────────
+                val tasteCard = tasteEngine.getTasteCard()
+                val moodRow: FeedRow.MoodRow? = if (
+                    tasteCard.isOnboarded && tasteCard.totalWatched >= 5 && tasteCard.dominantMood != null
+                ) {
+                    // Find items matching the mood's genre from the available sections
+                    val moodGenreKey = moodKeyFromLabel(tasteCard.dominantMood)
+                    val moodItems = sections.flatMap { it.items }
+                        .filter { media ->
+                            val genreMap = if (media.mediaType == MediaType.TV)
+                                TmdbGenreMap.tvGenres
+                            else TmdbGenreMap.movieGenres
+                            val keys = media.genreIds.mapNotNull { genreMap[it] }
+                            moodGenreKey in keys
+                        }
+                        .take(20)
+                        .let { tasteEngine.rankMedia(it) }
+
+                    if (moodItems.isNotEmpty())
+                        FeedRow.MoodRow(tasteCard.dominantMood, moodItems)
+                    else null
+                } else null
+
+                // ── Hero banner: taste-ranked top items ───────────────────────
+                val allItems = sections.flatMap { it.items }
+                val featured = tasteEngine.rankMedia(allItems).take(6)
+                    .ifEmpty { sections.firstOrNull()?.items?.take(6) ?: emptyList() }
+
+                // ── Build feed rows with taste-sorted sections ─────────────────
+                val sectionRows = rankedSections.map { FeedRow.Section(it) }
                 val feedRows = buildList {
-                    rawRows.forEachIndexed { index, row ->
+                    // Mood row first (when available)
+                    moodRow?.let { add(it) }
+
+                    // Then section rows with ad injection
+                    sectionRows.forEachIndexed { index, row ->
                         add(row)
-                        // Inject ad after every 3rd section (index 2, 5, 8 …)
                         if ((index + 1) % 3 == 0) add(FeedRow.NativeAdPlacement)
                     }
                 }
+
                 _ui.update {
                     it.copy(
                         isLoading    = false,
@@ -128,36 +180,87 @@ class BrowseViewModel @Inject constructor(
                         featured     = featured,
                         genres       = genres,
                         isCacheLoaded = true,
+                        moodLabel    = tasteCard.dominantMood,
                     )
                 }
                 categorySectionsEmitted = true
+
             } catch (e: Exception) {
                 _ui.update { it.copy(isLoading = false, isRefreshing = false, error = e.message ?: "Failed to load") }
             }
         }
     }
 
+    // ── Rank sections by user taste ───────────────────────────────────────────
+    private fun rankSections(sections: List<HomeSection>): List<HomeSection> {
+        val profile = tasteEngine.profile.value
+        if (profile.totalInteractions < 5) return sections // Not enough data yet
+
+        // Score each section by averaging the taste scores of its items
+        return sections.sortedByDescending { section ->
+            val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+            section.items.take(5).map { media ->
+                profile.scoreMedia(
+                    genreIds         = media.genreIds,
+                    originalLanguage = media.originalLanguage,
+                    mediaType        = media.mediaType.name,
+                    isAnime          = TmdbGenreMap.isAnime(media.originalLanguage, media.genreIds),
+                    currentHour      = hour,
+                    voteAverage      = media.voteAverage,
+                    popularity       = media.popularity,
+                )
+            }.average()
+        }.map { section ->
+            // Also re-rank items within each section
+            section.copy(items = tasteEngine.rankMedia(section.items))
+        }
+    }
+
+    // ── Re-rank existing feed without re-fetching ─────────────────────────────
+    private fun rerankFeed(rows: List<FeedRow>): List<FeedRow> {
+        return rows.map { row ->
+            when (row) {
+                is FeedRow.Section -> row.copy(
+                    section = row.section.copy(items = tasteEngine.rankMedia(row.section.items))
+                )
+                is FeedRow.InfinitePage -> row.copy(items = tasteEngine.rankMedia(row.items))
+                is FeedRow.MoodRow -> row.copy(items = tasteEngine.rankMedia(row.items))
+                else -> row
+            }
+        }
+    }
+
+    // ── Infinite scroll — taste-biased discovery ──────────────────────────────
     fun loadMoreInfinite() {
         if (_ui.value.isLoadingMore || isInfiniteExhausted) return
         viewModelScope.launch {
             _ui.update { it.copy(isLoadingMore = true) }
             try {
                 val nextPage = infinitePage + 1
-                val items: List<Media> = if (nextPage % 2 == 0) {
-                    repo.discoverMovies(genreId = null, page = nextPage)
-                } else {
-                    repo.discoverTv(genreId = null, page = nextPage)
+                val profile = tasteEngine.profile.value
+
+                // Pick the media type based on what user tends to watch more
+                val tvScore = profile.genres["anime"]?.effectiveScore?.toDouble() ?: 0.0
+
+                val items: List<Media> = when {
+                    // If user loves anime, inject anime pages
+                    tvScore > 30.0 && nextPage % 3 == 0 -> repo.getAnime(nextPage)
+                    nextPage % 2 == 0 -> repo.discoverMovies(genreId = null, page = nextPage)
+                    else -> repo.discoverTv(genreId = null, page = nextPage)
                 }
+
                 if (items.isEmpty()) {
                     isInfiniteExhausted = true
                     _ui.update { it.copy(isLoadingMore = false) }
                     return@launch
                 }
+
                 infinitePage = nextPage
-                val newRow = FeedRow.InfinitePage(items, nextPage)
-                _ui.update { st ->
-                    st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false)
-                }
+                // Rank the page before inserting
+                val ranked = tasteEngine.rankMedia(items)
+                val newRow = FeedRow.InfinitePage(ranked, nextPage)
+                _ui.update { st -> st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false) }
+
             } catch (_: Exception) {
                 _ui.update { it.copy(isLoadingMore = false) }
             }
@@ -173,7 +276,7 @@ class BrowseViewModel @Inject constructor(
         _ui.update { it.copy(selectedGenreId = genreId, genreItems = emptyList(), genrePage = 1, hasMoreGenrePages = true, isGenreLoading = true) }
         viewModelScope.launch {
             try {
-                val items = repo.discoverMovies(genreId, page = 1)
+                val items = tasteEngine.rankMedia(repo.discoverMovies(genreId, page = 1))
                 _ui.update { it.copy(genreItems = items, isGenreLoading = false) }
             } catch (_: Exception) { _ui.update { it.copy(isGenreLoading = false) } }
         }
@@ -186,7 +289,7 @@ class BrowseViewModel @Inject constructor(
             _ui.update { it.copy(isGenreLoading = true) }
             try {
                 val nextPage = st.genrePage + 1
-                val items = repo.discoverMovies(st.selectedGenreId, page = nextPage)
+                val items = tasteEngine.rankMedia(repo.discoverMovies(st.selectedGenreId, page = nextPage))
                 _ui.update { it.copy(
                     genreItems        = it.genreItems + items,
                     genrePage         = nextPage,
@@ -195,6 +298,33 @@ class BrowseViewModel @Inject constructor(
                 ) }
             } catch (_: Exception) { _ui.update { it.copy(isGenreLoading = false) } }
         }
+    }
+
+    // ── Track user actions from Browse screen ─────────────────────────────────
+    fun onMediaLiked(media: Media) {
+        tasteEngine.track(media, UserAction.LIKE)
+    }
+
+    fun onMediaSaved(media: Media) {
+        tasteEngine.track(media, UserAction.SAVE_WATCHLIST)
+    }
+
+    fun onMediaRemovedFromWatchlist(media: Media) {
+        tasteEngine.track(media, UserAction.REMOVE_WATCHLIST)
+    }
+
+    // ── Helper ────────────────────────────────────────────────────────────────
+    private fun moodKeyFromLabel(label: String) = when {
+        label.contains("horror", ignoreCase = true) || label.contains("Scary") -> "horror"
+        label.contains("laugh") || label.contains("Comedy") -> "comedy"
+        label.contains("badass") || label.contains("Action") -> "action"
+        label.contains("Romantic") || label.contains("Romance") -> "romance"
+        label.contains("edge") || label.contains("Thriller") -> "thriller"
+        label.contains("Mind") || label.contains("Sci") -> "scifi"
+        label.contains("Emotional") || label.contains("Drama") -> "drama"
+        label.contains("Anime") -> "anime"
+        label.contains("Crime") -> "crime"
+        else -> "drama"
     }
 }
 
@@ -428,6 +558,15 @@ fun BrowseScreen(
 
                         ui.feedRows.forEachIndexed { feedRowIdx, row ->
                             when (row) {
+                                is FeedRow.MoodRow -> {
+                                    item(key = "mood_row") {
+                                        com.reelz.ui.components.MoodRow(
+                                            mood = row.mood,
+                                            items = row.items,
+                                            onItemClick = { m -> goDetail(m.tmdbId, m.mediaType) },
+                                        )
+                                    }
+                                }
                                 is FeedRow.Section -> {
                                     item(key = "hdr_${row.section.title}") {
                                         SectionHeader(row.section.title, "See All")
