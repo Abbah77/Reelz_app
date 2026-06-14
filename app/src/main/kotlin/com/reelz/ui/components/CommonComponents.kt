@@ -373,11 +373,12 @@ fun MediaPosterCard(
                 rotationX = rotateX
                 shadowElevation = elevation
                 shape = RoundedCornerShape(14.dp)
-                clip = true
-                // 3D perspective
+                // clip = false so shadow shape is respected but title text below image is NOT clipped
+                clip = false
                 cameraDistance = 8f * density
             }
-            .clip(RoundedCornerShape(14.dp))
+            // No outer Column clip — image Box below carries its own RoundedCornerShape clip,
+            // and title text must not be cut by the column's bottom corners.
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -393,7 +394,7 @@ fun MediaPosterCard(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(14.dp))          // image clipped here — correct
                 .border(1.dp, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(14.dp))
                 .background(BgRaised)
         ) {
@@ -431,10 +432,26 @@ fun MediaPosterCard(
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text(media.title, color = White80, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 15.sp, fontWeight = FontWeight.Medium)
+        Text(
+            media.title,
+            color = White80,
+            fontSize = 11.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = 15.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
         if (media.mediaType == MediaType.TV) {
             Spacer(Modifier.height(2.dp))
-            Text("TV Series", color = Brand, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp)
+            Text(
+                "TV Series",
+                color = Brand,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.4.sp,
+                modifier = Modifier.padding(horizontal = 2.dp),
+            )
         }
     }
 }
@@ -458,7 +475,9 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
                 scaleX = scale; scaleY = scale
                 cameraDistance = 8f * density
             }
-            .clip(RoundedCornerShape(12.dp))
+            // No Column-level clip: the image Box below has its own RoundedCornerShape clip.
+            // Clipping the whole Column rounded the bottom corners of the Column, visually
+            // cutting into the first letter of the title text that sits below the image.
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -507,7 +526,16 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text(media.title, color = White80, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp, fontWeight = FontWeight.Medium)
+        Text(
+            media.title,
+            color = White80,
+            fontSize = 12.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
     }
 }
 
