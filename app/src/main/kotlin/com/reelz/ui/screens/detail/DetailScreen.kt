@@ -26,6 +26,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -230,7 +231,10 @@ class DetailViewModel @Inject constructor(
                             preResolvedStream = stream
                             try {
                                 val qualities = when {
-                                    stream.qualities.isNotEmpty() -> stream.qualities
+                                    stream.qualities.isNotEmpty() -> normalizeQualities(
+                                        stream.qualities,
+                                        _ui.value.detail?.runtime,
+                                    )
                                     stream.isHls -> parseMasterPlaylist(
                                         stream.url, stream.headers,
                                         _ui.value.detail?.runtime,
@@ -327,7 +331,11 @@ class DetailViewModel @Inject constructor(
 
                 val qualities = when {
                     stream == null -> emptyList()
-                    stream.qualities.isNotEmpty() -> stream.qualities
+                    stream.qualities.isNotEmpty() -> {
+                        // Pre-resolved qualities may have "Auto" labels or missing sizes —
+                        // normalize them using bandwidth tiers + runtime estimation
+                        normalizeQualities(stream.qualities, detail.runtime)
+                    }
                     stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, detail.runtime)
                     else -> listOf(QualityTrack("Best available", stream.url))
                 }
@@ -379,38 +387,89 @@ class DetailViewModel @Inject constructor(
      *
      * Uses NativeBridge (C++) for single-pass parsing — 10–50x faster than Kotlin loop.
      * Uses bandwidth × runtime for size estimation — ZERO extra network calls.
+     * Falls back to a 2-hour estimate when runtime is unavailable.
      * Uses the injected shared OkHttpClient — warm connections, DNS cache, HTTP/2.
      *
      * Result: quality list appears in < 200ms after master playlist is fetched.
      */
+    /**
+     * Normalizes a pre-resolved quality list:
+     *  - Assigns bandwidth-tier labels when label is "Auto" or blank.
+     *  - Ensures estimatedSizeBytes is always computed.
+     *  - Deduplicates by label keeping highest bandwidth.
+     */
+    private fun normalizeQualities(
+        tracks: List<QualityTrack>,
+        runtimeMinutes: Int? = null,
+    ): List<QualityTrack> {
+        val runtimeSec = when {
+            runtimeMinutes != null && runtimeMinutes > 0 -> runtimeMinutes * 60L
+            else -> 7200L
+        }
+        return tracks.map { track ->
+            val label = when {
+                track.label != "Auto" && track.label.isNotBlank() -> track.label
+                track.bandwidth >= 8_000_000 -> "1080p"
+                track.bandwidth >= 4_000_000 -> "1080p"
+                track.bandwidth >= 2_000_000 -> "720p"
+                track.bandwidth >= 1_000_000 -> "480p"
+                track.bandwidth >= 400_000   -> "360p"
+                track.bandwidth >  0         -> "240p"
+                else -> "Auto"
+            }
+            val size = when {
+                track.estimatedSizeBytes > 0 -> track.estimatedSizeBytes
+                track.bandwidth > 0 -> ((track.bandwidth * runtimeSec) / 8L * 55L) / 100L
+                else -> 0L
+            }
+            track.copy(label = label, estimatedSizeBytes = size)
+        }
+        .groupBy { it.label }
+        .map { (_, v) -> v.maxByOrNull { it.bandwidth }!! }
+        .sortedByDescending { it.bandwidth }
+    }
+
     private suspend fun parseMasterPlaylist(
         masterUrl: String,
         headers: Map<String, String>,
         runtimeMinutes: Int? = null,
     ): List<QualityTrack> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
-            // UPGRADE P13: Use injected shared client (warm connections, no cold-start)
             val req = okhttp3.Request.Builder().url(masterUrl).apply {
                 headers.forEach { (k, v) -> addHeader(k, v) }
             }.build()
             val body = httpClient.newCall(req).execute().use { it.body?.string() } ?: return@withContext emptyList()
 
-            // UPGRADE P3: NativeBridge C++ parsing — single linear pass, no allocations per line
+            // UPGRADE P3: NativeBridge C++ parsing — single linear pass
             val rawVariants = com.reelz.scanner.NativeBridge.variants(body, masterUrl)
             if (rawVariants.isEmpty()) return@withContext emptyList()
 
-            // UPGRADE P2: Bandwidth-based size estimation — ZERO extra network calls
-            // estimatedBytes = (bandwidth_bps * runtime_seconds) / 8
-            val runtimeSec = (runtimeMinutes ?: 0) * 60L
+            // UPGRADE P2: Bandwidth-based size estimation — ZERO extra network calls.
+            // estimatedBytes = (bandwidth_bps × runtime_seconds × 0.55) / 8
+            // Apply 0.55 correction: declared HLS bandwidth is peak/theoretical;
+            // real encoded streams average ~55% of declared.
+            // Fallback to 2-hour runtime (7200s) when TMDB doesn't supply one.
+            val runtimeSec = when {
+                runtimeMinutes != null && runtimeMinutes > 0 -> runtimeMinutes * 60L
+                else -> 7200L  // 2-hour fallback so size is always shown
+            }
 
             rawVariants.map { variant ->
-                val estimatedSize = if (runtimeSec > 0 && variant.bandwidth > 0) {
-                    // Apply 0.55 correction factor — declared HLS bandwidth is always
-                    // peak/theoretical. Real encoded streams average ~55% of declared.
-                    // This brings the shown size much closer to actual download size.
+                // Fix "Auto" labels using bandwidth tiers when no resolution was parsed
+                val fixedLabel = when {
+                    variant.label != "Auto" && variant.label.isNotBlank() -> variant.label
+                    variant.bandwidth >= 8_000_000 -> "1080p"
+                    variant.bandwidth >= 4_000_000 -> "1080p"
+                    variant.bandwidth >= 2_000_000 -> "720p"
+                    variant.bandwidth >= 1_000_000 -> "480p"
+                    variant.bandwidth >= 400_000   -> "360p"
+                    variant.bandwidth >  0          -> "240p"
+                    else -> "Auto"
+                }
+                val estimatedSize = if (variant.bandwidth > 0) {
                     ((variant.bandwidth * runtimeSec) / 8L * 55L) / 100L
                 } else 0L
-                variant.copy(estimatedSizeBytes = estimatedSize)
+                variant.copy(label = fixedLabel, estimatedSizeBytes = estimatedSize)
             }
             .groupBy { it.label }
             .map { (_, v) -> v.maxByOrNull { it.bandwidth }!! }
@@ -539,7 +598,7 @@ fun DownloadQualitySheet(
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .background(BgCard)
                 .padding(horizontal = 20.dp, vertical = 20.dp)
                 .clickable(enabled = false) {},
@@ -547,98 +606,210 @@ fun DownloadQualitySheet(
         ) {
             // Handle
             Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(White40))
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
 
+            // Header row
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Icon(IconDownloadCloud, null, tint = Brand, modifier = Modifier.size(22.dp))
-                Text(
-                    "Download",
-                    color = White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    modifier = Modifier.weight(1f),
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Download",
+                        color = White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                    )
+                    Text(
+                        title,
+                        color = White60,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 IconButton(onClick = onDismiss) {
                     Icon(IconClose, null, tint = White60, modifier = Modifier.size(20.dp))
                 }
             }
-            Text(title, color = White60, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(20.dp))
 
             when {
+                // ── Success state ──────────────────────────────────────────────
                 enqueued -> {
-                    Icon(IconCheckCircle, null, tint = Brand, modifier = Modifier.size(40.dp))
                     Spacer(Modifier.height(8.dp))
-                    Text("Added to downloads!", color = White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    Text("You can watch it once enough has downloaded.", color = White60, fontSize = 12.sp)
-                    Spacer(Modifier.height(16.dp))
+                    Box(
+                        Modifier.size(56.dp).clip(CircleShape)
+                            .background(Brand.copy(.12f))
+                            .border(1.dp, Brand.copy(.3f), CircleShape),
+                        Alignment.Center,
+                    ) {
+                        Icon(IconCheckCircle, null, tint = Brand, modifier = Modifier.size(30.dp))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text("Added to Downloads", color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text("You can watch it while it downloads.", color = White60, fontSize = 13.sp)
+                    Spacer(Modifier.height(20.dp))
                     BrandButton("Done", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
                 }
 
+                // ── Loading state ──────────────────────────────────────────────
                 isLoading -> {
+                    Spacer(Modifier.height(8.dp))
                     CinematicSpinner(size = 32.dp)
                     Spacer(Modifier.height(12.dp))
                     Text("Fetching available qualities…", color = White60, fontSize = 13.sp)
+                    Spacer(Modifier.height(16.dp))
                 }
 
+                // ── No streams ─────────────────────────────────────────────────
                 qualities.isEmpty() -> {
-                    Icon(IconError, null, tint = White40, modifier = Modifier.size(32.dp))
                     Spacer(Modifier.height(8.dp))
+                    Icon(IconError, null, tint = White40, modifier = Modifier.size(32.dp))
+                    Spacer(Modifier.height(10.dp))
                     Text("No downloadable streams found", color = White60, fontSize = 13.sp)
+                    Spacer(Modifier.height(16.dp))
                 }
 
+                // ── Quality list ───────────────────────────────────────────────
                 else -> {
-                    Text("Select quality", color = White60, fontSize = 12.sp)
+                    Text(
+                        "Choose quality",
+                        color = White60,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                     Spacer(Modifier.height(12.dp))
-                    qualities.forEach { track ->
+
+                    qualities.forEachIndexed { index, track ->
+                        // Human-readable label from resolution code
+                        val descLabel = when {
+                            track.label.startsWith("1080") -> "Full HD"
+                            track.label.startsWith("720")  -> "HD"
+                            track.label.startsWith("480")  -> "Standard"
+                            track.label.startsWith("360")  -> "Low"
+                            track.label.startsWith("240")  -> "Very Low"
+                            track.label == "Best available"-> "Best"
+                            else                           -> "Standard"
+                        }
+                        val isBest    = index == 0
+                        val isSmall   = index == qualities.lastIndex && qualities.size > 1
+
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(BgRaised)
-                                .border(1.dp, GlassBorderMd, RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (isBest) Brand.copy(.07f) else BgRaised)
+                                .border(
+                                    width = if (isBest) 1.5.dp else 1.dp,
+                                    color = if (isBest) Brand.copy(.35f) else GlassBorderMd,
+                                    shape = RoundedCornerShape(14.dp),
+                                )
                                 .clickable { onSelectQuality(track) }
                                 .padding(horizontal = 16.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
-                            // Quality badge
+                            // Resolution badge
                             Box(
                                 Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Brand.copy(.15f))
-                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                                    .width(60.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isBest) Brand.copy(.18f) else GlassSm)
+                                    .border(
+                                        1.dp,
+                                        if (isBest) Brand.copy(.4f) else GlassBorderMd,
+                                        RoundedCornerShape(10.dp),
+                                    )
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Text(track.label, color = Brand, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(
+                                    track.label,
+                                    color = if (isBest) Brand else White,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 14.sp,
+                                )
                             }
 
+                            // Description + size
                             Column(Modifier.weight(1f)) {
-                                val typeLabel = if (track.url.contains(".m3u8", true)) "HLS" else "MP4"
-                                Text(typeLabel, color = White60, fontSize = 11.sp)
-
-                                // Show estimated size if available
-                                if (track.estimatedSizeBytes > 0) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
                                     Text(
-                                        "~${formatSize(track.estimatedSizeBytes)}",
-                                        color = White40,
-                                        fontSize = 10.sp,
+                                        descLabel,
+                                        color = White,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp,
                                     )
-                                } else if (track.bandwidth > 0) {
-                                    Text(
-                                        "~${track.bandwidth / 1_000_000}Mbps",
-                                        color = White40,
-                                        fontSize = 10.sp,
-                                    )
+                                    if (isBest) {
+                                        Box(
+                                            Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Brand.copy(.15f))
+                                                .border(1.dp, Brand.copy(.3f), RoundedCornerShape(4.dp))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        ) {
+                                            Text(
+                                                "BEST",
+                                                color = Brand,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                letterSpacing = 0.5.sp,
+                                            )
+                                        }
+                                    }
+                                    if (isSmall) {
+                                        Box(
+                                            Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(GlassSm)
+                                                .border(1.dp, GlassBorderMd, RoundedCornerShape(4.dp))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        ) {
+                                            Text(
+                                                "SMALLEST",
+                                                color = White40,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 0.5.sp,
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(3.dp))
+                                when {
+                                    track.estimatedSizeBytes > 0 ->
+                                        Text(
+                                            "~${formatSize(track.estimatedSizeBytes)}",
+                                            color = if (isBest) Brand.copy(.8f) else White60,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isBest) FontWeight.SemiBold else FontWeight.Normal,
+                                        )
+                                    track.bandwidth > 0 ->
+                                        Text(
+                                            "${"%.1f".format(track.bandwidth / 1_000_000.0)} Mbps",
+                                            color = White40,
+                                            fontSize = 12.sp,
+                                        )
                                 }
                             }
 
-                            Icon(IconDownloadCloud, null, tint = White60, modifier = Modifier.size(18.dp))
+                            // Download arrow
+                            Icon(
+                                IconDownloadCloud,
+                                null,
+                                tint = if (isBest) Brand else White40,
+                                modifier = Modifier.size(22.dp),
+                            )
                         }
-                        Spacer(Modifier.height(8.dp))
+
+                        if (index < qualities.lastIndex) Spacer(Modifier.height(8.dp))
                     }
                 }
             }
@@ -961,8 +1132,8 @@ fun CastCard(cast: CastMember) {
             }
         }
         Spacer(Modifier.height(5.dp))
-        Text(cast.name, color = White80, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 13.sp)
-        Text(cast.character, color = White40, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Text(cast.name, color = White80, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = 13.sp)
+        Text(cast.character, color = White40, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
     }
 }
 
