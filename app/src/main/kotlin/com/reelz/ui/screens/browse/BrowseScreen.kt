@@ -914,7 +914,7 @@ fun StickyGenreChip(label: String, selected: Boolean, onClick: () -> Unit) {
                 if (selected)
                     Brush.linearGradient(listOf(BrandDeep, Brand.copy(.82f)))
                 else
-                    Color(0x14FFFFFF)
+                    SolidColor(Color(0x14FFFFFF))   // SolidColor is a Brush → both branches match
             )
             .border(1.dp, borderColor, RoundedCornerShape(100.dp))
             .clickable(onClick = onClick)
