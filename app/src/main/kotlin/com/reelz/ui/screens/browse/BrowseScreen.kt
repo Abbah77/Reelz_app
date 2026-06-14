@@ -725,7 +725,6 @@ fun BrowseScreen(
                 }
             }
         }
-    }   // end AnimatedVisibility
     }   // end root Box
 }       // end BrowseScreen
 
