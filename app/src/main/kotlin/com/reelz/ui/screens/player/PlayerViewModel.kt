@@ -12,6 +12,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
@@ -751,38 +752,44 @@ class PlayerViewModel @Inject constructor(
     fun playStream(result: StreamResult) {
         val p = exoPlayer ?: return
 
-        val headers = mutableMapOf<String, String>().apply {
-            putAll(result.headers)
-            if (result.referer.isNotBlank()) put("Referer", result.referer)
-            if (result.origin.isNotBlank())  put("Origin",  result.origin)
-        }
+        val isLocalFile = result.url.startsWith("file://")
 
         val item = MediaItem.Builder()
             .setUri(result.url)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build())
             .build()
 
-        // ── Cached data source: upstream HTTP → 100 MB SimpleCache on disk ──
-        // Any segment already in cache is served instantly (0 network).
-        // This is the core of TikTok-style speed: prefetch fills the cache,
-        // the player reads from disk, network is only hit for cold segments.
-        val upstreamDsf = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(headers)
-            .setConnectTimeoutMs(6_000)
-            .setReadTimeoutMs(15_000)
-            .setAllowCrossProtocolRedirects(true)
-
-        val cachedDsf = CacheDataSource.Factory()
-            .setCache(getVideoCache(appContext))
-            .setUpstreamDataSourceFactory(upstreamDsf)
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        // ── Data source factory: local file vs. network ───────────────────────
+        // For downloaded (file://) content, use DefaultDataSource which handles
+        // local filesystem URIs. For network streams, use CacheDataSource backed
+        // by HTTP so segments are cached in the 100 MB on-disk SimpleCache.
+        val mediaDsf = if (isLocalFile) {
+            // Local downloaded file — no HTTP, no cache layer needed
+            DefaultDataSource.Factory(appContext)
+        } else {
+            val headers = mutableMapOf<String, String>().apply {
+                putAll(result.headers)
+                if (result.referer.isNotBlank()) put("Referer", result.referer)
+                if (result.origin.isNotBlank())  put("Origin",  result.origin)
+            }
+            val upstreamDsf = DefaultHttpDataSource.Factory()
+                .setDefaultRequestProperties(headers)
+                .setConnectTimeoutMs(6_000)
+                .setReadTimeoutMs(15_000)
+                .setAllowCrossProtocolRedirects(true)
+            // ── Cached data source: upstream HTTP → 100 MB SimpleCache on disk ──
+            CacheDataSource.Factory()
+                .setCache(getVideoCache(appContext))
+                .setUpstreamDataSourceFactory(upstreamDsf)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        }
 
         val source = if (result.isHls) {
-            HlsMediaSource.Factory(cachedDsf)
-                .setAllowChunklessPreparation(true)  // parse playlist without fetching first segment
+            HlsMediaSource.Factory(mediaDsf)
+                .setAllowChunklessPreparation(true)
                 .createMediaSource(item)
         } else {
-            ProgressiveMediaSource.Factory(cachedDsf).createMediaSource(item)
+            ProgressiveMediaSource.Factory(mediaDsf).createMediaSource(item)
         }
 
         viewModelScope.launch {
