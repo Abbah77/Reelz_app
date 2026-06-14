@@ -9,6 +9,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.pager.*
 import androidx.compose.foundation.shape.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -311,14 +313,8 @@ fun BrowseScreen(
     else 0f
 
     // ── Pull-to-refresh state (managed in NestedScrollConnection) ────────────
-    // Positive when user overscrolls upward at the top
     var pullOverscrollPx by remember { mutableStateOf(0f) }
     val pullThresholdPx = with(density) { 72.dp.toPx() }
-    val pullProgress = (pullOverscrollPx / pullThresholdPx).coerceIn(0f, 1f)
-    val pullIndicatorScale by animateFloatAsState(
-        if (pullProgress > 0.85f) 1.15f else 0.85f + 0.15f * pullProgress,
-        spring(dampingRatio = 0.5f, stiffness = 400f), label = "pullScale"
-    )
 
     // ── NestedScrollConnection ────────────────────────────────────────────────
     //  KEY BEHAVIOUR:
@@ -466,17 +462,6 @@ fun BrowseScreen(
                         item(key = "heroBannerSkeleton") { SkeletonBannerLoader() }
                     }
 
-                    // ── Genre chips (flow under collapsing bar) ───────────────
-                    if (ui.genres.isNotEmpty()) {
-                        item(key = "genreBar") {
-                            PremiumGenreBar(
-                                genres     = ui.genres,
-                                selectedId = ui.selectedGenreId,
-                                onSelect   = { vm.selectGenre(it) },
-                            )
-                        }
-                    }
-
                     // ── Genre grid mode ───────────────────────────────────────
                     if (ui.selectedGenreId != null) {
                         if (ui.genreItems.isEmpty() && ui.isGenreLoading) {
@@ -575,24 +560,35 @@ fun BrowseScreen(
             }
         }
 
-        // ── Collapsing glass app bar (floats over content) ───────────────────
-        CollapsingGlassAppBar(
-            collapseProgress = collapseProgress,
-            onSearchClick    = { nav.navigate(Route.Search.path) },
-            modifier         = Modifier
+        // ── Sticky header: app bar + genre strip move as one unit ────────────
+        // Both sit in a Column inside one Box. We measure the Column's combined
+        // height as appBarHeightPx, then translate it upward by collapseOffsetPx.
+        // That means everything — logo, search AND genre chips — hides/reveals
+        // together with a single scroll gesture.
+        Column(
+            Modifier
                 .align(Alignment.TopCenter)
                 .onGloballyPositioned { coords ->
-                    if (appBarHeightPx == 0f) appBarHeightPx = coords.size.height.toFloat()
+                    // Allow update so genre strip height is included once genres load
+                    val h = coords.size.height.toFloat()
+                    if (h != appBarHeightPx) appBarHeightPx = h
                 }
-                .graphicsLayer {
-                    // Translate upward as bar collapses
-                    translationY = -collapseOffsetPx
-                },
-        )
+                .graphicsLayer { translationY = -collapseOffsetPx }
+        ) {
+            CollapsingGlassAppBar(
+                collapseProgress = collapseProgress,
+                onSearchClick    = { nav.navigate(Route.Search.path) },
+            )
+            if (ui.genres.isNotEmpty()) {
+                StickyGlassGenreBar(
+                    genres     = ui.genres,
+                    selectedId = ui.selectedGenreId,
+                    onSelect   = { vm.selectGenre(it) },
+                )
+            }
+        }
 
         // ── Background-refresh shimmer bar ────────────────────────────────────
-        // Shown when cached data is already visible and a silent network refresh
-        // is in progress. Ultra-thin so it doesn't interrupt the user.
         if (ui.isBackgroundRefreshing) {
             val inf   = rememberInfiniteTransition(label = "bgRefresh")
             val sweep by inf.animateFloat(
@@ -608,7 +604,7 @@ fun BrowseScreen(
                         Brush.horizontalGradient(
                             colorStops = arrayOf(
                                 (sweep - 0.35f).coerceIn(0f, 1f) to Color.Transparent,
-                                sweep.coerceIn(0f, 1f)          to Brand.copy(0.9f),
+                                sweep.coerceIn(0f, 1f)           to Brand.copy(0.9f),
                                 (sweep + 0.35f).coerceIn(0f, 1f) to Color.Transparent,
                             )
                         )
@@ -616,52 +612,122 @@ fun BrowseScreen(
             )
         }
 
-        // ── Pull-to-refresh indicator ─────────────────────────────────────────
-        val showPullIndicator = pullOverscrollPx > 4f || ui.isRefreshing
-        AnimatedVisibility(
-            visible  = showPullIndicator,
-            enter    = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.6f),
-            exit     = fadeOut(tween(200)) + scaleOut(tween(200), targetScale = 0.6f),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = with(density) { appBarHeightPx.toDp() } + 8.dp),
-        ) {
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .scale(if (ui.isRefreshing) 1f else pullIndicatorScale)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(listOf(BrandDeep.copy(0.95f), Bg.copy(0.85f)))
-                    )
-                    .border(
-                        width = 1.dp,
-                        brush = Brush.linearGradient(listOf(Brand.copy(0.8f), Brand2.copy(0.5f))),
-                        shape = CircleShape,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (ui.isRefreshing) {
-                    CinematicSpinner(size = 22.dp, color = Brand)
-                } else {
-                    // Animated arrow that rotates as pull progresses
-                    val arrowRotation by animateFloatAsState(
-                        if (pullProgress > 0.9f) 180f else pullProgress * 160f,
-                        tween(100), label = "arrowRot"
-                    )
-                    Text(
-                        "↓",
-                        color      = Brand,
-                        fontSize   = 18.sp,
-                        fontWeight = FontWeight.Black,
-                        modifier   = Modifier.graphicsLayer { rotationZ = arrowRotation },
-                    )
+        // ── Pull-to-refresh: pill indicator that follows the finger ──────────
+        //
+        // UX stages:
+        //   pulling below threshold → "Pull to refresh"  (ghost pill, arrow down)
+        //   pulling above threshold → "Release to refresh" (lit pill, arrow flips)
+        //   finger released / fling → spinner + "Updating…"
+        //
+        // The pill's Y position tracks pullOverscrollPx in real-time (no animation)
+        // so it feels physically connected to the finger. Only when the user releases
+        // does it spring to its resting position (or animate out).
+
+        // Slow-release fix: if the pull sits above threshold for 150ms without a
+        // fling event (i.e. the user lifted slowly), we trigger refresh ourselves.
+        LaunchedEffect(pullOverscrollPx >= pullThresholdPx) {
+            if (pullOverscrollPx >= pullThresholdPx && !ui.isRefreshing) {
+                delay(150)
+                if (pullOverscrollPx >= pullThresholdPx && !ui.isRefreshing) {
+                    vm.load(forceRefresh = true)
+                    pullOverscrollPx = 0f
                 }
             }
         }
-    }
-}
+
+        val aboveThreshold   = pullOverscrollPx >= pullThresholdPx
+        val showPillIndicator = pullOverscrollPx > 6f || ui.isRefreshing
+
+        // While refreshing: spring the pill to a fixed resting spot just below header.
+        // While pulling:    follow the finger exactly (no interpolation = zero lag).
+        val pillRestingY = with(density) {
+            (appBarHeightPx - collapseOffsetPx) + 14.dp.toPx()
+        }
+        val pillFollowY = with(density) {
+            (appBarHeightPx - collapseOffsetPx) + (pullOverscrollPx * 0.45f)
+        }
+        val pillTranslateY by animateFloatAsState(
+            targetValue    = if (ui.isRefreshing || pullOverscrollPx == 0f) pillRestingY else pillFollowY,
+            animationSpec  = if (ui.isRefreshing)
+                spring(dampingRatio = 0.55f, stiffness = 280f)
+            else
+                tween(durationMillis = 0),   // instant while dragging
+            label          = "ptrY",
+        )
+        val arrowAngle by animateFloatAsState(
+            if (aboveThreshold) 180f else 0f,
+            spring(dampingRatio = 0.45f, stiffness = 380f),
+            label = "ptrArrow",
+        )
+
+        AnimatedVisibility(
+            visible  = showPillIndicator,
+            enter    = fadeIn(tween(120)) + slideInVertically(tween(180, easing = EaseOutBack)) { -it / 2 },
+            exit     = fadeOut(tween(180)) + slideOutVertically(tween(160)) { -it },
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier         = Modifier.graphicsLayer { translationY = pillTranslateY },
+            ) {
+                Row(
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    modifier              = Modifier
+                        .clip(RoundedCornerShape(100.dp))
+                        .background(
+                            Brush.linearGradient(
+                                if (aboveThreshold || ui.isRefreshing)
+                                    listOf(BrandDeep.copy(.97f), Color(0xFF091525).copy(.97f))
+                                else
+                                    listOf(Bg.copy(.92f), BgSurface.copy(.92f))
+                            )
+                        )
+                        .border(
+                            width = 1.dp,
+                            brush = Brush.linearGradient(
+                                if (aboveThreshold || ui.isRefreshing)
+                                    listOf(Brand.copy(.85f), Brand2.copy(.6f))
+                                else
+                                    listOf(GlassBorder, GlassBorder)
+                            ),
+                            shape = RoundedCornerShape(100.dp),
+                        )
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                ) {
+                    when {
+                        ui.isRefreshing -> {
+                            CinematicSpinner(size = 13.dp, color = Brand)
+                            Text(
+                                "Updating…",
+                                color      = Brand,
+                                fontSize   = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        else -> {
+                            Text(
+                                if (aboveThreshold) "Release to refresh" else "Pull to refresh",
+                                color      = if (aboveThreshold) Brand else White40,
+                                fontSize   = 12.sp,
+                                fontWeight = if (aboveThreshold) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                            Icon(
+                                imageVector          = Icons.Default.KeyboardArrowDown,
+                                contentDescription   = null,
+                                tint                 = if (aboveThreshold) Brand else White40,
+                                modifier             = Modifier
+                                    .size(15.dp)
+                                    .graphicsLayer { rotationZ = arrowAngle },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }   // end AnimatedVisibility
+    }   // end root Box
+}       // end BrowseScreen
 
 // ── Collapsing Glass App Bar ───────────────────────────────────────────────────
 //
@@ -782,7 +848,90 @@ fun CollapsingGlassAppBar(
     }
 }
 
-// ── Premium genre bar (flows in scroll content under the collapsing bar) ───────
+// ── Sticky glass genre strip (lives in the sticky header, not in scroll content) ─
+//
+//  Thin (42dp tall), frosted-glass background, single horizontal row of chips.
+//  No title label — space is tight and the chips are self-explanatory.
+//  The bottom edge has a very faint separator so it reads as distinct from content.
+//
+@Composable
+fun StickyGlassGenreBar(
+    genres     : List<Genre>,
+    selectedId : Int?,
+    onSelect   : (Int?) -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            // Frosted glass: dark translucent layer + subtle gradient
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xCC050510), Color(0xAA05050E))
+                )
+            )
+            .drawBehind {
+                // Bottom hairline separator
+                drawLine(
+                    brush       = Brush.horizontalGradient(
+                        listOf(Color.Transparent, Color(0x33FFFFFF), Color.Transparent)
+                    ),
+                    start       = Offset(0f, size.height),
+                    end         = Offset(size.width, size.height),
+                    strokeWidth = 0.8f,
+                )
+            }
+    ) {
+        LazyRow(
+            contentPadding        = PaddingValues(horizontal = 14.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            modifier              = Modifier.fillMaxWidth(),
+        ) {
+            item {
+                StickyGenreChip(label = "✦ All", selected = selectedId == null) { onSelect(null) }
+            }
+            items(genres, key = { it.id }) { g ->
+                StickyGenreChip(label = g.name, selected = selectedId == g.id) { onSelect(g.id) }
+            }
+        }
+    }
+}
+
+@Composable
+fun StickyGenreChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val borderColor by animateColorAsState(
+        if (selected) Brand else Color(0x28FFFFFF),
+        tween(180), label = "chipBorder",
+    )
+    val scale by animateFloatAsState(
+        if (selected) 1.05f else 1f,
+        spring(dampingRatio = 0.5f, stiffness = 420f), label = "chipScale",
+    )
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier         = Modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(100.dp))
+            .background(
+                if (selected)
+                    Brush.linearGradient(listOf(BrandDeep, Brand.copy(.82f)))
+                else
+                    Color(0x14FFFFFF)
+            )
+            .border(1.dp, borderColor, RoundedCornerShape(100.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text       = label,
+            color      = if (selected) Color.White else White60,
+            fontSize   = 11.5.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            maxLines   = 1,
+        )
+    }
+}
+
+// ── Premium genre bar (kept for reference / other screens) ────────────────────
 @Composable
 fun PremiumGenreBar(
     genres: List<Genre>,
