@@ -357,6 +357,89 @@ class TasteEngine @Inject constructor(
         "documentary" -> "🌍 Learning something"
         else        -> null
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  ANTI-FILTER-BUBBLE INTELLIGENCE
+    //  These four methods power the Discovery Architecture.
+    //  Called by BrowseViewModel to decide what rows to show and how to rank.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * How narrow or diverse is the user's viewing?
+     * Uses Shannon entropy normalized to 0.0–1.0.
+     *
+     * 0.0 = watches only 1 genre (deep bubble)
+     * 1.0 = perfectly diverse across all genres
+     */
+    fun genreDiversityScore(): Float {
+        val p = _profile.value
+        val scores = p.genres.values.map { it.effectiveScore }.filter { it > 2f }
+        if (scores.size < 2) return 0f
+        val total = scores.sum()
+        val entropy = scores.fold(0f) { acc, s ->
+            val ratio = s / total
+            if (ratio > 0f) acc - ratio * Math.log(ratio.toDouble()).toFloat() else acc
+        }
+        return (entropy / Math.log(scores.size.toDouble()).toFloat()).coerceIn(0f, 1f)
+    }
+
+    /**
+     * Returns genre keys the user has never or barely explored.
+     * Sorted by global accessibility — action before documentary for most users.
+     */
+    fun getUnexploredGenres(): List<String> {
+        val p = _profile.value
+        val allGenres = TmdbGenreMap.movieGenres.values.toSet()
+        val explored = p.genres.filter { it.value.interactionCount >= 3 }.keys
+        val popularityOrder = listOf(
+            "action", "comedy", "drama", "thriller", "scifi",
+            "romance", "horror", "crime", "documentary", "anime",
+            "animation", "fantasy", "adventure", "mystery", "war",
+        )
+        return (allGenres - explored)
+            .sortedBy { popularityOrder.indexOf(it).let { i -> if (i < 0) 99 else i } }
+    }
+
+    /**
+     * How well-established is this user's taste profile?
+     * 0.0 = brand new (cold start) → 1.0 = veteran (50+ interactions)
+     */
+    fun tasteMaturity(): Float {
+        val p = _profile.value
+        return (p.totalInteractions / 50f).coerceIn(0f, 1f)
+    }
+
+    /**
+     * Score media for discovery rows — intentionally ignores genre match.
+     * Rewards quality (50%) + novelty (25%) + gem signal (15%) + language diversity (10%).
+     */
+    fun discoveryScore(media: Media): Float {
+        val p = _profile.value
+        val genreMap = if (media.mediaType == MediaType.TV)
+            TmdbGenreMap.tvGenres else TmdbGenreMap.movieGenres
+        val genreKeys = media.genreIds.mapNotNull { genreMap[it] }
+
+        val quality = (media.voteAverage / 10.0).toFloat() * 50f
+
+        val novelty = genreKeys.maxOfOrNull { key ->
+            val count = p.genres[key]?.interactionCount ?: 0
+            when {
+                count == 0 -> 25f
+                count < 3  -> 15f
+                count < 10 -> 5f
+                else       -> 0f
+            }
+        } ?: 25f
+
+        val isGem = media.voteAverage >= 7.5 && media.voteCount <= 1000
+        val gemBonus = if (isGem) 15f else 0f
+
+        val langKey = LanguageMap.toKey(media.originalLanguage)
+        val langExplored = (p.languages[langKey]?.interactionCount ?: 0) >= 3
+        val langBonus = if (!langExplored) 10f else 0f
+
+        return (quality + novelty + gemBonus + langBonus).coerceIn(0f, 100f)
+    }
 }
 
 // ── Private extension ─────────────────────────────────────────────────────────
