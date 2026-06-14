@@ -30,6 +30,7 @@ import okhttp3.*
 import okhttp3.ConnectionPool
 import okhttp3.Protocol
 import java.io.*
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Named
@@ -69,6 +70,8 @@ class DownloadService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val gson  = Gson()
     private val mainHandler = Handler(Looper.getMainLooper())
+    /** Tracks running download coroutines so we can cancel them on pause. */
+    private val activeJobs  = ConcurrentHashMap<String, Job>()
 
     /**
      * Tuned OkHttpClient for segment downloads:
@@ -86,13 +89,24 @@ class DownloadService : Service() {
         .build()
 
     companion object {
-        const val CHANNEL_ID  = "reelz_downloads"
-        const val EXTRA_DL_ID = "dl_id"
+        const val CHANNEL_ID    = "reelz_downloads"
+        const val EXTRA_DL_ID   = "dl_id"
+        const val ACTION_PAUSE  = "com.reelz.action.PAUSE_DOWNLOAD"
         const val PARALLEL_SEGMENTS = 4  // max concurrent segment downloads
 
         fun start(ctx: Context, dlId: String) {
             ctx.startForegroundService(
-                Intent(ctx, DownloadService::class.java).putExtra(EXTRA_DL_ID, dlId)
+                Intent(ctx, DownloadService::class.java)
+                    .putExtra(EXTRA_DL_ID, dlId)
+            )
+        }
+
+        /** Cancel an in-flight download and mark it PAUSED. */
+        fun pause(ctx: Context, dlId: String) {
+            ctx.startService(
+                Intent(ctx, DownloadService::class.java)
+                    .setAction(ACTION_PAUSE)
+                    .putExtra(EXTRA_DL_ID, dlId)
             )
         }
     }
@@ -105,7 +119,21 @@ class DownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val dlId = intent?.getStringExtra(EXTRA_DL_ID) ?: return START_NOT_STICKY
-        scope.launch { processDownload(dlId) }
+
+        // ── Pause request: cancel running job, mark DB as PAUSED ──────────────
+        if (intent.action == ACTION_PAUSE) {
+            activeJobs.remove(dlId)?.cancel()
+            scope.launch {
+                downloadDao.markPaused(dlId)
+                updateNotif("Download paused", "Tap Resume to continue")
+            }
+            return START_NOT_STICKY
+        }
+
+        // ── Start / resume download ───────────────────────────────────────────
+        activeJobs.remove(dlId)?.cancel()  // cancel any stale job for the same id
+        val job = scope.launch { processDownload(dlId) }
+        activeJobs[dlId] = job
         return START_NOT_STICKY
     }
 
@@ -118,7 +146,10 @@ class DownloadService : Service() {
 
         // BUG 11: If status is DONE, verify the file actually exists
         if (item.status == DownloadStatus.DONE.name) {
-            if (item.filePath.isNotBlank() && File(item.filePath).exists()) return
+            if (item.filePath.isNotBlank() && File(item.filePath).exists()) {
+                activeJobs.remove(dlId)
+                return
+            }
             // File was deleted externally — re-queue
             downloadDao.markPaused(dlId)
         }
@@ -143,11 +174,17 @@ class DownloadService : Service() {
                 System.currentTimeMillis()
             )
             updateNotif("Complete", "${item.title} ready to watch", 1, 1)
+        } catch (e: CancellationException) {
+            // Intentional pause — DB already marked PAUSED in ACTION_PAUSE handler.
+            // Re-throw so the coroutine infrastructure knows this job was cancelled.
+            throw e
         } catch (e: Exception) {
             // BUG 1 + P11: Mark paused with resolveRequired=true
             // Next resume will call engine.resolve() for a fresh CDN URL
             downloadDao.markPaused(dlId)
             updateNotif("Paused", "Will resume when network returns", 0, 0)
+        } finally {
+            activeJobs.remove(dlId)
         }
     }
 
