@@ -23,7 +23,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
-import com.reelz.BuildConfigimport com.reelz.data.local.DownloadDao
+import com.reelz.BuildConfig
+import com.reelz.data.local.DownloadDao
 import com.reelz.data.model.*
 import com.reelz.data.repository.DownloadRepository
 import com.reelz.service.DownloadService
@@ -33,7 +34,6 @@ import com.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.io.File
 import javax.inject.Inject
 
 @HiltViewModel
