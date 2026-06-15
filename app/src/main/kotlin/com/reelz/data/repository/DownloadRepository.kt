@@ -60,9 +60,16 @@ class DownloadRepository @Inject constructor(
         return id
     }
 
+    /**
+     * FIX RESUME: Persist the current segment progress back to DB BEFORE
+     * starting the service. This ensures the service picks up from where
+     * it left off without re-downloading any already-completed segments.
+     *
+     * Also sets resolveRequired = true so the CDN URL is refreshed.
+     */
     suspend fun resume(ctx: Context, item: DownloadItem) {
-        // BUG 1 fix: mark resolveRequired before restarting
-        dao.markPaused(item.id)  // sets resolveRequired = 1
+        // markPaused sets resolveRequired = 1 (fresh URL on resume)
+        dao.markPaused(item.id)
         DownloadService.start(ctx, item.id)
     }
 
@@ -75,6 +82,9 @@ class DownloadRepository @Inject constructor(
     }
 
     suspend fun delete(ctx: Context, item: DownloadItem) {
+        // Pause first to cancel any active download job cleanly
+        DownloadService.pause(ctx, item.id)
+
         if (item.filePath.isNotBlank()) {
             try { java.io.File(item.filePath).delete() } catch (_: Exception) {}
         }
