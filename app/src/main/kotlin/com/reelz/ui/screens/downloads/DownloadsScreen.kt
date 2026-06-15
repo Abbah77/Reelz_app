@@ -211,16 +211,16 @@ fun DownloadCard(
             )
         }
 
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(10.dp)) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.Top,
             ) {
                 // ── Poster ─────────────────────────────────────────────────
                 Box(
-                    Modifier.width(66.dp).height(94.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp))
+                    Modifier.width(54.dp).height(72.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(1.dp, GlassBorderMd, RoundedCornerShape(8.dp))
                         .background(BgRaised)
                 ) {
                     AsyncImage(
@@ -258,7 +258,7 @@ fun DownloadCard(
                             color = White60, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         StatusBadge(item.status)
                         QualityBadge(item.quality)
@@ -325,23 +325,19 @@ fun DownloadCard(
 
                     // ── Paused / Error state ──────────────────────────────
                     if (isPaused || isError) {
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(4.dp))
                         if (pct > 0f) {
                             Box(Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)).background(GlassMd)) {
                                 Box(Modifier.fillMaxWidth(animPct).fillMaxHeight().background(White40))
                             }
-                            Spacer(Modifier.height(6.dp))
+                            Spacer(Modifier.height(4.dp))
                             Text(
                                 "${pctInt}% downloaded",
                                 color = White40, fontSize = 10.sp,
                             )
-                            Spacer(Modifier.height(6.dp))
+                            Spacer(Modifier.height(4.dp))
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (isPaused) "Paused" else "Download failed",
-                                color = if (isPaused) White40 else Error, fontSize = 10.sp,
-                            )
                             Box(
                                 Modifier
                                     .clip(RoundedCornerShape(8.dp))
