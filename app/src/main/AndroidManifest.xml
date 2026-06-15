@@ -1,130 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ── Network ──────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-
-    <!-- ── Wi-Fi P2P (transfer) ──────────────────────────────────────────── -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
-        android:usesPermissionFlags="neverForLocation"
-        tools:targetApi="tiramisu" />
-
-    <!-- ── Storage / Downloads ──────────────────────────────────────────── -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-
-    <!-- ── Services ─────────────────────────────────────────────────────── -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:name=".ReelzApp"
-        android:allowBackup="false"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="false"
+        android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Reelz.Splash"
-        android:networkSecurityConfig="@xml/network_security_config"
-        android:hardwareAccelerated="true"
-        android:largeHeap="true"
-        tools:targetApi="31">
+        android:theme="@style/Theme.ReelzLite"
+        android:networkSecurityConfig="@xml/network_security_config">
 
-        <!-- ── Main Activity ─────────────────────────────────────────────── -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.Reelz.Splash"
-            android:windowSoftInputMode="adjustResize"
-            android:screenOrientation="portrait">
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- ── Player Activity (landscape) ──────────────────────────────── -->
-        <activity
-            android:name=".ui.screens.player.PlayerActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
-            android:exported="false"
-            android:screenOrientation="sensorLandscape"
-            android:theme="@style/Theme.Reelz.Player"
-            android:supportsPictureInPicture="true" />
-
-        <!-- ── Playback service ───────────────────────────────────────────── -->
-        <service
-            android:name=".service.ReelzPlaybackService"
-            android:exported="true"
-            android:foregroundServiceType="mediaPlayback"
-            tools:targetApi="29">
-            <intent-filter>
-                <action android:name="androidx.media3.session.MediaSessionService" />
-            </intent-filter>
-        </service>
-
-        <!-- ── Download service ──────────────────────────────────────────── -->
-        <service
-            android:name=".service.DownloadService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync"
-            tools:targetApi="29" />
-
-        <!-- ── Transfer service ──────────────────────────────────────────── -->
-        <service
-            android:name=".transfer.TransferService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync"
-            tools:targetApi="29" />
-
-        <!-- ── WorkManager ────────────────────────────────────────────────── -->
-        <provider
-            android:name="androidx.startup.InitializationProvider"
-            android:authorities="${applicationId}.androidx-startup"
-            android:exported="false"
-            tools:node="merge">
-            <meta-data
-                android:name="androidx.work.WorkManagerInitializer"
-                android:value="androidx.startup" />
-        </provider>
-
-        <!-- ── AppLovin MAX SDK ──────────────────────────────────────────── -->
-        <!-- The SDK key is supplied at runtime from remote config (ads.applovin_sdk_key) -->
-        <!-- via AdEngine, so no key is hard-coded here. -->
-
-        <!-- AppLovin fullscreen ad activity (required by the SDK) -->
-        <activity
-            android:name="com.applovin.adview.AppLovinFullscreenActivity"
-            android:exported="false"
-            android:hardwareAccelerated="true"
-            android:screenOrientation="behind"
-            tools:replace="android:configChanges"
-            android:configChanges="fontScale|keyboard|keyboardHidden|locale|orientation|screenLayout|screenSize|smallestScreenSize|uiMode" />
-
-        <!-- AppLovin interstitial/rewarded ad activity -->
-        <activity
-            android:name="com.applovin.mediation.MaxDebuggerActivity"
-            android:exported="false"
-            tools:replace="android:theme"
-            android:theme="@style/com.applovin.mediation.MaxDebuggerActivity.Theme" />
-
     </application>
+
 </manifest>
