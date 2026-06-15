@@ -1,29 +1,91 @@
 package com.reelz
 
 import android.app.Application
-import com.reelz.data.ReelzApi
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
+import coil.request.CachePolicy
+import com.reelz.data.local.DownloadDao
+import com.reelz.data.model.DownloadStatus
+import com.reelz.remoteconfig.ConfigSyncWorker
+import com.reelz.remoteconfig.RemoteConfigRepository
+import com.reelz.ads.AdEngine
+import com.reelz.service.DownloadService
+import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
+import javax.inject.Inject
 
-object AppContainer {
+@HiltAndroidApp
+class ReelzApp : Application(), ImageLoaderFactory {
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .addInterceptor(HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
-        })
-        .build()
+    @Inject lateinit var downloadDao: DownloadDao
+    @Inject lateinit var remoteConfig: RemoteConfigRepository
+    @Inject lateinit var adEngine: AdEngine
 
-    val api: ReelzApi = Retrofit.Builder()
-        .baseUrl("https://tt-b577.onrender.com/")
-        .client(client)
-        .addConverterFactory(GsonConverterFactory.create())
-        .build()
-        .create(ReelzApi::class.java)
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun onCreate() {
+        super.onCreate()
+
+        // Load cache first so ad config (sdk key, toggles, ad unit ids) is
+        // available before the ad SDK initializes.
+        appScope.launch {
+            remoteConfig.loadLocalConfig()
+
+            // Initialize ad engine — starts SDK + preloads all ad formats.
+            // AdEngine itself checks ads.enabled and the AppLovin SDK key,
+            // so this is a safe no-op until both are configured.
+            adEngine.initialize(this@ReelzApp)
+        }
+
+        // Periodic background refresh every 6 hours.
+        ConfigSyncWorker.schedule(this)
+
+        // ── Recover downloads stuck in QUEUED/DOWNLOADING state ──────────────
+        recoverStuckDownloads()
+    }
+
+    private fun recoverStuckDownloads() {
+        appScope.launch {
+            try {
+                val queued      = downloadDao.getByStatus(DownloadStatus.QUEUED.name)
+                val downloading = downloadDao.getByStatus(DownloadStatus.DOWNLOADING.name)
+                (queued + downloading).forEach { item ->
+                    downloadDao.markPaused(item.id)
+                    DownloadService.start(this@ReelzApp, item.id)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    override fun newImageLoader(): ImageLoader =
+        ImageLoader.Builder(this)
+            .memoryCache {
+                MemoryCache.Builder(this)
+                    .maxSizePercent(0.25)
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("image_cache"))
+                    .maxSizeBytes(256L * 1024 * 1024)
+                    .build()
+            }
+            .okHttpClient {
+                OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
+                    .build()
+            }
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .crossfade(true)
+            .crossfade(300)
+            .build()
 }
-
-class ReelzApp : Application()

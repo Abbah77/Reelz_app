@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#FF05050A</color>
-    <color name="brand">#FF0A84FF</color>
-    <color name="white">#FFF4F6FF</color>
+    <color name="bg">#FF07070B</color>
+    <color name="bg_card">#FF0E0E14</color>
+    <color name="bg_raised">#FF14141C</color>
+    <color name="brand">#FF2196F3</color>
+    <color name="white">#FFF5F5FF</color>
+    <color name="black">#FF000000</color>
 </resources>

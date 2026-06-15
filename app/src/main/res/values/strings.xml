@@ -1,4 +1,16 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Reelz</string>
+    <string name="tab_browse">Browse</string>
+    <string name="tab_shorts">Shorts</string>
+    <string name="tab_downloads">Downloads</string>
+    <string name="tab_transfer">Transfer</string>
+    <string name="tab_profile">Profile</string>
+    <string name="error_no_network">No internet connection. Check your network and try again.</string>
+    <string name="error_stream_not_found">No stream found. We\'ll try another source.</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+    <string name="loading">Loading…</string>
+    <string name="retry">Try Again</string>
+    <string name="watch_now">Watch Now</string>
+    <string name="save">Save</string>
+    <string name="saved">Saved</string>
 </resources>
