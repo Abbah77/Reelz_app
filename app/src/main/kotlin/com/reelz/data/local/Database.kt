@@ -64,6 +64,13 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE status = :status")
     suspend fun getByStatus(status: String): List<DownloadItem>
 
+    /**
+     * Used for the premium download cap. Excludes ERROR rows — a failed
+     * download shouldn't permanently eat into a free user's quota.
+     */
+    @Query("SELECT COUNT(*) FROM downloads WHERE status != 'ERROR'")
+    suspend fun countActive(): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(i: DownloadItem)
 
@@ -179,6 +186,20 @@ interface TransferDao {
     @Query("DELETE FROM transfer_history WHERE id = :id") suspend fun delete(id: String)
 }
 
+// ── User session (premium) ────────────────────────────────────────────────────
+@Dao
+interface UserSessionDao {
+    /** Always returns the single most recently cached session, if any. */
+    @Query("SELECT * FROM user_session ORDER BY cachedAtMs DESC LIMIT 1")
+    suspend fun get(): UserSession?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(session: UserSession)
+
+    @Query("DELETE FROM user_session")
+    suspend fun clear()
+}
+
 // ── Migration v1 → v2 ─────────────────────────────────────────────────────────
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -220,6 +241,25 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+// ── Migration v4 → v5: premium user session ───────────────────────────────────
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS user_session (
+                uid TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                photoUrl TEXT,
+                isPremium INTEGER NOT NULL DEFAULT 0,
+                plan TEXT NOT NULL DEFAULT '',
+                expiresAtMs INTEGER NOT NULL DEFAULT 0,
+                subscribedAtMs INTEGER NOT NULL DEFAULT 0,
+                cachedAtMs INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+    }
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 @Database(
     entities = [
@@ -230,8 +270,9 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         DownloadItem::class,
         TransferRecord::class,
         DownloadSubtitle::class,
+        UserSession::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 @TypeConverters(com.reelz.data.model.MediaConverters::class)
@@ -243,4 +284,5 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun downloadDao(): DownloadDao
     abstract fun downloadSubtitleDao(): DownloadSubtitleDao
     abstract fun transferDao(): TransferDao
+    abstract fun userSessionDao(): UserSessionDao
 }

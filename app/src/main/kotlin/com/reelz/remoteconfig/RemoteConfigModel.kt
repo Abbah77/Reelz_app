@@ -14,6 +14,8 @@ data class RemoteConfig(
     val scanner: ScannerConfig                                  = ScannerConfig(),
     @SerializedName("feature_flags") val featureFlags: FeatureFlags               = FeatureFlags(),
     val shorts: ShortsConfig                                    = ShortsConfig(),
+    val tiers: TiersConfig                                      = TiersConfig(),
+    val premium: PremiumConfig                                  = PremiumConfig(),
 )
 
 data class MetaConfig(
@@ -154,4 +156,50 @@ data class ShortsConfig(
 data class ShortCategory(
     val label: String = "",
     val subs: String  = "",
+)
+
+// ── Premium tiers ──────────────────────────────────────────────────────────
+
+data class TiersConfig(
+    val free: TierConfig    = TierConfig(maxResolutionHeight = 480),
+    val premium: TierConfig = TierConfig(
+        maxResolution = "4K", maxResolutionHeight = 2160, maxDownloads = -1,
+        adsEnabled = false, subtitlesManualSearch = true, backgroundPlay = true,
+        simultaneousStreams = 2,
+    ),
+)
+
+data class TierConfig(
+    @SerializedName("max_resolution")          val maxResolution: String         = "480p",
+    @SerializedName("max_resolution_height")   val maxResolutionHeight: Int       = 480,
+    /** -1 is the sentinel for unlimited. Never trips the cap. */
+    @SerializedName("max_downloads")           val maxDownloads: Int              = 5,
+    @SerializedName("ads_enabled")             val adsEnabled: Boolean            = true,
+    @SerializedName("subtitles_manual_search") val subtitlesManualSearch: Boolean = false,
+    @SerializedName("background_play")         val backgroundPlay: Boolean        = false,
+    @SerializedName("simultaneous_streams")    val simultaneousStreams: Int       = 1,
+)
+
+data class PremiumConfig(
+    val enabled: Boolean                                                       = false,
+    @SerializedName("grace_period_days")        val gracePeriodDays: Int        = 1,
+    @SerializedName("renew_warning_days_before") val renewWarningDaysBefore: Int = 3,
+    @SerializedName("monthly_price_ngn")         val monthlyPriceNgn: Long       = 0,
+    @SerializedName("yearly_price_ngn")          val yearlyPriceNgn: Long        = 0,
+    @SerializedName("contact_to_subscribe")      val contactToSubscribe: String  = "",
+    /**
+     * V1 grant mechanism: no backend, no Firebase. You (the dev) add a row here by
+     * email after receiving payment manually (bank transfer, WhatsApp, etc). The app
+     * only ever READS this list — matched case-insensitively against the signed-in
+     * Google email. Swap this for a Firebase-backed source later without touching
+     * any other file: just provide a different UserSessionRepository.SessionSource.
+     */
+    @SerializedName("manual_grants") val manualGrants: List<ManualGrant>        = emptyList(),
+)
+
+data class ManualGrant(
+    val email: String                                 = "",
+    val plan: String                                  = "",
+    @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
+    val note: String                                  = "",
 )

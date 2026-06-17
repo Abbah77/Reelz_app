@@ -162,9 +162,18 @@ class RemoteConfigRepository @Inject constructor(
 
     fun adsConfig(): AdsConfig = _config.value?.ads ?: AdsConfig()
 
-    /** Master switch: both the ads block and the legacy feature flag must allow ads. */
-    fun areAdsEnabled(): Boolean =
-        adsConfig().enabled && featureFlags().adsEnabled
+    fun tiersConfig(): TiersConfig    = _config.value?.tiers ?: TiersConfig()
+    fun premiumConfig(): PremiumConfig = _config.value?.premium ?: PremiumConfig()
+
+    /**
+     * Master switch: the ads block, the legacy feature flag, AND premium status must
+     * all agree ads should show. PremiumGate is the single source of truth for whether
+     * the current user is premium — passed in here rather than injected, so this class
+     * has no dependency on session/auth state (Rule 3 in the premium system design:
+     * config owns limits, identity lives elsewhere, never mixed into one class).
+     */
+    fun areAdsEnabled(isPremiumUser: Boolean = false): Boolean =
+        adsConfig().enabled && featureFlags().adsEnabled && !isPremiumUser
 
     /** Currently active (first enabled) ad network/mediation config, if any. */
     fun activeAdNetwork(): AdNetwork? =

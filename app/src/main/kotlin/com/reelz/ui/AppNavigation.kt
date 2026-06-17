@@ -33,6 +33,7 @@ import com.reelz.ui.screens.shorts.ShortsViewModel
 import com.reelz.ui.screens.downloads.DownloadsScreen
 import com.reelz.ui.screens.transfer.TransferScreen
 import com.reelz.ui.screens.profile.ProfileScreen
+import com.reelz.ui.screens.premium.PremiumScreen
 import com.reelz.ui.screens.detail.DetailScreen
 import com.reelz.ui.screens.search.SearchScreen
 import com.reelz.ui.theme.*
@@ -48,6 +49,7 @@ sealed class Route(val path: String) {
     object Transfer : Route("transfer")
     object Profile  : Route("profile")
     object Search   : Route("search")
+    object Premium  : Route("premium")
     object Detail   : Route("detail/{tmdbId}/{mediaType}") {
         fun go(id: Int, type: MediaType) = "detail/$id/${type.name}"
     }
@@ -69,13 +71,21 @@ val navTabs = listOf(
 )
 
 @Composable
-fun AppNavigation(adEngine: AdEngine) {
+fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
 
     val topLevelRoutes = navTabs.map { it.route }
     val showBottomBar = currentRoute in topLevelRoutes
+
+    // One-shot: PlayerActivity (a separate Activity, not part of this NavHost)
+    // relaunches MainActivity with an extra when a free user taps "Upgrade to
+    // Premium" from the subtitle drawer. Consumed once so back-navigation or a
+    // config change doesn't re-trigger it.
+    LaunchedEffect(Unit) {
+        if (openPremiumOnStart) nav.navigate(Route.Premium.path)
+    }
 
     // Shared across AppNavigation + BrowseScreen so the home button can control the list
     val browseVm: BrowseViewModel = hiltViewModel()
@@ -164,6 +174,7 @@ fun AppNavigation(adEngine: AdEngine) {
             composable(Route.Transfer.path)  { TransferScreen() }
             composable(Route.Profile.path)   { ProfileScreen(nav) }
             composable(Route.Search.path)    { SearchScreen(nav) }
+            composable(Route.Premium.path)   { PremiumScreen(nav) }
             composable(
                 route     = Route.Detail.path,
                 arguments = listOf(

@@ -42,6 +42,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import com.reelz.ads.AdEngine
 import com.reelz.ads.VastTagProvider
+import com.reelz.remoteconfig.PremiumGate
 import javax.inject.Inject
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,6 +120,8 @@ data class PlayerUiState(
     val isSubtitleSearching: Boolean            = false,
     /** True after a user-initiated search returned zero results. */
     val subtitleSearchEmpty: Boolean            = false,
+    /** Non-null when a free user tried manual subtitle search — shown as a small inline notice, never blocks playback. */
+    val subtitleUpsellMessage: String?          = null,
 
     // ── Legacy compat ─────────────────────────────────────────────────────────
     val subtitles: List<com.reelz.data.model.Subtitle> = emptyList(),
@@ -143,6 +146,7 @@ class PlayerViewModel @Inject constructor(
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val openSubtitlesRepo: OpenSubtitlesRepository,
     private val adEngine: AdEngine,
+    private val premiumGate: PremiumGate,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PlayerUiState())
@@ -168,6 +172,9 @@ class PlayerViewModel @Inject constructor(
     private var lastPreRollTimeMinutes   = -30L   // allows pre-roll on very first play
     private var trackSelector: DefaultTrackSelector? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Read by PlayerActivity.onPause() — premium users keep playing when the screen locks. */
+    fun canBackgroundPlay(): Boolean = premiumGate.canBackgroundPlay()
 
     // ─────────────────────────────────────────────────────────────────────────
     // Network monitoring
@@ -407,7 +414,18 @@ class PlayerViewModel @Inject constructor(
         val episode = currentEpisode
         if (tmdbId <= 0) return
 
-        _ui.update { it.copy(isSubtitleSearching = true, subtitleSearchEmpty = false) }
+        if (!premiumGate.canManualSubtitleSearch()) {
+            _ui.update {
+                it.copy(
+                    isSubtitleSearching = false,
+                    subtitleSearchEmpty = false,
+                    subtitleUpsellMessage = "Manual subtitle search is a Premium feature. Upgrade to search any language.",
+                )
+            }
+            return
+        }
+
+        _ui.update { it.copy(isSubtitleSearching = true, subtitleSearchEmpty = false, subtitleUpsellMessage = null) }
 
         viewModelScope.launch(Dispatchers.IO) {
             val fetched = openSubtitlesRepo.fetchSubtitles(
@@ -565,7 +583,7 @@ class PlayerViewModel @Inject constructor(
     // ─────────────────────────────────────────────────────────────────────────
 
     fun openSubtitleDrawer()  { _ui.update { it.copy(showSubtitleDrawer = true,  showControls = true) } }
-    fun closeSubtitleDrawer() { _ui.update { it.copy(showSubtitleDrawer = false) } }
+    fun closeSubtitleDrawer() { _ui.update { it.copy(showSubtitleDrawer = false, subtitleUpsellMessage = null) } }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Player lifecycle
@@ -606,6 +624,14 @@ class PlayerViewModel @Inject constructor(
 
     @OptIn(UnstableApi::class)
     private fun buildPlayer(context: Context) {
+        // ── Premium resolution cap ─────────────────────────────────────────────
+        // Capped at the ExoPlayer/TrackSelector level (not just filtered from the
+        // displayed list below) so a free user genuinely cannot stream above their
+        // tier even if they find another way to pick a quality. -1 / Int.MAX_VALUE
+        // sentinel means "no cap" (e.g. a misconfigured tier defaults safely to
+        // unrestricted rather than to 0, which would show a black screen).
+        val maxHeight = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
+
         val ts = DefaultTrackSelector(context).apply {
             setParameters(
                 buildUponParameters()
@@ -614,6 +640,7 @@ class PlayerViewModel @Inject constructor(
                     // then let the bandwidth meter auto-upgrade within 1–2 seconds.
                     .setForceLowestBitrate(false)
                     .setAllowVideoMixedMimeTypeAdaptiveness(true)
+                    .setMaxVideoSize(Int.MAX_VALUE, maxHeight)
             )
         }
         trackSelector = ts
@@ -675,12 +702,15 @@ class PlayerViewModel @Inject constructor(
                         handleError(context, error)
                     }
                     override fun onTracksChanged(tracks: Tracks) {
+                        val maxHeight = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
                         val qualities = mutableListOf(QualityTrack("Auto", ""))
                         tracks.groups.forEach { g ->
                             if (g.type == C.TRACK_TYPE_VIDEO) {
                                 for (i in 0 until g.length) {
                                     val fmt = g.getTrackFormat(i)
-                                    if (fmt.height > 0) {
+                                    // Only list qualities the user's tier can actually play —
+                                    // matches the setMaxVideoSize cap applied in buildPlayer().
+                                    if (fmt.height > 0 && fmt.height <= maxHeight) {
                                         qualities.add(QualityTrack("${fmt.height}p", "", fmt.bitrate.toLong()))
                                     }
                                 }
@@ -839,10 +869,20 @@ class PlayerViewModel @Inject constructor(
     fun setQuality(label: String) {
         _ui.update { it.copy(selectedQuality = label) }
         val ts = trackSelector ?: return
+        // The tier cap (set in buildPlayer) must survive every quality switch,
+        // including "Auto" — clearVideoSizeConstraints() would otherwise wipe it
+        // out and let a free user stream above their tier the moment they tap
+        // Auto, which is also the default selected quality on every fresh play.
+        val maxHeight = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
         if (label == "Auto") {
-            ts.setParameters(ts.buildUponParameters().clearVideoSizeConstraints())
+            ts.setParameters(
+                ts.buildUponParameters()
+                    .clearVideoSizeConstraints()
+                    .setMaxVideoSize(Int.MAX_VALUE, maxHeight)
+            )
         } else {
-            val height = label.replace("p", "").toIntOrNull() ?: return
+            val requestedHeight = label.replace("p", "").toIntOrNull() ?: return
+            val height = requestedHeight.coerceAtMost(maxHeight)
             ts.setParameters(
                 ts.buildUponParameters()
                     .setMaxVideoSize(Int.MAX_VALUE, height)

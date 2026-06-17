@@ -106,6 +106,14 @@ private val IconHistory: ImageVector get() = ImageVector.Builder("History", 24.d
        strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
 }.build()
 
+private val IconCrown: ImageVector get() = ImageVector.Builder("Crown", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(3f, 8.5f); lineTo(7f, 13f); lineTo(12f, 5.5f); lineTo(17f, 13f); lineTo(21f, 8.5f)
+        lineTo(19.2f, 17.5f); lineTo(4.8f, 17.5f); close()
+        moveTo(4.8f, 19.2f); lineTo(19.2f, 19.2f)
+    }, fill = SolidColor(Color.White))
+}.build()
+
 data class UserProfile(
     val name: String = "",
     val email: String = "",
@@ -115,9 +123,12 @@ data class UserProfile(
 
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
     private val watchlistDao: WatchlistDao,
     private val likedDao: LikedDao,
     private val historyDao: WatchHistoryDao,
+    private val userSessionRepository: com.reelz.data.repository.UserSessionRepository,
+    private val premiumGate: com.reelz.remoteconfig.PremiumGate,
 ) : ViewModel() {
     data class UiState(
         val profile: UserProfile = UserProfile(),
@@ -125,6 +136,9 @@ class ProfileViewModel @Inject constructor(
         val liked: List<LikedItem> = emptyList(),
         val history: List<WatchHistory> = emptyList(),
         val activeTab: Int = 0,
+        val userState: com.reelz.remoteconfig.UserState = com.reelz.remoteconfig.UserState.GUEST,
+        val daysUntilExpiry: Int = 0,
+        val showRenewBanner: Boolean = false,
     )
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -133,13 +147,65 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch { watchlistDao.getAll().collect { wl -> _ui.update { it.copy(watchlist = wl) } } }
         viewModelScope.launch { likedDao.getAll().collect { l -> _ui.update { it.copy(liked = l) } } }
         viewModelScope.launch { historyDao.getRecent().collect { h -> _ui.update { it.copy(history = h) } } }
+
+        // Restore the visible profile from whatever ReelzApp.onCreate already
+        // loaded into PremiumGate, so a returning signed-in user sees their
+        // name/photo immediately instead of a blank "Sign in" prompt.
+        restoreProfileFromSession()
+
+        // Stay live for state changes after that — e.g. premium expiring
+        // mid-session, or onSignIn() below updating it.
+        viewModelScope.launch {
+            premiumGate.state.collect { state ->
+                _ui.update {
+                    it.copy(
+                        userState       = state,
+                        daysUntilExpiry = premiumGate.daysUntilExpiry(),
+                        showRenewBanner = premiumGate.shouldShowRenewBanner(),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun restoreProfileFromSession() {
+        viewModelScope.launch {
+            val session = userSessionRepository.currentSessionOrNull()
+            if (session != null) {
+                _ui.update {
+                    it.copy(profile = UserProfile(session.name, session.email, session.photoUrl, true))
+                }
+            }
+        }
     }
 
     fun setTab(i: Int) { _ui.update { it.copy(activeTab = i) } }
+
     fun onSignIn(name: String, email: String, photoUrl: String?) {
+        // Update the visible profile immediately (zero perceived delay), then
+        // persist + resolve the grant in the background via the repository —
+        // see UserSessionRepository.onSignedIn for why this two-step exists.
         _ui.update { it.copy(profile = UserProfile(name, email, photoUrl, true)) }
+        viewModelScope.launch { userSessionRepository.onSignedIn(name, email, photoUrl) }
     }
-    fun signOut() { _ui.update { it.copy(profile = UserProfile()) } }
+
+    fun signOut() {
+        _ui.update { it.copy(profile = UserProfile()) }
+        viewModelScope.launch {
+            userSessionRepository.signOut()
+            // Pre-existing bug fix: without this, CredentialManager still
+            // remembers the last account, so the NEXT sign-in attempt can
+            // silently auto-select it instead of showing the picker — making
+            // "sign out" look broken even though the in-app session did clear.
+            try {
+                CredentialManager.create(appContext)
+                    .clearCredentialState(ClearCredentialStateRequest())
+            } catch (_: Exception) {
+                // Best-effort: app-level sign-out already succeeded above either way.
+            }
+        }
+    }
+
     fun clearHistory() { viewModelScope.launch { historyDao.clear() } }
 }
 
@@ -196,7 +262,23 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             }
                         }
                         Column(Modifier.weight(1f)) {
-                            Text(ui.profile.name, color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(ui.profile.name, color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                if (ui.userState == com.reelz.remoteconfig.UserState.PREMIUM_ACTIVE ||
+                                    ui.userState == com.reelz.remoteconfig.UserState.PREMIUM_GRACE) {
+                                    Row(
+                                        Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Brand.copy(.18f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                    ) {
+                                        Icon(IconCrown, null, tint = Brand, modifier = Modifier.size(10.dp))
+                                        Text("PREMIUM", color = Brand, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                             Text(ui.profile.email, color = White60, fontSize = 13.sp)
                         }
                         TextButton(onClick = { vm.signOut() }) {
@@ -221,6 +303,41 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                         Spacer(Modifier.height(16.dp))
                         GoogleSignInButton(ctx = ctx) { name, email, photo -> vm.onSignIn(name, email, photo) }
                     }
+                }
+            }
+        }
+
+        // ── Premium entry / renew banner ──────────────────────────────────
+        item {
+            Spacer(Modifier.height(12.dp))
+            Box(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (ui.showRenewBanner) AmberGlass else BgCard)
+                    .border(1.dp, if (ui.showRenewBanner) AmberBorder else GlassBorderMd, RoundedCornerShape(16.dp))
+                    .clickable { nav.navigate(com.reelz.ui.Route.Premium.path) }
+                    .padding(16.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(Brand.copy(.15f)),
+                        Alignment.Center,
+                    ) { Icon(IconCrown, null, tint = Brand, modifier = Modifier.size(18.dp)) }
+                    Column(Modifier.weight(1f)) {
+                        val (title, subtitle) = when (ui.userState) {
+                            com.reelz.remoteconfig.UserState.PREMIUM_GRACE ->
+                                "Payment due" to "Your premium access ends soon — renew to keep it"
+                            com.reelz.remoteconfig.UserState.PREMIUM_ACTIVE ->
+                                if (ui.showRenewBanner) "Renews in ${ui.daysUntilExpiry} day${if (ui.daysUntilExpiry == 1) "" else "s"}" to "Tap to renew your plan"
+                                else "Premium active" to "Unlimited downloads, 4K, no ads"
+                            com.reelz.remoteconfig.UserState.PREMIUM_EXPIRED ->
+                                "Premium expired" to "Renew to get your benefits back"
+                            else -> "Go Premium" to "4K streaming, unlimited downloads, no ads"
+                        }
+                        Text(title, color = White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(subtitle, color = White60, fontSize = 11.sp)
+                    }
+                    Icon(IconChevronRight, null, tint = White40, modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -329,6 +446,15 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String, String, String?) -> Un
                         val credential = result.credential
                         if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                             val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
+                            // NOTE: googleCred.id is the Google account's unique subject ID,
+                            // not guaranteed to be the email address by the googleid API
+                            // contract — but Credential Manager's Sign-In with Google flow
+                            // does populate it with the account's email string in practice
+                            // for the standard consumer flow this app uses. If you ever see
+                            // manual_grants not matching a user who should have premium,
+                            // check Logcat for "ReelzAuth: signed in as" to see exactly what
+                            // string arrived, and match reelz_config.json's email field to that.
+                            android.util.Log.d("ReelzAuth", "signed in as ${googleCred.id}")
                             onSignedIn(googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString())
                         }
                     } catch (_: Exception) {}

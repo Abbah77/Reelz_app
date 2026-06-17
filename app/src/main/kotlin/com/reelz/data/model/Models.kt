@@ -247,6 +247,27 @@ data class TransferRecord(
     val createdAt: Long = System.currentTimeMillis(),
 )
 
+/**
+ * Local cache of the signed-in user's premium session. Belt + suspenders with
+ * UserSessionStore (DataStore): DataStore for instant synchronous-style reads
+ * in ViewModels, Room for structured queries and to survive DataStore corruption
+ * edge cases. There is only ever one row (uid is the primary key, but in
+ * practice the app keeps a single active session at a time — see
+ * UserSessionDao.get(), which always takes the most recent one).
+ */
+@Entity(tableName = "user_session")
+data class UserSession(
+    @PrimaryKey val uid: String,
+    val name: String = "",
+    val email: String = "",
+    val photoUrl: String? = null,
+    val isPremium: Boolean = false,
+    val plan: String = "",              // "monthly" | "yearly" | ""
+    val expiresAtMs: Long = 0L,
+    val subscribedAtMs: Long = 0L,
+    val cachedAtMs: Long = System.currentTimeMillis(),
+)
+
 // ── Type converters ───────────────────────────────────────────────────────────
 class MediaConverters {
     private val gson = Gson()

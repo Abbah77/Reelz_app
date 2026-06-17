@@ -15,6 +15,7 @@ import com.applovin.sdk.AppLovinSdk
 import com.applovin.sdk.AppLovinSdkConfiguration
 import com.applovin.sdk.AppLovinSdkSettings
 import com.reelz.remoteconfig.AdNetwork
+import com.reelz.remoteconfig.PremiumGate
 import com.reelz.remoteconfig.RemoteConfigRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +55,7 @@ sealed class NativeAdState {
 @Singleton
 class AdEngine @Inject constructor(
     private val remoteConfig: RemoteConfigRepository,
+    private val premiumGate: PremiumGate,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -88,8 +90,14 @@ class AdEngine @Inject constructor(
     private fun adsConfig() = remoteConfig.adsConfig()
     private fun network(): AdNetwork? = remoteConfig.activeAdNetwork()
 
-    /** True only when the remote config master switch AND feature flag both allow ads. */
-    private fun adsEnabled(): Boolean = remoteConfig.areAdsEnabled()
+    /**
+     * True only when the remote config master switch, the feature flag, AND the
+     * current user is not premium all agree ads should show. This is the single
+     * chokepoint every ad format (banner, interstitial, native, rewarded, app
+     * open, pre-roll) already calls through — see the functions below — so
+     * premium stopping ads is a one-line change, exactly as designed.
+     */
+    private fun adsEnabled(): Boolean = remoteConfig.areAdsEnabled(isPremiumUser = premiumGate.isPremium())
 
     private fun interstitialAdUnitId(): String = network()?.interstitialId.orEmpty()
     private fun rewardedAdUnitId(): String     = network()?.rewardedId.orEmpty()

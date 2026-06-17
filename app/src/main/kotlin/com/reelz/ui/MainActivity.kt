@@ -65,6 +65,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Set by PlayerActivity when a free user taps "Upgrade to Premium" from
+        // the subtitle drawer — see PLAYER_OPEN_PREMIUM_EXTRA. Read once; not
+        // re-checked across recreation so it never re-fires on rotation etc.
+        val openPremiumOnStart = intent?.getBooleanExtra(EXTRA_OPEN_PREMIUM, false) ?: false
+
         setContent {
             ReelzTheme {
                 val readiness by remoteConfig.readiness.collectAsStateWithLifecycle()
@@ -165,12 +170,17 @@ class MainActivity : ComponentActivity() {
                         if (showPoweredBy) {
                             PoweredByScreen(onFinished = { showPoweredBy = false })
                         } else {
-                            AppNavigation(adEngine = adEngine)
+                            AppNavigation(adEngine = adEngine, openPremiumOnStart = openPremiumOnStart)
                         }
                     }
                 }
             }
         }
+    }
+
+    companion object {
+        /** Set true by PlayerActivity to land directly on the Premium screen after relaunch. */
+        const val EXTRA_OPEN_PREMIUM = "com.reelz.EXTRA_OPEN_PREMIUM"
     }
 }
 

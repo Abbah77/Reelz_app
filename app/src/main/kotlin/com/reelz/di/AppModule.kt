@@ -7,7 +7,11 @@ import com.reelz.data.local.*
 import com.reelz.data.remote.api.TmdbApi
 import com.reelz.data.remote.api.OpenSubtitlesApi
 import com.reelz.data.repository.MediaRepository
+import com.reelz.data.repository.ManualGrantSessionSource
 import com.reelz.data.repository.OpenSubtitlesRepository
+import com.reelz.data.repository.SessionSource
+import com.reelz.data.repository.UserSessionRepository
+import com.reelz.remoteconfig.PremiumGate
 import com.reelz.remoteconfig.RemoteConfigRepository
 import com.reelz.scanner.DirectScanner
 import com.reelz.scanner.SourceRegistry
@@ -41,6 +45,10 @@ object AppModule {
         @ApplicationContext ctx: Context,
         gson: Gson,
     ): RemoteConfigRepository = RemoteConfigRepository(ctx, gson)
+
+    @Provides @Singleton
+    fun providePremiumGate(remoteConfig: RemoteConfigRepository): PremiumGate =
+        PremiumGate(remoteConfig)
 
     @Provides @Singleton
     fun provideSourceRegistry(remoteConfig: RemoteConfigRepository): SourceRegistry =
@@ -96,7 +104,7 @@ object AppModule {
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): ReelzDatabase =
         Room.databaseBuilder(ctx, ReelzDatabase::class.java, "reelz.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .build()
 
     @Provides fun provideWatchlistDao(db: ReelzDatabase)        = db.watchlistDao()
@@ -106,6 +114,7 @@ object AppModule {
     @Provides fun provideDownloadDao(db: ReelzDatabase)         = db.downloadDao()
     @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase) = db.downloadSubtitleDao()
     @Provides fun provideTransferDao(db: ReelzDatabase)         = db.transferDao()
+    @Provides fun provideUserSessionDao(db: ReelzDatabase)      = db.userSessionDao()
 
     // ── Repositories ──────────────────────────────────────────────────────────
 
@@ -166,4 +175,24 @@ object AppModule {
         @Named("osApiKey") apiKey: String,
         @Named("osUserAgent") userAgent: String,
     ) = OpenSubtitlesRepository(api, apiKey, userAgent)
+
+    // ── Premium session ───────────────────────────────────────────────────────
+
+    /**
+     * Today: reads manual_grants from the config JSON, no backend needed.
+     * Swap this single provider for a Firebase-backed SessionSource once
+     * google-services.json + a Paystack webhook backend exist — nothing else
+     * in the app (PremiumGate, UserSessionRepository, any UI) needs to change.
+     */
+    @Provides @Singleton
+    fun provideSessionSource(remoteConfig: RemoteConfigRepository): SessionSource =
+        ManualGrantSessionSource(remoteConfig)
+
+    @Provides @Singleton
+    fun provideUserSessionRepository(
+        store: UserSessionStore,
+        dao: UserSessionDao,
+        sessionSource: SessionSource,
+        premiumGate: PremiumGate,
+    ): UserSessionRepository = UserSessionRepository(store, dao, sessionSource, premiumGate)
 }

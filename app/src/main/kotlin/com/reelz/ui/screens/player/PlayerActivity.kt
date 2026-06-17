@@ -316,7 +316,13 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    override fun onPause()   { super.onPause();   vm.exoPlayer?.pause() }
+    override fun onPause()   {
+        super.onPause()
+        // Premium users keep playing when the screen locks or another app briefly
+        // covers this one (background_play tier limit). Free users still pause —
+        // this preserves the original behavior for them exactly as before.
+        if (!vm.canBackgroundPlay()) vm.exoPlayer?.pause()
+    }
     override fun onResume()  { super.onResume();  vm.exoPlayer?.let { if (it.mediaItemCount > 0) it.play() } }
     override fun onDestroy() { super.onDestroy(); vm.release(this) }
 }
@@ -841,6 +847,21 @@ fun PlayerScreen(
             onTogglePersistent = { vm.togglePersistentSubtitle(it) },
             onOffsetChange = { vm.setSubtitleOffset(it) },
             onSearchOnline = { vm.searchOnlineSubtitles() },
+            onUpgradeToPremium = {
+                // PlayerActivity is a separate Activity from the main NavHost, so the
+                // only way back to a Compose-navigable screen is to finish this one
+                // and relaunch MainActivity with an extra it reads once on create.
+                // REORDER_TO_FRONT + SINGLE_TOP brings the existing MainActivity
+                // instance forward (with all its state intact) instead of stacking
+                // a blank duplicate on top of it.
+                val intent = android.content.Intent(ctx, com.reelz.ui.MainActivity::class.java).apply {
+                    putExtra(com.reelz.ui.MainActivity.EXTRA_OPEN_PREMIUM, true)
+                    flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+                ctx.startActivity(intent)
+                (ctx as? android.app.Activity)?.finish()
+            },
         )
     }
 
@@ -881,6 +902,7 @@ private fun SubtitleDrawer(
     onTogglePersistent: (SubtitleOption) -> Unit,
     onOffsetChange: (Int) -> Unit,
     onSearchOnline: () -> Unit,
+    onUpgradeToPremium: () -> Unit,
 ) {
     val drawerWidth   = 0.40f   // 40% of screen width
     var searchQuery   by remember { mutableStateOf("") }
@@ -1156,6 +1178,33 @@ private fun SubtitleDrawer(
                                                 color      = Brand,
                                                 fontSize   = 12.sp,
                                                 fontWeight = FontWeight.SemiBold,
+                                            )
+                                        }
+                                    }
+                                    ui.subtitleUpsellMessage != null -> {
+                                        // Free tier tried manual search — show upgrade nudge, never an error
+                                        Text(
+                                            ui.subtitleUpsellMessage,
+                                            color      = White60,
+                                            fontSize   = 11.sp,
+                                            textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
+                                            lineHeight = 16.sp,
+                                        )
+                                        Box(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(AmberGlass)
+                                                .border(1.dp, AmberBorder, RoundedCornerShape(10.dp))
+                                                .clickable { onUpgradeToPremium() }
+                                                .padding(vertical = 10.dp),
+                                            Alignment.Center,
+                                        ) {
+                                            Text(
+                                                "Upgrade to Premium",
+                                                color      = Brand,
+                                                fontSize   = 12.sp,
+                                                fontWeight = FontWeight.Bold,
                                             )
                                         }
                                     }

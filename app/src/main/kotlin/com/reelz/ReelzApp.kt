@@ -8,6 +8,7 @@ import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import com.reelz.data.local.DownloadDao
 import com.reelz.data.model.DownloadStatus
+import com.reelz.data.repository.UserSessionRepository
 import com.reelz.remoteconfig.ConfigSyncWorker
 import com.reelz.remoteconfig.RemoteConfigRepository
 import com.reelz.ads.AdEngine
@@ -27,6 +28,7 @@ class ReelzApp : Application(), ImageLoaderFactory {
     @Inject lateinit var downloadDao: DownloadDao
     @Inject lateinit var remoteConfig: RemoteConfigRepository
     @Inject lateinit var adEngine: AdEngine
+    @Inject lateinit var userSessionRepository: UserSessionRepository
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -42,6 +44,15 @@ class ReelzApp : Application(), ImageLoaderFactory {
             // AdEngine itself checks ads.enabled and the AppLovin SDK key,
             // so this is a safe no-op until both are configured.
             adEngine.initialize(this@ReelzApp)
+
+            // Load any previously cached premium session — instant, local only.
+            // PremiumGate is ready with the correct state before any screen renders.
+            userSessionRepository.loadLocalSession()
+
+            // Re-resolve the grant in the background (config refreshes every 6h
+            // via ConfigSyncWorker, so a manual_grants edit you push to GitHub
+            // reaches a signed-in user's device automatically over time too).
+            userSessionRepository.refreshCurrentSession()
         }
 
         // Periodic background refresh every 6 hours.

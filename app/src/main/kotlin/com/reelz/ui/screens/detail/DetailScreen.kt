@@ -35,9 +35,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.reelz.BuildConfig
+import com.reelz.data.local.DownloadDao
 import com.reelz.data.model.*
 import com.reelz.data.repository.DownloadRepository
 import com.reelz.data.repository.MediaRepository
+import com.reelz.remoteconfig.PremiumGate
 import com.reelz.scanner.NativeBridge
 import com.reelz.scanner.StreamEngine
 import com.reelz.ui.components.*
@@ -119,8 +121,10 @@ private val IconClose get() = androidx.compose.ui.graphics.vector.ImageVector.Bu
 class DetailViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val downloadRepo: DownloadRepository,
+    private val downloadDao: DownloadDao,
     private val engine: StreamEngine,
     private val adEngine: com.reelz.ads.AdEngine,
+    private val premiumGate: PremiumGate,
     @javax.inject.Named("download") private val httpClient: okhttp3.OkHttpClient,
 ) : ViewModel() {
 
@@ -143,6 +147,8 @@ class DetailViewModel @Inject constructor(
         val pendingDownloadSeason: Int = 0,
         val pendingDownloadEpisode: Int = 0,
         val pendingDownloadTitle: String = "",
+        /** True when a free user hit their download cap and tapped Download anyway. */
+        val showDownloadCapSheet: Boolean = false,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -295,6 +301,28 @@ class DetailViewModel @Inject constructor(
         episodeTitle: String = "",
     ) {
         val detail = _ui.value.detail ?: return
+
+        viewModelScope.launch {
+            val maxDownloads = premiumGate.maxDownloads()
+            // -1 is the unlimited sentinel (premium tier) — never trips the cap.
+            if (maxDownloads >= 0 && downloadDao.countActive() >= maxDownloads) {
+                _ui.update { it.copy(showDownloadCapSheet = true) }
+                return@launch
+            }
+            openDownloadSheetInternal(tmdbId, mediaType, season, episode, episodeTitle, detail)
+        }
+    }
+
+    fun dismissDownloadCapSheet() { _ui.update { it.copy(showDownloadCapSheet = false) } }
+
+    private fun openDownloadSheetInternal(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int,
+        episode: Int,
+        episodeTitle: String,
+        detail: MediaDetail,
+    ) {
         _ui.update {
             it.copy(
                 showDownloadSheet       = true,
@@ -572,6 +600,17 @@ fun DetailScreen(
                 onSelectQuality    = { track -> vm.enqueueDownload(ctx, track) },
             )
         }
+
+        // ── Download cap reached sheet (free tier) ──────────────────────
+        if (ui.showDownloadCapSheet) {
+            DownloadCapSheet(
+                onDismiss  = { vm.dismissDownloadCapSheet() },
+                onUpgrade  = {
+                    vm.dismissDownloadCapSheet()
+                    nav.navigate(com.reelz.ui.Route.Premium.path)
+                },
+            )
+        }
     }
 }
 
@@ -815,6 +854,67 @@ fun DownloadQualitySheet(
             }
 
             Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
+// ── Download cap reached sheet (free tier) ──────────────────────────────────
+@Composable
+fun DownloadCapSheet(
+    onDismiss: () -> Unit,
+    onUpgrade: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(.6f))
+            .clickable { onDismiss() },
+    )
+
+    Box(Modifier.fillMaxSize(), Alignment.BottomCenter) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(BgCard)
+                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .clickable(enabled = false) {},
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(White40))
+            Spacer(Modifier.height(18.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(IconDownloadCloud, null, tint = Brand, modifier = Modifier.size(22.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Download limit reached", color = White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("Free plan", color = White60, fontSize = 12.sp)
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(20.dp))
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+
+            Text(
+                "You've reached your download limit for the free plan. Delete an existing download to free up space, or go Premium for unlimited downloads in up to 4K.",
+                color      = White60,
+                fontSize   = 13.sp,
+                textAlign  = TextAlign.Center,
+                lineHeight = 19.sp,
+            )
+            Spacer(Modifier.height(20.dp))
+
+            BrandButton("Upgrade to Premium", onClick = onUpgrade, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(10.dp))
+            TextButton(onClick = onDismiss) {
+                Text("Manage downloads instead", color = White60, fontSize = 13.sp)
+            }
             Spacer(Modifier.navigationBarsPadding())
         }
     }
