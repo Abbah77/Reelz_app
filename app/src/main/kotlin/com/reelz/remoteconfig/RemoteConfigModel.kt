@@ -186,13 +186,30 @@ data class PremiumConfig(
     @SerializedName("renew_warning_days_before") val renewWarningDaysBefore: Int = 3,
     @SerializedName("monthly_price_ngn")         val monthlyPriceNgn: Long       = 0,
     @SerializedName("yearly_price_ngn")          val yearlyPriceNgn: Long        = 0,
-    @SerializedName("contact_to_subscribe")      val contactToSubscribe: String  = "",
+    /**
+     * Paystack Payment Page / Payment Link URLs (e.g. https://paystack.com/pay/your-link),
+     * one per plan. Created from the Paystack dashboard — Payments → Payment Pages —
+     * no backend or server-side integration required for this no-backend v1 app.
+     * Opened in the in-app browser sheet (ReelzBrowserSheet) already used for ad clicks.
+     * Left blank, the matching button on PremiumScreen disables itself with a
+     * "Subscriptions opening soon" message instead of crashing or opening nothing.
+     */
+    @SerializedName("paystack_monthly_url") val paystackMonthlyUrl: String      = "",
+    @SerializedName("paystack_yearly_url")  val paystackYearlyUrl: String       = "",
+    /** Shown under the Paystack buttons — e.g. "Payments are processed securely by Paystack". */
+    @SerializedName("payment_note")         val paymentNote: String             = "",
+    /**
+     * Legacy free-text contact line (was the WhatsApp-era field). No longer rendered
+     * by PremiumScreen — kept only so older cached config blobs deserialize cleanly
+     * during the transition and the field is never silently dropped from history.
+     */
+    @SerializedName("contact_to_subscribe") val contactToSubscribe: String      = "",
     /**
      * V1 grant mechanism: no backend, no Firebase. You (the dev) add a row here by
-     * email after receiving payment manually (bank transfer, WhatsApp, etc). The app
-     * only ever READS this list — matched case-insensitively against the signed-in
-     * Google email. Swap this for a Firebase-backed source later without touching
-     * any other file: just provide a different UserSessionRepository.SessionSource.
+     * email after confirming payment in the Paystack dashboard. The app only ever
+     * READS this list — matched case-insensitively against the signed-in Google
+     * email. Swap this for a Firebase/Paystack-webhook-backed source later without
+     * touching any other file: just provide a different UserSessionRepository.SessionSource.
      */
     @SerializedName("manual_grants") val manualGrants: List<ManualGrant>        = emptyList(),
 )

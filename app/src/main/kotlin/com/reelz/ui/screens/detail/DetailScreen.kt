@@ -117,6 +117,19 @@ private val IconClose get() = androidx.compose.ui.graphics.vector.ImageVector.Bu
         strokeLineWidth = 1.8f, strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round, fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
 }.build()
 
+private val IconLock get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("Lock", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(7f, 11f); lineTo(7f, 7f)
+        arcTo(5f, 5f, 0f, false, true, 17f, 7f); lineTo(17f, 11f)
+        moveTo(5f, 11f); lineTo(19f, 11f)
+        arcTo(2f, 2f, 0f, false, true, 21f, 13f); lineTo(21f, 20f)
+        arcTo(2f, 2f, 0f, false, true, 19f, 22f); lineTo(5f, 22f)
+        arcTo(2f, 2f, 0f, false, true, 3f, 20f); lineTo(3f, 13f)
+        arcTo(2f, 2f, 0f, false, true, 5f, 11f)
+    }, stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.White),
+       strokeLineWidth = 1.7f, fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
+}.build()
+
 @HiltViewModel
 class DetailViewModel @Inject constructor(
     private val repo: MediaRepository,
@@ -143,12 +156,21 @@ class DetailViewModel @Inject constructor(
         val downloadQualities: List<QualityTrack> = emptyList(),
         val isResolvingQualities: Boolean = false,
         val downloadEnqueued: Boolean = false,
+        /**
+         * The current tier's max download height in px (e.g. 480 for free, 2160
+         * for premium), read once when the sheet opens. <= 0 means "no cap" —
+         * see PremiumGate.isResolutionAllowed(). Drives the lock badge on any
+         * QualityTrack whose parsed height exceeds this.
+         */
+        val maxDownloadResolutionHeight: Int = Int.MAX_VALUE,
         // For episode download context
         val pendingDownloadSeason: Int = 0,
         val pendingDownloadEpisode: Int = 0,
         val pendingDownloadTitle: String = "",
         /** True when a free user hit their download cap and tapped Download anyway. */
         val showDownloadCapSheet: Boolean = false,
+        /** True when a free user tapped a quality above their tier's resolution cap. */
+        val showResolutionLockSheet: Boolean = false,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -314,6 +336,8 @@ class DetailViewModel @Inject constructor(
     }
 
     fun dismissDownloadCapSheet() { _ui.update { it.copy(showDownloadCapSheet = false) } }
+    fun dismissResolutionLockSheet() { _ui.update { it.copy(showResolutionLockSheet = false) } }
+    fun openResolutionLockSheet() { _ui.update { it.copy(showResolutionLockSheet = true) } }
 
     private fun openDownloadSheetInternal(
         tmdbId: Int,
@@ -325,13 +349,19 @@ class DetailViewModel @Inject constructor(
     ) {
         _ui.update {
             it.copy(
-                showDownloadSheet       = true,
-                downloadQualities       = emptyList(),
-                isResolvingQualities    = true,
-                downloadEnqueued        = false,
-                pendingDownloadSeason   = season,
-                pendingDownloadEpisode  = episode,
-                pendingDownloadTitle    = episodeTitle.ifBlank { detail.title },
+                showDownloadSheet           = true,
+                downloadQualities           = emptyList(),
+                isResolvingQualities        = true,
+                downloadEnqueued             = false,
+                pendingDownloadSeason       = season,
+                pendingDownloadEpisode      = episode,
+                pendingDownloadTitle        = episodeTitle.ifBlank { detail.title },
+                // Read once per sheet-open — config is the source of truth, and this
+                // mirrors exactly what PlayerViewModel.buildPlayer() applies for
+                // streaming, so "what counts as locked" never disagrees between
+                // watching and downloading the same title.
+                maxDownloadResolutionHeight = premiumGate.maxResolutionHeight()
+                    .let { h -> if (h <= 0) Int.MAX_VALUE else h },
             )
         }
         viewModelScope.launch {
@@ -385,6 +415,16 @@ class DetailViewModel @Inject constructor(
     fun enqueueDownload(ctx: android.content.Context, track: QualityTrack) {
         val detail = _ui.value.detail ?: return
         val state  = _ui.value
+
+        // Defense in depth: re-check against PremiumGate here too, not just at the
+        // UI layer. If this were ever reached for a locked track (stale UI state,
+        // future call site, etc.) we still refuse rather than silently honoring a
+        // resolution above the user's config-defined tier.
+        if (!premiumGate.isResolutionAllowed(trackHeightPx(track.label))) {
+            _ui.update { it.copy(showResolutionLockSheet = true) }
+            return
+        }
+
         viewModelScope.launch {
             // UPGRADE P1: Use CACHED stream result — no second engine.resolve() call.
             // The cachedStreamResult was stored when openDownloadSheet() ran.
@@ -596,8 +636,10 @@ fun DetailScreen(
                 qualities          = ui.downloadQualities,
                 isLoading          = ui.isResolvingQualities,
                 enqueued           = ui.downloadEnqueued,
+                maxResolutionHeight = ui.maxDownloadResolutionHeight,
                 onDismiss          = { vm.dismissDownloadSheet() },
                 onSelectQuality    = { track -> vm.enqueueDownload(ctx, track) },
+                onLockedQualityTap = { vm.openResolutionLockSheet() },
             )
         }
 
@@ -607,6 +649,18 @@ fun DetailScreen(
                 onDismiss  = { vm.dismissDownloadCapSheet() },
                 onUpgrade  = {
                     vm.dismissDownloadCapSheet()
+                    nav.navigate(com.reelz.ui.Route.Premium.path)
+                },
+            )
+        }
+
+        // ── Resolution locked sheet (free tier tapped an above-cap quality) ──
+        if (ui.showResolutionLockSheet) {
+            ResolutionLockSheet(
+                allowedLabel = qualityLabelFor(ui.maxDownloadResolutionHeight),
+                onDismiss    = { vm.dismissResolutionLockSheet() },
+                onUpgrade    = {
+                    vm.dismissResolutionLockSheet()
                     nav.navigate(com.reelz.ui.Route.Premium.path)
                 },
             )
@@ -623,6 +677,9 @@ fun DownloadQualitySheet(
     enqueued: Boolean,
     onDismiss: () -> Unit,
     onSelectQuality: (QualityTrack) -> Unit,
+    /** Tracks with a parsed height above this are shown locked, not hidden — config-driven via PremiumGate. */
+    maxResolutionHeight: Int = Int.MAX_VALUE,
+    onLockedQualityTap: () -> Unit = {},
 ) {
     // Scrim
     Box(
@@ -736,18 +793,28 @@ fun DownloadQualitySheet(
                         }
                         val isBest    = index == 0
                         val isSmall   = index == qualities.lastIndex && qualities.size > 1
+                        // Free tier sees every quality (never hidden — hiding makes the
+                        // feature look broken/missing) but anything above the config
+                        // cap is locked behind Premium with a clear, factual nudge,
+                        // matching the subtitle drawer's upsell pattern elsewhere in
+                        // the player. trackHeightPx("Auto"/"Best available") resolves
+                        // to Int.MAX_VALUE, so an unlabeled "best" track is correctly
+                        // treated as top-tier rather than silently unlocked.
+                        val isLocked  = trackHeightPx(track.label) > maxResolutionHeight
 
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(if (isBest) Brand.copy(.07f) else BgRaised)
+                                .background(if (isLocked) GlassSm else if (isBest) Brand.copy(.07f) else BgRaised)
                                 .border(
-                                    width = if (isBest) 1.5.dp else 1.dp,
-                                    color = if (isBest) Brand.copy(.35f) else GlassBorderMd,
+                                    width = if (!isLocked && isBest) 1.5.dp else 1.dp,
+                                    color = if (isLocked) GlassBorderMd else if (isBest) Brand.copy(.35f) else GlassBorderMd,
                                     shape = RoundedCornerShape(14.dp),
                                 )
-                                .clickable { onSelectQuality(track) }
+                                .clickable {
+                                    if (isLocked) onLockedQualityTap() else onSelectQuality(track)
+                                }
                                 .padding(horizontal = 16.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -757,10 +824,10 @@ fun DownloadQualitySheet(
                                 Modifier
                                     .width(60.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(if (isBest) Brand.copy(.18f) else GlassSm)
+                                    .background(if (isLocked) GlassSm else if (isBest) Brand.copy(.18f) else GlassSm)
                                     .border(
                                         1.dp,
-                                        if (isBest) Brand.copy(.4f) else GlassBorderMd,
+                                        if (isLocked) GlassBorderMd else if (isBest) Brand.copy(.4f) else GlassBorderMd,
                                         RoundedCornerShape(10.dp),
                                     )
                                     .padding(vertical = 8.dp),
@@ -768,7 +835,7 @@ fun DownloadQualitySheet(
                             ) {
                                 Text(
                                     track.label,
-                                    color = if (isBest) Brand else White,
+                                    color = if (isLocked) White40 else if (isBest) Brand else White,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 14.sp,
                                 )
@@ -782,47 +849,75 @@ fun DownloadQualitySheet(
                                 ) {
                                     Text(
                                         descLabel,
-                                        color = White,
+                                        color = if (isLocked) White40 else White,
                                         fontWeight = FontWeight.SemiBold,
                                         fontSize = 14.sp,
                                     )
-                                    if (isBest) {
-                                        Box(
-                                            Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(Brand.copy(.15f))
-                                                .border(1.dp, Brand.copy(.3f), RoundedCornerShape(4.dp))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                                        ) {
-                                            Text(
-                                                "BEST",
-                                                color = Brand,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                letterSpacing = 0.5.sp,
-                                            )
+                                    when {
+                                        isLocked -> {
+                                            Row(
+                                                Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(Brand.copy(.15f))
+                                                    .border(1.dp, Brand.copy(.35f), RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                            ) {
+                                                Icon(IconLock, null, tint = Brand, modifier = Modifier.size(8.dp))
+                                                Text(
+                                                    "PREMIUM",
+                                                    color = Brand,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    letterSpacing = 0.5.sp,
+                                                )
+                                            }
                                         }
-                                    }
-                                    if (isSmall) {
-                                        Box(
-                                            Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(GlassSm)
-                                                .border(1.dp, GlassBorderMd, RoundedCornerShape(4.dp))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                                        ) {
-                                            Text(
-                                                "SMALLEST",
-                                                color = White40,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                letterSpacing = 0.5.sp,
-                                            )
+                                        isBest -> {
+                                            Box(
+                                                Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(Brand.copy(.15f))
+                                                    .border(1.dp, Brand.copy(.3f), RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                            ) {
+                                                Text(
+                                                    "BEST",
+                                                    color = Brand,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    letterSpacing = 0.5.sp,
+                                                )
+                                            }
+                                        }
+                                        isSmall -> {
+                                            Box(
+                                                Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(GlassSm)
+                                                    .border(1.dp, GlassBorderMd, RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                            ) {
+                                                Text(
+                                                    "SMALLEST",
+                                                    color = White40,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    letterSpacing = 0.5.sp,
+                                                )
+                                            }
                                         }
                                     }
                                 }
                                 Spacer(Modifier.height(3.dp))
                                 when {
+                                    isLocked ->
+                                        Text(
+                                            "Upgrade to download in this quality",
+                                            color = White40,
+                                            fontSize = 12.sp,
+                                        )
                                     track.estimatedSizeBytes > 0 ->
                                         Text(
                                             "~${formatSize(track.estimatedSizeBytes)}",
@@ -839,12 +934,12 @@ fun DownloadQualitySheet(
                                 }
                             }
 
-                            // Download arrow
+                            // Download / lock arrow
                             Icon(
-                                IconDownloadCloud,
+                                if (isLocked) IconLock else IconDownloadCloud,
                                 null,
-                                tint = if (isBest) Brand else White40,
-                                modifier = Modifier.size(22.dp),
+                                tint = if (isLocked) White40 else if (isBest) Brand else White40,
+                                modifier = Modifier.size(if (isLocked) 18.dp else 22.dp),
                             )
                         }
 
@@ -914,6 +1009,71 @@ fun DownloadCapSheet(
             Spacer(Modifier.height(10.dp))
             TextButton(onClick = onDismiss) {
                 Text("Manage downloads instead", color = White60, fontSize = 13.sp)
+            }
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
+// ── Resolution locked sheet (free tier tapped an above-cap quality) ─────────
+@Composable
+fun ResolutionLockSheet(
+    allowedLabel: String,
+    onDismiss: () -> Unit,
+    onUpgrade: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(.6f))
+            .clickable { onDismiss() },
+    )
+
+    Box(Modifier.fillMaxSize(), Alignment.BottomCenter) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(BgCard)
+                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .clickable(enabled = false) {},
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(White40))
+            Spacer(Modifier.height(18.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).background(Brand.copy(.15f)),
+                    Alignment.Center,
+                ) { Icon(IconLock, null, tint = Brand, modifier = Modifier.size(18.dp)) }
+                Column(Modifier.weight(1f)) {
+                    Text("Higher quality is Premium", color = White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("Free plan downloads up to $allowedLabel", color = White60, fontSize = 12.sp)
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(20.dp))
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+
+            Text(
+                "Upgrade to Premium to download in up to 4K, with no resolution limits and no ads.",
+                color      = White60,
+                fontSize   = 13.sp,
+                textAlign  = TextAlign.Center,
+                lineHeight = 19.sp,
+            )
+            Spacer(Modifier.height(20.dp))
+
+            BrandButton("Upgrade to Premium", onClick = onUpgrade, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(10.dp))
+            TextButton(onClick = onDismiss) {
+                Text("Continue with $allowedLabel", color = White60, fontSize = 13.sp)
             }
             Spacer(Modifier.navigationBarsPadding())
         }
@@ -1249,6 +1409,27 @@ fun MetaChip(label: String, value: String) {
 fun formatRuntime(minutes: Int): String {
     val h = minutes / 60; val m = minutes % 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+/**
+ * Parses a QualityTrack.label (e.g. "1080p", "720p", "Auto", "Best available")
+ * into a comparable pixel height for resolution-cap checks. "Auto" and
+ * "Best available" return Int.MAX_VALUE — they represent the source's true top
+ * quality, which is exactly what the free tier must NOT be allowed to silently
+ * download, so they are treated as the highest tier rather than unlocked.
+ */
+fun trackHeightPx(label: String): Int =
+    label.takeWhile { it.isDigit() }.toIntOrNull() ?: Int.MAX_VALUE
+
+/** Human label for a tier's cap height, used in lock-sheet copy ("Free plan streams up to 480p"). */
+fun qualityLabelFor(heightPx: Int): String = when {
+    heightPx >= Int.MAX_VALUE -> "4K"
+    heightPx >= 2160          -> "4K"
+    heightPx >= 1080          -> "1080p"
+    heightPx >= 720           -> "720p"
+    heightPx >= 480           -> "480p"
+    heightPx >= 360           -> "360p"
+    else                       -> "${heightPx}p"
 }
 
 // ── Skeleton shimmer ──────────────────────────────────────────────────────────

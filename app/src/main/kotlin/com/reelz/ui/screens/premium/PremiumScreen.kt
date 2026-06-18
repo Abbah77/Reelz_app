@@ -25,7 +25,6 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathData
 import androidx.compose.ui.graphics.vector.path
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -34,6 +33,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
+import com.reelz.ads.ReelzBrowserSheet
 import com.reelz.data.repository.UserSessionRepository
 import com.reelz.remoteconfig.PremiumConfig
 import com.reelz.remoteconfig.PremiumGate
@@ -87,6 +87,8 @@ class PremiumViewModel @Inject constructor(
         val premiumConfig: PremiumConfig = PremiumConfig(),
         val isRefreshing: Boolean = false,
         val refreshMessage: String? = null,
+        /** Non-null while the Paystack checkout sheet (ReelzBrowserSheet) is open. */
+        val checkoutUrl: String? = null,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -128,12 +130,15 @@ class PremiumViewModel @Inject constructor(
     }
 
     fun dismissMessage() { _ui.update { it.copy(refreshMessage = null) } }
+
+    /** Opens the Paystack payment link for the tapped plan in the in-app browser sheet. */
+    fun openCheckout(url: String) { _ui.update { it.copy(checkoutUrl = url) } }
+    fun dismissCheckout() { _ui.update { it.copy(checkoutUrl = null) } }
 }
 
 @Composable
 fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsState()
-    val ctx = LocalContext.current
 
     val shimmer = rememberInfiniteTransition(label = "crownGlow")
     val glow by shimmer.animateFloat(0.5f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "g")
@@ -198,7 +203,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                         if (ui.freeTier.maxDownloads < 0) "Unlimited" else "${ui.freeTier.maxDownloads} at a time",
                         if (ui.premiumTier.maxDownloads < 0) "Unlimited" else "${ui.premiumTier.maxDownloads} at a time",
                     )
-                    ComparisonRow("Ads", if (ui.freeTier.adsEnabled) "Yes" else "No", if (ui.premiumTier.adsEnabled) "Yes" else "No")
+                    ComparisonRow("Ads", "—", "—", boolFree = !ui.freeTier.adsEnabled, boolPremium = !ui.premiumTier.adsEnabled)
                     ComparisonRow("Manual subtitle search", "—", "Any language", boolFree = !ui.freeTier.subtitlesManualSearch, boolPremium = ui.premiumTier.subtitlesManualSearch)
                     ComparisonRow("Keep watching, screen off", "—", "Yes", boolFree = !ui.freeTier.backgroundPlay, boolPremium = ui.premiumTier.backgroundPlay)
                 }
@@ -231,32 +236,56 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                             Text("Thanks for being a Premium member.", color = White60, fontSize = 12.sp, textAlign = TextAlign.Center)
                         }
                         else -> {
-                            BrandButton(
-                                text = "Contact to Subscribe",
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = {
-                                    val msg = ui.premiumConfig.contactToSubscribe
-                                    val waMatch = Regex("\\+\\d{6,15}").find(msg)
-                                    if (waMatch != null) {
-                                        val phone = waMatch.value.removePrefix("+")
-                                        try {
-                                            ctx.startActivity(
-                                                android.content.Intent(android.content.Intent.ACTION_VIEW)
-                                                    .setData(android.net.Uri.parse("https://wa.me/$phone"))
-                                            )
-                                        } catch (_: Exception) { /* no WhatsApp / no browser — message text below still visible */ }
-                                    }
-                                },
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                ui.premiumConfig.contactToSubscribe.ifBlank { "Subscription details coming soon." },
-                                color = White60, fontSize = 12.sp, textAlign = TextAlign.Center, lineHeight = 17.sp,
-                            )
+                            val monthlyUrl = ui.premiumConfig.paystackMonthlyUrl
+                            val yearlyUrl  = ui.premiumConfig.paystackYearlyUrl
+                            val anyConfigured = monthlyUrl.isNotBlank() || yearlyUrl.isNotBlank()
+
+                            if (anyConfigured) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    PaystackSubscribeButton(
+                                        label    = "Monthly",
+                                        url      = monthlyUrl,
+                                        modifier = Modifier.weight(1f),
+                                        onCheckout = { checkoutUrl -> vm.openCheckout(checkoutUrl) },
+                                    )
+                                    PaystackSubscribeButton(
+                                        label    = "Yearly",
+                                        url      = yearlyUrl,
+                                        modifier = Modifier.weight(1f),
+                                        onCheckout = { checkoutUrl -> vm.openCheckout(checkoutUrl) },
+                                    )
+                                }
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    "Secured by Paystack — card, bank transfer, or USSD.",
+                                    color = White40, fontSize = 11.sp, textAlign = TextAlign.Center,
+                                )
+                            } else {
+                                // No payment link configured yet — never show a dead/broken button.
+                                BrandButton(
+                                    text     = "Subscriptions opening soon",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick  = {},
+                                    enabled  = false,
+                                )
+                            }
+
+                            if (ui.premiumConfig.paymentNote.isNotBlank()) {
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    ui.premiumConfig.paymentNote,
+                                    color = White60, fontSize = 12.sp, textAlign = TextAlign.Center, lineHeight = 17.sp,
+                                )
+                            }
                             Spacer(Modifier.height(20.dp))
 
-                            // Manual-grant flow: after you confirm payment and add their
-                            // email to manual_grants, this is the button that picks it up.
+                            // Manual-grant flow: after Paystack confirms the payment (dashboard
+                            // or email receipt) and you add their email to manual_grants, this
+                            // is the button that picks it up. Independent of which processor is
+                            // used — this is the entitlement check, not the checkout itself.
                             OutlinedButton(
                                 onClick = { vm.refreshStatus() },
                                 enabled = !ui.isRefreshing,
@@ -278,6 +307,37 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                 }
             }
         }
+
+        ui.checkoutUrl?.let { url ->
+            ReelzBrowserSheet(url = url, onDismiss = { vm.dismissCheckout() })
+        }
+    }
+}
+
+/**
+ * One plan's subscribe button. Disabled (not hidden) when its Paystack URL is
+ * blank, so a half-configured `premium` config never silently drops a plan —
+ * the person can still see Monthly/Yearly exist, just not purchasable yet.
+ */
+@Composable
+private fun PaystackSubscribeButton(
+    label: String,
+    url: String,
+    modifier: Modifier = Modifier,
+    onCheckout: (String) -> Unit,
+) {
+    OutlinedButton(
+        onClick  = { if (url.isNotBlank()) onCheckout(url) },
+        enabled  = url.isNotBlank(),
+        modifier = modifier.height(48.dp),
+        shape    = RoundedCornerShape(100.dp),
+        border   = BorderStroke(1.dp, if (url.isNotBlank()) Brand.copy(.5f) else GlassBorderMd),
+        colors   = ButtonDefaults.outlinedButtonColors(
+            contentColor         = if (url.isNotBlank()) Brand2 else White40,
+            disabledContentColor = White40,
+        ),
+    ) {
+        Text(label, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
     }
 }
 

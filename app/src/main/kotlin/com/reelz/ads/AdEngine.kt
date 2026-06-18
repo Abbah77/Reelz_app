@@ -99,6 +99,15 @@ class AdEngine @Inject constructor(
      */
     private fun adsEnabled(): Boolean = remoteConfig.areAdsEnabled(isPremiumUser = premiumGate.isPremium())
 
+    /**
+     * Public read for UI surfaces (feed banners, etc.) that want to offer an
+     * "upgrade to remove ads" nudge. Deliberately reuses the same [adsEnabled]
+     * chokepoint as every actual ad placement, so the banner can never appear
+     * for a user who isn't even seeing ads (already premium, or ads globally
+     * disabled in config) — it would be a confusing, pointless upsell otherwise.
+     */
+    fun shouldShowRemoveAdsBanner(): Boolean = adsEnabled()
+
     private fun interstitialAdUnitId(): String = network()?.interstitialId.orEmpty()
     private fun rewardedAdUnitId(): String     = network()?.rewardedId.orEmpty()
     private fun appOpenAdUnitId(): String      = network()?.appOpenId.orEmpty()

@@ -9,13 +9,27 @@ import android.util.Log
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.VideoView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.material3.Text
 import com.google.ads.interactivemedia.v3.api.*
 import com.google.ads.interactivemedia.v3.api.player.AdMediaInfo
 import com.google.ads.interactivemedia.v3.api.player.VideoAdPlayer
 import com.google.ads.interactivemedia.v3.api.player.VideoProgressUpdate
+import com.reelz.ui.components.CinematicSpinner
 
 private const val TAG = "ImaPreRollView"
 
@@ -27,6 +41,12 @@ private const val TAG = "ImaPreRollView"
  * [PlayerViewModel] uses to start actual content playback.
  *
  * This composable takes the full screen — place it on top of the player composable.
+ *
+ * UI/UX: before IMA reports LOADED, the underlying VideoView is a bare black
+ * rectangle with no indication anything is happening. A short ad-buffer delay
+ * (slow network, cold SDK init) used to look identical to a frozen/broken
+ * screen. A spinner + persistent "Advertisement" label removes that ambiguity
+ * without touching the IMA event wiring itself.
  */
 @Composable
 fun ImaPreRollView(
@@ -38,18 +58,47 @@ fun ImaPreRollView(
     // Stable callbacks — capture latest ref without re-creating the view
     val onCompletedRef = rememberUpdatedState(onAdCompleted)
     val onErrorRef     = rememberUpdatedState(onAdError)
+    var isAdPlaying by remember(vastUrl) { mutableStateOf(false) }
 
-    AndroidView(
-        modifier = modifier,
-        factory  = { ctx ->
-            buildImaAdView(
-                context     = ctx,
-                vastUrl     = vastUrl,
-                onCompleted = { onCompletedRef.value() },
-                onError     = { onErrorRef.value() },
+    Box(modifier.background(Color.Black)) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory  = { ctx ->
+                buildImaAdView(
+                    context     = ctx,
+                    vastUrl     = vastUrl,
+                    onCompleted = { onCompletedRef.value() },
+                    onError     = { onErrorRef.value() },
+                    onStarted   = { isAdPlaying = true },
+                )
+            },
+        )
+
+        if (!isAdPlaying) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CinematicSpinner(size = 40.dp)
+            }
+        }
+
+        // "Advertisement" label — visible throughout, same convention as the
+        // Shorts feed's "AD" badge, so a pre-roll is never mistaken for content.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(16.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        ) {
+            Text(
+                text       = "Advertisement",
+                color      = Color.White.copy(alpha = 0.85f),
+                fontSize   = 11.sp,
+                fontWeight = FontWeight.SemiBold,
             )
-        },
-    )
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +111,7 @@ private fun buildImaAdView(
     vastUrl: String,
     onCompleted: () -> Unit,
     onError: () -> Unit,
+    onStarted: () -> Unit,
 ): FrameLayout {
     val root = FrameLayout(context).apply {
         layoutParams = ViewGroup.LayoutParams(
@@ -84,7 +134,7 @@ private fun buildImaAdView(
     val sdkSettings = sdkFactory.createImaSdkSettings().apply {
         language = "en"
     }
-    val videoAdPlayer = buildVideoAdPlayer(videoView, onCompleted, onError)
+    val videoAdPlayer = buildVideoAdPlayer(videoView, onCompleted, onError, onStarted)
     val adDisplayContainer = sdkFactory.createAdDisplayContainer().apply {
         adContainer = root
         setPlayer(videoAdPlayer)
@@ -132,6 +182,7 @@ private fun buildVideoAdPlayer(
     videoView: VideoView,
     onCompleted: () -> Unit,
     onError: () -> Unit,
+    onStarted: () -> Unit,
 ): VideoAdPlayer {
     val callbacks = mutableListOf<VideoAdPlayer.VideoAdPlayerCallback>()
     var currentAdInfo: AdMediaInfo? = null
@@ -143,6 +194,7 @@ private fun buildVideoAdPlayer(
                 .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
                 .build()
         )
+        onStarted()
         callbacks.forEach { it.onPlay(currentAdInfo!!) }
     }
     videoView.setOnCompletionListener {

@@ -2,6 +2,8 @@ package com.reelz.ui.screens.profile
 
 import android.content.Context
 import androidx.compose.animation.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -26,6 +28,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.reelz.data.local.LikedDao
 import com.reelz.data.local.WatchlistDao
@@ -148,20 +151,20 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch { likedDao.getAll().collect { l -> _ui.update { it.copy(liked = l) } } }
         viewModelScope.launch { historyDao.getRecent().collect { h -> _ui.update { it.copy(history = h) } } }
 
-        // Restore the visible profile from whatever ReelzApp.onCreate already
-        // loaded into PremiumGate, so a returning signed-in user sees their
-        // name/photo immediately instead of a blank "Sign in" prompt.
         restoreProfileFromSession()
 
-        // Stay live for state changes after that — e.g. premium expiring
-        // mid-session, or onSignIn() below updating it.
         viewModelScope.launch {
             premiumGate.state.collect { state ->
+                val session = premiumGate.currentSession()
                 _ui.update {
                     it.copy(
                         userState       = state,
                         daysUntilExpiry = premiumGate.daysUntilExpiry(),
                         showRenewBanner = premiumGate.shouldShowRenewBanner(),
+                        profile         = if (session != null)
+                            UserProfile(session.name, session.email, session.photoUrl, true)
+                        else
+                            it.profile, // keep whatever profile is already set
                     )
                 }
             }
@@ -182,9 +185,6 @@ class ProfileViewModel @Inject constructor(
     fun setTab(i: Int) { _ui.update { it.copy(activeTab = i) } }
 
     fun onSignIn(name: String, email: String, photoUrl: String?) {
-        // Update the visible profile immediately (zero perceived delay), then
-        // persist + resolve the grant in the background via the repository —
-        // see UserSessionRepository.onSignedIn for why this two-step exists.
         _ui.update { it.copy(profile = UserProfile(name, email, photoUrl, true)) }
         viewModelScope.launch { userSessionRepository.onSignedIn(name, email, photoUrl) }
     }
@@ -193,16 +193,10 @@ class ProfileViewModel @Inject constructor(
         _ui.update { it.copy(profile = UserProfile()) }
         viewModelScope.launch {
             userSessionRepository.signOut()
-            // Pre-existing bug fix: without this, CredentialManager still
-            // remembers the last account, so the NEXT sign-in attempt can
-            // silently auto-select it instead of showing the picker — making
-            // "sign out" look broken even though the in-app session did clear.
             try {
                 CredentialManager.create(appContext)
                     .clearCredentialState(ClearCredentialStateRequest())
-            } catch (_: Exception) {
-                // Best-effort: app-level sign-out already succeeded above either way.
-            }
+            } catch (_: Exception) {}
         }
     }
 
@@ -427,46 +421,84 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
 @Composable
 fun GoogleSignInButton(ctx: Context, onSignedIn: (String, String, String?) -> Unit) {
     val scope = rememberCoroutineScope()
-    Box(
-        Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(100.dp))
-            .background(BgRaised)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(100.dp))
-            .clickable {
-                scope.launch {
-                    try {
+    val activity = ctx as? android.app.Activity
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(100.dp))
+                .background(BgRaised)
+                .border(1.dp, GlassBorderMd, RoundedCornerShape(100.dp))
+                .clickable {
+                    if (activity == null) {
+                        errorMsg = "Sign-in unavailable. Please restart the app."
+                        return@clickable
+                    }
+                    errorMsg = null
+                    scope.launch {
                         val credManager = CredentialManager.create(ctx)
-                        val req = GetCredentialRequest(listOf(
-                            GetGoogleIdOption.Builder()
-                                .setFilterByAuthorizedAccounts(false)
-                                .setServerClientId("855194597614-8qh36vk8ijg3uq8aqse3nu6ffduus9m8.apps.googleusercontent.com")
-                                .build()
-                        ))
-                        val result = credManager.getCredential(ctx as android.app.Activity, req)
-                        val credential = result.credential
-                        if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                            val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
-                            // NOTE: googleCred.id is the Google account's unique subject ID,
-                            // not guaranteed to be the email address by the googleid API
-                            // contract — but Credential Manager's Sign-In with Google flow
-                            // does populate it with the account's email string in practice
-                            // for the standard consumer flow this app uses. If you ever see
-                            // manual_grants not matching a user who should have premium,
-                            // check Logcat for "ReelzAuth: signed in as" to see exactly what
-                            // string arrived, and match reelz_config.json's email field to that.
-                            android.util.Log.d("ReelzAuth", "signed in as ${googleCred.id}")
-                            onSignedIn(googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString())
+                        val webClientId = "179017454626-db23ivhrbgn25pe41s4jeuo8293o2mds.apps.googleusercontent.com"
+
+                        suspend fun handleCredentialResult(result: GetCredentialResponse) {
+                            val credential = result.credential
+                            if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                                val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
+                                android.util.Log.d("ReelzAuth", "signed in as: id=${googleCred.id} name=${googleCred.displayName} email=${googleCred.id}")
+                                withContext(Dispatchers.Main) {
+                                    onSignedIn(googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString())
+                                }
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    errorMsg = "Sign-in failed. Unexpected credential type."
+                                }
+                            }
                         }
-                    } catch (_: Exception) {}
+
+                        // Step 1 — try One Tap (fast, no UI if already authorized)
+                        try {
+                            val req = GetCredentialRequest(listOf(
+                                GetGoogleIdOption.Builder()
+                                    .setFilterByAuthorizedAccounts(false)
+                                    .setServerClientId(webClientId)
+                                    .build()
+                            ))
+                            val result = credManager.getCredential(activity, req)
+                            handleCredentialResult(result)
+                            return@launch
+                        } catch (e: androidx.credentials.exceptions.NoCredentialException) {
+                            android.util.Log.w("ReelzAuth", "One Tap failed (${e.message}), falling back to Sign In With Google")
+                        } catch (e: androidx.credentials.exceptions.GetCredentialCancellationException) {
+                            android.util.Log.d("ReelzAuth", "Sign-in cancelled by user")
+                            return@launch
+                        }
+
+                        // Step 2 — fallback to full Google Sign-In bottom sheet
+                        try {
+                            val req = GetCredentialRequest(listOf(
+                                GetSignInWithGoogleOption.Builder(webClientId).build()
+                            ))
+                            val result = credManager.getCredential(activity, req)
+                            handleCredentialResult(result)
+                        } catch (e: androidx.credentials.exceptions.GetCredentialCancellationException) {
+                            android.util.Log.d("ReelzAuth", "Sign-in cancelled by user")
+                        } catch (e: Exception) {
+                            android.util.Log.e("ReelzAuth", "Sign-in fallback error: ${e.javaClass.name}: ${e.message}")
+                            errorMsg = "Sign-in failed: ${e.message}"
+                        }
+                    }
                 }
+                .padding(vertical = 14.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("G", color = Brand, fontWeight = FontWeight.Black, fontSize = 16.sp)
+                Text("Continue with Google", color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             }
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Google G icon (colorful)
-            Text("G", color = Brand, fontWeight = FontWeight.Black, fontSize = 16.sp)
-            Text("Continue with Google", color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        }
+        if (errorMsg != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(errorMsg!!, color = Error, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
     }
 }

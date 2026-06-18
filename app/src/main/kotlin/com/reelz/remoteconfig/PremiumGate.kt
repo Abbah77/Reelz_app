@@ -78,6 +78,19 @@ class PremiumGate @Inject constructor(
     fun canManualSubtitleSearch(): Boolean = activeTier().subtitlesManualSearch
     fun canBackgroundPlay(): Boolean = activeTier().backgroundPlay
 
+    /**
+     * Whether a track of this pixel height may be streamed OR downloaded by the
+     * current tier. Mirrors the sentinel handling already used at the ExoPlayer
+     * level in PlayerViewModel.buildPlayer() (maxResolutionHeight <= 0 means "no
+     * cap" rather than "cap at 0 = nothing plays"), so streaming and downloads
+     * always agree on what counts as "above the user's tier".
+     */
+    fun isResolutionAllowed(heightPx: Int): Boolean {
+        val cap = maxResolutionHeight()
+        if (cap <= 0) return true // misconfigured/unset tier -> fail open, never black-screen everything
+        return heightPx <= cap
+    }
+
     // ── Expiry info for UI ───────────────────────────────────────────────────
 
     fun expiresAt(): Long = _session?.expiresAtMs ?: 0L

@@ -303,6 +303,11 @@ fun BrowseScreen(
     val ui by vm.ui.collectAsState()
     val density = LocalDensity.current
 
+    // Dismissed for this composition only (i.e. this app session/screen visit) —
+    // intentionally not persisted, so it's a gentle nudge rather than a one-time
+    // banner that vanishes forever after a single accidental tap of the X.
+    var removeAdsBannerDismissed by remember { mutableStateOf(false) }
+
     // ── Collapsing app-bar measurements ──────────────────────────────────────
     // We measure the bar height on first layout so we know how far to collapse.
     var appBarHeightPx by remember { mutableStateOf(0f) }
@@ -460,6 +465,16 @@ fun BrowseScreen(
                         }
                     } else if (ui.isLoading) {
                         item(key = "heroBannerSkeleton") { SkeletonBannerLoader() }
+                    }
+
+                    // ── Remove ads upsell — config-gated, session-dismissible ──
+                    if (!removeAdsBannerDismissed && adEngine.shouldShowRemoveAdsBanner()) {
+                        item(key = "removeAdsBanner") {
+                            RemoveAdsBanner(
+                                onUpgrade  = { nav.navigate(com.reelz.ui.Route.Premium.path) },
+                                onDismiss  = { removeAdsBannerDismissed = true },
+                            )
+                        }
                     }
 
                     // ── Genre bar (scrolls with content under collapsing bar) ──

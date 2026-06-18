@@ -1,6 +1,7 @@
 package com.reelz.di
 
 import com.reelz.ads.AdEngine
+import com.reelz.remoteconfig.PremiumGate
 import com.reelz.remoteconfig.RemoteConfigRepository
 import dagger.Module
 import dagger.Provides
@@ -14,5 +15,6 @@ object AdModule {
 
     @Provides
     @Singleton
-    fun provideAdEngine(remoteConfig: RemoteConfigRepository): AdEngine = AdEngine(remoteConfig)
+    fun provideAdEngine(remoteConfig: RemoteConfigRepository, premiumGate: PremiumGate): AdEngine =
+        AdEngine(remoteConfig, premiumGate)
 }

@@ -261,6 +261,7 @@ fun BrandButton(
     modifier: Modifier = Modifier,
     icon: @Composable (() -> Unit)? = null,
     small: Boolean = false,
+    enabled: Boolean = true,
 ) {
     val shimmer = rememberInfiniteTransition(label = "btnShimmer")
     val shimmerX by shimmer.animateFloat(
@@ -271,17 +272,21 @@ fun BrandButton(
         modifier = modifier
             .clip(RoundedCornerShape(100.dp))
             .background(
-                Brush.linearGradient(
-                    colorStops = arrayOf(
-                        0f to BrandDeep,
-                        0.4f to Brand,
-                        shimmerX to Brand2.copy(alpha = 0.9f),
-                        1f to Brand,
+                if (enabled) {
+                    Brush.linearGradient(
+                        colorStops = arrayOf(
+                            0f to BrandDeep,
+                            0.4f to Brand,
+                            shimmerX to Brand2.copy(alpha = 0.9f),
+                            1f to Brand,
+                        )
                     )
-                )
+                } else {
+                    Brush.linearGradient(listOf(GlassMd, GlassMd))
+                }
             )
-            .border(1.dp, Brand2.copy(.4f), RoundedCornerShape(100.dp))
-            .clickable(onClick = onClick)
+            .border(1.dp, if (enabled) Brand2.copy(.4f) else GlassBorderMd, RoundedCornerShape(100.dp))
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(
                 horizontal = if (small) 16.dp else 24.dp,
                 vertical   = if (small) 10.dp else 14.dp,
@@ -294,7 +299,7 @@ fun BrandButton(
             Text(
                 text,
                 style = MaterialTheme.typography.labelLarge.copy(
-                    color      = Color.White,
+                    color      = if (enabled) Color.White else White40,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize   = if (small) 12.sp else 14.sp,
                     letterSpacing = 0.3.sp,
@@ -835,5 +840,82 @@ fun AdBannerPlaceholder(modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         Text("Advertisement", color = White20, fontSize = 10.sp, letterSpacing = 2.sp)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "Remove ads — go Premium" feed banner
+//
+// A real, visible entry point to the ad-free upsell on the feeds people spend
+// the most time in (Browse, Shorts) — previously the only path to Premium was
+// the Profile tab card or stumbling onto a download/resolution lock. Dismissed
+// per-session (not persisted) so it isn't a permanent nag on every app open,
+// but also never disappears forever after one tap of the X.
+//
+// Callers are expected to gate this with AdEngine.shouldShowRemoveAdsBanner()
+// before placing it in a feed — never shown to premium users or when ads are
+// globally off in config, since the pitch would be pointless either way.
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun RemoveAdsBanner(
+    onUpgrade: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shimmer = rememberInfiniteTransition(label = "removeAdsShimmer")
+    val shimmerX by shimmer.animateFloat(
+        0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "rax"
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.linearGradient(
+                    colorStops = arrayOf(
+                        0f            to BrandDeep,
+                        0.45f         to Brand.copy(alpha = 0.9f),
+                        shimmerX      to Brand2.copy(alpha = 0.55f),
+                        1f            to BrandDeep,
+                    )
+                )
+            )
+            .border(1.dp, Brand2.copy(.35f), RoundedCornerShape(16.dp))
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Upgrade tap target — sparkle + copy, its own explicit clickable area
+        // rather than an ambient click on the whole row, so the dismiss button
+        // below is an unambiguous sibling target, never a "carve-out" inside it.
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onUpgrade() }
+                .padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("✦", fontSize = 18.sp)
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(
+                    "Remove ads",
+                    color      = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize   = 14.sp,
+                )
+                Text(
+                    "Go Premium for an uninterrupted, ad-free experience",
+                    color    = Color.White.copy(alpha = 0.8f),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        IconButton(onClick = onDismiss, modifier = Modifier.padding(end = 8.dp).size(28.dp)) {
+            Icon(IconClose, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+        }
     }
 }
