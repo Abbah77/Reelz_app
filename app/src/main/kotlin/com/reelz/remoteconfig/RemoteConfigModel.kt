@@ -16,6 +16,15 @@ data class RemoteConfig(
     val shorts: ShortsConfig                                    = ShortsConfig(),
     val tiers: TiersConfig                                      = TiersConfig(),
     val premium: PremiumConfig                                  = PremiumConfig(),
+    val backend: BackendConfig                                  = BackendConfig(),
+)
+
+/**
+ * Backend connection config — comes from config.json, never hardcoded in the app.
+ * The app reads only backend_url from here; all secrets live server-side only.
+ */
+data class BackendConfig(
+    @SerializedName("backend_url") val backendUrl: String = "",
 )
 
 data class MetaConfig(

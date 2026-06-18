@@ -35,6 +35,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.reelz.ads.ReelzBrowserSheet
+import com.reelz.data.repository.PaymentRepository
 import com.reelz.data.repository.UserSessionRepository
 import com.reelz.remoteconfig.PremiumConfig
 import com.reelz.remoteconfig.PremiumGate
@@ -78,6 +79,7 @@ class PremiumViewModel @Inject constructor(
     private val remoteConfig: RemoteConfigRepository,
     private val premiumGate: PremiumGate,
     private val userSessionRepository: UserSessionRepository,
+    private val paymentRepository: PaymentRepository,
 ) : ViewModel() {
 
     data class UiState(
@@ -90,6 +92,10 @@ class PremiumViewModel @Inject constructor(
         val refreshMessage: String? = null,
         /** Non-null while the Paystack checkout sheet (ReelzBrowserSheet) is open. */
         val checkoutUrl: String? = null,
+        /** True while waiting for /payments/init to return the checkout URL. */
+        val isInitiatingPayment: Boolean = false,
+        /** True if backend_url is set in config — enables server-side payment init. */
+        val backendConfigured: Boolean = false,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -99,9 +105,10 @@ class PremiumViewModel @Inject constructor(
         val tiers = remoteConfig.tiersConfig()
         _ui.update {
             it.copy(
-                freeTier      = tiers.free,
-                premiumTier   = tiers.premium,
-                premiumConfig = remoteConfig.premiumConfig(),
+                freeTier          = tiers.free,
+                premiumTier       = tiers.premium,
+                premiumConfig     = remoteConfig.premiumConfig(),
+                backendConfigured = remoteConfig.backendConfig().backendUrl.isNotBlank(),
             )
         }
         viewModelScope.launch {
@@ -112,9 +119,74 @@ class PremiumViewModel @Inject constructor(
     }
 
     /**
-     * "I've paid — refresh my status." Re-checks manual_grants for the signed-in
-     * email. Works the moment you add their row to reelz_config.json on GitHub —
-     * no app update needed, since config refreshes independently of app version.
+     * Starts a payment for [plan] ("monthly" | "yearly").
+     *
+     * Flow:
+     *  1. Call POST /payments/init on the backend → get a one-time Paystack
+     *     authorization_url that carries the user's UUID in metadata.
+     *  2. On success: open that URL in the in-app browser sheet.
+     *  3. On failure (backend unreachable): fall back to the static Paystack
+     *     payment page URL from config — user can still pay, webhook still fires.
+     *  4. If no URL at all: show an error message.
+     *
+     * The static URLs in config.json are kept as a safety net.
+     * The webhook is still the source of truth regardless of which URL was opened.
+     */
+    fun initCheckout(plan: String) {
+        viewModelScope.launch {
+            _ui.update { it.copy(isInitiatingPayment = true, refreshMessage = null) }
+
+            val result = paymentRepository.initPayment(plan)
+
+            when (result) {
+                is PaymentRepository.InitResult.Success -> {
+                    _ui.update {
+                        it.copy(
+                            isInitiatingPayment = false,
+                            checkoutUrl         = result.authorizationUrl,
+                        )
+                    }
+                }
+                is PaymentRepository.InitResult.FallbackToStaticLink -> {
+                    // Backend unreachable — use the static link from config so the
+                    // user is never blocked from paying.
+                    val staticUrl = when (plan) {
+                        "yearly"  -> remoteConfig.premiumConfig().paystackYearlyUrl
+                        else      -> remoteConfig.premiumConfig().paystackMonthlyUrl
+                    }
+                    if (staticUrl.isNotBlank()) {
+                        _ui.update {
+                            it.copy(
+                                isInitiatingPayment = false,
+                                checkoutUrl         = staticUrl,
+                                refreshMessage      = "Using direct payment link. After paying, tap \"I've already paid — refresh status\".",
+                            )
+                        }
+                    } else {
+                        _ui.update {
+                            it.copy(
+                                isInitiatingPayment = false,
+                                refreshMessage      = "Payment unavailable right now. Please try again later.",
+                            )
+                        }
+                    }
+                }
+                is PaymentRepository.InitResult.Error -> {
+                    _ui.update {
+                        it.copy(
+                            isInitiatingPayment = false,
+                            refreshMessage      = result.message,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * "I've paid — refresh my status."
+     * Hits the backend (or config grants fallback) to confirm the subscription.
+     * BackendSessionSource handles the 24 h cache internally.
      */
     fun refreshStatus() {
         viewModelScope.launch {
@@ -123,16 +195,15 @@ class PremiumViewModel @Inject constructor(
             val became = premiumGate.isPremium()
             _ui.update {
                 it.copy(
-                    isRefreshing    = false,
-                    refreshMessage  = if (became) "You're premium! Enjoy 🎬" else "Not active yet — give it a few minutes after paying, then try again.",
+                    isRefreshing   = false,
+                    refreshMessage = if (became) "You're premium! Enjoy 🎬"
+                                     else "Not active yet — give it a few minutes after paying, then try again.",
                 )
             }
         }
     }
 
     fun dismissMessage() { _ui.update { it.copy(refreshMessage = null) } }
-
-    /** Opens the Paystack payment link for the tapped plan in the in-app browser sheet. */
     fun openCheckout(url: String) { _ui.update { it.copy(checkoutUrl = url) } }
     fun dismissCheckout() { _ui.update { it.copy(checkoutUrl = null) } }
 }
@@ -239,7 +310,8 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                         else -> {
                             val monthlyUrl = ui.premiumConfig.paystackMonthlyUrl
                             val yearlyUrl  = ui.premiumConfig.paystackYearlyUrl
-                            val anyConfigured = monthlyUrl.isNotBlank() || yearlyUrl.isNotBlank()
+                            // Show buttons if either static fallback URL exists OR the backend is configured
+                            val anyConfigured = monthlyUrl.isNotBlank() || yearlyUrl.isNotBlank() || ui.backendConfigured
 
                             if (anyConfigured) {
                                 Row(
@@ -247,16 +319,18 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 ) {
                                     PaystackSubscribeButton(
-                                        label    = "Monthly",
-                                        url      = monthlyUrl,
-                                        modifier = Modifier.weight(1f),
-                                        onCheckout = { checkoutUrl -> vm.openCheckout(checkoutUrl) },
+                                        label      = "Monthly",
+                                        enabled    = !ui.isInitiatingPayment,
+                                        isLoading  = ui.isInitiatingPayment,
+                                        modifier   = Modifier.weight(1f),
+                                        onClick    = { vm.initCheckout("monthly") },
                                     )
                                     PaystackSubscribeButton(
-                                        label    = "Yearly",
-                                        url      = yearlyUrl,
-                                        modifier = Modifier.weight(1f),
-                                        onCheckout = { checkoutUrl -> vm.openCheckout(checkoutUrl) },
+                                        label      = "Yearly",
+                                        enabled    = !ui.isInitiatingPayment,
+                                        isLoading  = false,
+                                        modifier   = Modifier.weight(1f),
+                                        onClick    = { vm.initCheckout("yearly") },
                                     )
                                 }
                                 Spacer(Modifier.height(12.dp))
@@ -265,7 +339,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                                     color = White40, fontSize = 11.sp, textAlign = TextAlign.Center,
                                 )
                             } else {
-                                // No payment link configured yet — never show a dead/broken button.
+                                // No payment link or backend configured yet
                                 BrandButton(
                                     text     = "Subscriptions opening soon",
                                     modifier = Modifier.fillMaxWidth(),
@@ -316,29 +390,34 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
 }
 
 /**
- * One plan's subscribe button. Disabled (not hidden) when its Paystack URL is
- * blank, so a half-configured `premium` config never silently drops a plan —
- * the person can still see Monthly/Yearly exist, just not purchasable yet.
+ * One plan's subscribe button.
+ * Calls [onClick] when tapped — the ViewModel handles the /payments/init call.
+ * Shows a spinner while [isLoading] is true (waiting for backend response).
  */
 @Composable
 private fun PaystackSubscribeButton(
     label: String,
-    url: String,
+    enabled: Boolean,
+    isLoading: Boolean,
     modifier: Modifier = Modifier,
-    onCheckout: (String) -> Unit,
+    onClick: () -> Unit,
 ) {
     OutlinedButton(
-        onClick  = { if (url.isNotBlank()) onCheckout(url) },
-        enabled  = url.isNotBlank(),
+        onClick  = onClick,
+        enabled  = enabled,
         modifier = modifier.height(48.dp),
         shape    = RoundedCornerShape(100.dp),
-        border   = BorderStroke(1.dp, if (url.isNotBlank()) Brand.copy(.5f) else GlassBorderMd),
+        border   = BorderStroke(1.dp, if (enabled) Brand.copy(.5f) else GlassBorderMd),
         colors   = ButtonDefaults.outlinedButtonColors(
-            contentColor         = if (url.isNotBlank()) Brand2 else White40,
+            contentColor         = if (enabled) Brand2 else White40,
             disabledContentColor = White40,
         ),
     ) {
-        Text(label, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        if (isLoading) {
+            CircularProgressIndicator(Modifier.size(14.dp), color = Brand2, strokeWidth = 2.dp)
+        } else {
+            Text(label, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        }
     }
 }
 

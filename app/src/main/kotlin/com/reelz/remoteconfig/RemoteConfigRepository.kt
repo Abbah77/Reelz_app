@@ -164,6 +164,7 @@ class RemoteConfigRepository @Inject constructor(
 
     fun tiersConfig(): TiersConfig    = _config.value?.tiers ?: TiersConfig()
     fun premiumConfig(): PremiumConfig = _config.value?.premium ?: PremiumConfig()
+    fun backendConfig(): BackendConfig = _config.value?.backend ?: BackendConfig()
 
     /**
      * Master switch: the ads block, the legacy feature flag, AND premium status must

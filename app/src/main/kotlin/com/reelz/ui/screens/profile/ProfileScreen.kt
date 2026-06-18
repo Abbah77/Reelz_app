@@ -184,9 +184,9 @@ class ProfileViewModel @Inject constructor(
 
     fun setTab(i: Int) { _ui.update { it.copy(activeTab = i) } }
 
-    fun onSignIn(name: String, email: String, photoUrl: String?) {
+    fun onSignIn(idToken: String?, name: String, email: String, photoUrl: String?) {
         _ui.update { it.copy(profile = UserProfile(name, email, photoUrl, true)) }
-        viewModelScope.launch { userSessionRepository.onSignedIn(name, email, photoUrl) }
+        viewModelScope.launch { userSessionRepository.onSignedIn(idToken, name, email, photoUrl) }
     }
 
     fun signOut() {
@@ -295,7 +295,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             color = White60, fontSize = 12.sp, textAlign = TextAlign.Center, lineHeight = 18.sp,
                         )
                         Spacer(Modifier.height(16.dp))
-                        GoogleSignInButton(ctx = ctx) { name, email, photo -> vm.onSignIn(name, email, photo) }
+                        GoogleSignInButton(ctx = ctx) { idToken, name, email, photo -> vm.onSignIn(idToken, name, email, photo) }
                     }
                 }
             }
@@ -419,7 +419,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
 }
 
 @Composable
-fun GoogleSignInButton(ctx: Context, onSignedIn: (String, String, String?) -> Unit) {
+fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, String?) -> Unit) {
     val scope = rememberCoroutineScope()
     val activity = ctx as? android.app.Activity
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -444,9 +444,11 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String, String, String?) -> Un
                             val credential = result.credential
                             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                                 val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
-                                android.util.Log.d("ReelzAuth", "signed in as: id=${googleCred.id} name=${googleCred.displayName} email=${googleCred.id}")
+                                // idToken is now threaded through to the backend for server-side verification
+                                val idToken = googleCred.idToken
+                                android.util.Log.d("ReelzAuth", "signed in as: id=${googleCred.id} name=${googleCred.displayName} hasToken=${idToken.isNotBlank()}")
                                 withContext(Dispatchers.Main) {
-                                    onSignedIn(googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString())
+                                    onSignedIn(idToken, googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString())
                                 }
                             } else {
                                 withContext(Dispatchers.Main) {

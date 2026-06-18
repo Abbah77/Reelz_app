@@ -7,8 +7,11 @@ import com.reelz.data.local.*
 import com.reelz.data.remote.api.TmdbApi
 import com.reelz.data.remote.api.OpenSubtitlesApi
 import com.reelz.data.repository.MediaRepository
+import com.reelz.data.repository.BackendAuthRepository
+import com.reelz.data.repository.BackendSessionSource
 import com.reelz.data.repository.ManualGrantSessionSource
 import com.reelz.data.repository.OpenSubtitlesRepository
+import com.reelz.data.repository.PaymentRepository
 import com.reelz.data.repository.SessionSource
 import com.reelz.data.repository.UserSessionRepository
 import com.reelz.remoteconfig.PremiumGate
@@ -179,20 +182,36 @@ object AppModule {
     // ── Premium session ───────────────────────────────────────────────────────
 
     /**
-     * Today: reads manual_grants from the config JSON, no backend needed.
-     * Swap this single provider for a Firebase-backed SessionSource once
-     * google-services.json + a Paystack webhook backend exist — nothing else
-     * in the app (PremiumGate, UserSessionRepository, any UI) needs to change.
+     * Production: BackendSessionSource — talks to the FastAPI backend on Render.
+     * Falls back to local cache (24 h TTL). If backend is unreachable, returns
+     * null and PremiumGate defaults to FREE (Rule 6: fail safe).
+     *
+     * To revert to the no-backend flow during development, swap this for:
+     *   ManualGrantSessionSource(remoteConfig)
      */
     @Provides @Singleton
-    fun provideSessionSource(remoteConfig: RemoteConfigRepository): SessionSource =
-        ManualGrantSessionSource(remoteConfig)
+    fun provideSessionSource(
+        remoteConfig: RemoteConfigRepository,
+        store: UserSessionStore,
+    ): SessionSource = BackendSessionSource(remoteConfig, store)
+
+    @Provides @Singleton
+    fun provideBackendAuthRepository(
+        remoteConfig: RemoteConfigRepository,
+    ): BackendAuthRepository = BackendAuthRepository(remoteConfig)
 
     @Provides @Singleton
     fun provideUserSessionRepository(
         store: UserSessionStore,
         dao: UserSessionDao,
         sessionSource: SessionSource,
+        backendAuth: BackendAuthRepository,
         premiumGate: PremiumGate,
-    ): UserSessionRepository = UserSessionRepository(store, dao, sessionSource, premiumGate)
+    ): UserSessionRepository = UserSessionRepository(store, dao, sessionSource, backendAuth, premiumGate)
+
+    @Provides @Singleton
+    fun providePaymentRepository(
+        remoteConfig: RemoteConfigRepository,
+        store: UserSessionStore,
+    ): PaymentRepository = PaymentRepository(remoteConfig, store)
 }
