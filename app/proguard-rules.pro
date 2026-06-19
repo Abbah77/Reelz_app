@@ -27,11 +27,11 @@
 
 # ── Gson / data models ────────────────────────────────────────────────────────
 -keep class com.google.gson.** { *; }
--keep class com.reelz.data.model.** { *; }
--keep class com.reelz.data.remote.dto.** { *; }
+-keep class com.axio.reelz.data.model.** { *; }
+-keep class com.axio.reelz.data.remote.dto.** { *; }
 # Remote config models parsed by Gson - must not be obfuscated
--keep class com.reelz.remoteconfig.** { *; }
--keepclassmembers class com.reelz.remoteconfig.** { *; }
+-keep class com.axio.reelz.remoteconfig.** { *; }
+-keepclassmembers class com.axio.reelz.remoteconfig.** { *; }
 -keepclassmembers class * {
     @com.google.gson.annotations.SerializedName <fields>;
 }
@@ -49,7 +49,7 @@
 -keep class androidx.credentials.** { *; }
 
 # ── Native JNI ────────────────────────────────────────────────────────────────
--keep class com.reelz.scanner.NativeBridge { *; }
+-keep class com.axio.reelz.scanner.NativeBridge { *; }
 -keepclasseswithmembernames class * { native <methods>; }
 
 # ── WebView JS interfaces ─────────────────────────────────────────────────────

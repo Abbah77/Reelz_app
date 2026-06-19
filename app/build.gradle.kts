@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace   = "com.reelz"
+    namespace   = "com.axio.reelz"
     compileSdk  = 35
 
     defaultConfig {
-        applicationId  = "com.reelz"
+        applicationId  = "com.axio.reelz"
         minSdk         = 26
         targetSdk      = 35
         versionCode    = 2
