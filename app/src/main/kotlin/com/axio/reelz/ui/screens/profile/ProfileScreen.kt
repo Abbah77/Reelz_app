@@ -438,7 +438,7 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
                     errorMsg = null
                     scope.launch {
                         val credManager = CredentialManager.create(ctx)
-                        val webClientId = "179017454626-db23ivhrbgn25pe41s4jeuo8293o2mds.apps.googleusercontent.com"
+                        val webClientId = "52667585435-dak9bl4krql0qdgv6he8p037u1se06lj.apps.googleusercontent.com"
 
                         suspend fun handleCredentialResult(result: GetCredentialResponse) {
                             val credential = result.credential

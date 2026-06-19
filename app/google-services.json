@@ -1,41 +1,41 @@
 {
   "project_info": {
-    "project_number": "179017454626",
-    "project_id": "reelz-498913",
-    "storage_bucket": "reelz-498913.firebasestorage.app"
+    "project_number": "52667585435",
+    "project_id": "reelz-499822",
+    "storage_bucket": "reelz-499822.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:179017454626:android:bb81b53d31e8c9bad4267b",
+        "mobilesdk_app_id": "1:52667585435:android:a8954cca5b06dd9eea073e",
         "android_client_info": {
-          "package_name": "com.reelz"
+          "package_name": "com.axio.reelz"
         }
       },
       "oauth_client": [
         {
-          "client_id": "179017454626-t0ihenbv0d4e21nrghled10tmf5qki94.apps.googleusercontent.com",
+          "client_id": "52667585435-96e0n70aq0de4j47m5jgm66g4ufvih85.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.reelz",
+            "package_name": "com.axio.reelz",
             "certificate_hash": "a8e5c592268b3406eb00cda00bc13b718a579470"
           }
         },
         {
-          "client_id": "179017454626-db23ivhrbgn25pe41s4jeuo8293o2mds.apps.googleusercontent.com",
+          "client_id": "52667585435-dak9bl4krql0qdgv6he8p037u1se06lj.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyDp34Et-PdL4Jt7St_PwXRvIITYewmG8zQ"
+          "current_key": "AIzaSyD5hheEW8UkMXHPJX2b0XiGnkveuNHk2SM"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "179017454626-db23ivhrbgn25pe41s4jeuo8293o2mds.apps.googleusercontent.com",
+              "client_id": "52667585435-dak9bl4krql0qdgv6he8p037u1se06lj.apps.googleusercontent.com",
               "client_type": 3
             }
           ]

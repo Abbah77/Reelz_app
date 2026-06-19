@@ -45,7 +45,7 @@ static std::string subtitlesToString(const HlsPlaylist& pl) {
 // ─── Existing JNI functions ────────────────────────────────────────────────────
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_reelz_scanner_NativeBridge_parseBestVariantUrl(
+Java_com_axio_reelz_scanner_NativeBridge_parseBestVariantUrl(
     JNIEnv* env, jobject, jstring content, jstring baseUrl)
 {
     const char* c = env->GetStringUTFChars(content, nullptr);
@@ -59,7 +59,7 @@ Java_com_reelz_scanner_NativeBridge_parseBestVariantUrl(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_reelz_scanner_NativeBridge_parseSegmentUrls(
+Java_com_axio_reelz_scanner_NativeBridge_parseSegmentUrls(
     JNIEnv* env, jobject, jstring content, jstring baseUrl)
 {
     const char* c = env->GetStringUTFChars(content, nullptr);
@@ -72,7 +72,7 @@ Java_com_reelz_scanner_NativeBridge_parseSegmentUrls(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_reelz_scanner_NativeBridge_parseVariants(
+Java_com_axio_reelz_scanner_NativeBridge_parseVariants(
     JNIEnv* env, jobject, jstring content, jstring baseUrl)
 {
     const char* c = env->GetStringUTFChars(content, nullptr);
@@ -85,7 +85,7 @@ Java_com_reelz_scanner_NativeBridge_parseVariants(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_reelz_scanner_NativeBridge_parseSubtitles(
+Java_com_axio_reelz_scanner_NativeBridge_parseSubtitles(
     JNIEnv* env, jobject, jstring content, jstring baseUrl)
 {
     const char* c = env->GetStringUTFChars(content, nullptr);
@@ -98,7 +98,7 @@ Java_com_reelz_scanner_NativeBridge_parseSubtitles(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_reelz_scanner_NativeBridge_forgeHeaders(
+Java_com_axio_reelz_scanner_NativeBridge_forgeHeaders(
     JNIEnv* env, jobject, jstring referer, jstring origin, jboolean mobile, jboolean isXhr)
 {
     const char* r = env->GetStringUTFChars(referer, nullptr);
@@ -112,7 +112,7 @@ Java_com_reelz_scanner_NativeBridge_forgeHeaders(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_reelz_scanner_NativeBridge_getUserAgent(
+Java_com_axio_reelz_scanner_NativeBridge_getUserAgent(
     JNIEnv* env, jobject, jboolean mobile)
 {
     // buildUserAgent is the actual function name in header_forge.h
@@ -125,7 +125,7 @@ Java_com_reelz_scanner_NativeBridge_getUserAgent(
 // The JNI entry point is wired so Kotlin can call it without future app changes.
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_reelz_scanner_NativeBridge_nativeDecryptAES128(
+Java_com_axio_reelz_scanner_NativeBridge_nativeDecryptAES128(
     JNIEnv* env, jobject,
     jbyteArray keyArr, jbyteArray ivArr, jbyteArray dataArr)
 {
@@ -143,7 +143,7 @@ Java_com_reelz_scanner_NativeBridge_nativeDecryptAES128(
 // Prevents corrupt segments from silently breaking the merge step.
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_reelz_scanner_NativeBridge_nativeValidateTsSync(
+Java_com_axio_reelz_scanner_NativeBridge_nativeValidateTsSync(
     JNIEnv* env, jobject, jbyteArray dataArr)
 {
     jsize len = env->GetArrayLength(dataArr);
