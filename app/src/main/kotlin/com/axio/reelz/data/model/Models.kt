@@ -98,9 +98,9 @@ data class ShortVideo(
     val id: String,
     val title: String,
     val author: String,
-    val subreddit: String,
-    val hlsUrl: String,
-    val audioUrl: String?,
+    val community: String,       // was: subreddit
+    val hlsUrl: String,          // mp4 direct url for ifunny
+    val audioUrl: String?,       // null for ifunny (audio baked in)
     val fallbackUrl: String,
     val thumbnail: String,
     val ups: Int,
@@ -187,6 +187,15 @@ data class LikedItem(
     val posterPath: String?,
     val mediaType: String,
     val likedAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(tableName = "saved_videos")
+data class SavedVideoItem(
+    @PrimaryKey val tmdbId: Int,
+    val title: String,
+    val posterPath: String?,
+    val mediaType: String,
+    val savedAt: Long = System.currentTimeMillis(),
 )
 
 @Entity(tableName = "cached_media")

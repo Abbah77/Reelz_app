@@ -64,23 +64,6 @@ private val IconArrowLeft  get() = com.axio.reelz.ui.components.IconSearch.let {
     }.build()
 }
 
-private val IconHeartFill get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("HeartFill", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(20.84f, 4.61f); arcTo(5.5f, 5.5f, 0f, false, false, 12f, 8.5f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 3.16f, 4.61f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 20f); arcTo(5.5f, 5.5f, 0f, false, false, 20.84f, 4.61f); close()
-    }, fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(0xFFFF3D6E)))
-}.build()
-
-private val IconHeartOutline get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("HeartOut", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(20.84f, 4.61f); arcTo(5.5f, 5.5f, 0f, false, false, 12f, 8.5f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 3.16f, 4.61f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 20f); arcTo(5.5f, 5.5f, 0f, false, false, 20.84f, 4.61f); close()
-    }, stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.White),
-       strokeLineWidth = 1.7f, fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Transparent))
-}.build()
-
 private val IconBookmarkFill get() = androidx.compose.ui.graphics.vector.ImageVector.Builder("BookFill", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData { moveTo(5f, 3f); lineTo(19f, 3f); lineTo(19f, 21f); lineTo(12f, 16f); lineTo(5f, 21f); close() },
         fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(0xFFE8A020)))
@@ -149,7 +132,6 @@ class DetailViewModel @Inject constructor(
         val episodes: List<Episode> = emptyList(),
         val selectedSeason: Int = 1,
         val isInWatchlist: Boolean = false,
-        val isLiked: Boolean = false,
         val isEpisodesLoading: Boolean = false,
         // Download sheet state
         val showDownloadSheet: Boolean = false,
@@ -211,7 +193,6 @@ class DetailViewModel @Inject constructor(
             try {
                 // Stage 1 — fast fetch (no append_to_response). Screen appears immediately.
                 val inWatchlist = repo.isInWatchlist(tmdbId)
-                val liked       = repo.isLiked(tmdbId)
                 val detail      = repo.getDetailFast(tmdbId, mediaType)
                 currentMedia = Media(
                     id = detail.tmdbId, tmdbId = detail.tmdbId, title = detail.title,
@@ -226,7 +207,6 @@ class DetailViewModel @Inject constructor(
                     extrasLoading = true,
                     detail        = detail,
                     isInWatchlist = inWatchlist,
-                    isLiked       = liked,
                 ) }
 
                 if (mediaType == MediaType.TV && detail.seasons.isNotEmpty()) {
@@ -301,14 +281,6 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             val now = repo.toggleWatchlist(m)
             _ui.update { it.copy(isInWatchlist = now) }
-        }
-    }
-
-    fun toggleLike() {
-        val m = currentMedia ?: return
-        viewModelScope.launch {
-            val now = repo.toggleLike(m)
-            _ui.update { it.copy(isLiked = now) }
         }
     }
 
@@ -610,7 +582,6 @@ fun DetailScreen(
                 onPlayEpisode  = { s, e, name -> launchPlayer(s, e, name) },
                 onSeasonSelect = { vm.selectSeason(tmdbId, it) },
                 onWatchlist    = { vm.toggleWatchlist() },
-                onLike         = { vm.toggleLike() },
                 onSimilarClick = { id, type -> nav.navigate(com.axio.reelz.ui.Route.Detail.go(id, type)) },
                 onDownloadMovie = {
                     vm.openDownloadSheet(tmdbId, mediaType)
@@ -1090,7 +1061,6 @@ private fun DetailContent(
     onPlayEpisode: (Int, Int, String) -> Unit,
     onSeasonSelect: (Int) -> Unit,
     onWatchlist: () -> Unit,
-    onLike: () -> Unit,
     onSimilarClick: (Int, MediaType) -> Unit,
     onDownloadMovie: () -> Unit,
     onDownloadEpisode: (Int, Int, String) -> Unit,
@@ -1190,20 +1160,6 @@ private fun DetailContent(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(if (ui.isInWatchlist) "Saved" else "Save", color = if (ui.isInWatchlist) Brand else White60)
-                }
-                // Like button
-                OutlinedButton(
-                    onClick = onLike,
-                    shape   = RoundedCornerShape(100.dp),
-                    border  = BorderStroke(1.dp, if (ui.isLiked) Like else GlassBorderMd),
-                    modifier = Modifier.height(48.dp),
-                ) {
-                    Icon(
-                        if (ui.isLiked) IconHeartFill else IconHeartOutline,
-                        null,
-                        tint = if (ui.isLiked) Like else White60,
-                        modifier = Modifier.size(18.dp),
-                    )
                 }
             }
         }

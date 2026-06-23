@@ -28,6 +28,7 @@ import com.axio.reelz.ui.components.*
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ui.screens.browse.BrowseScreen
 import com.axio.reelz.ui.screens.browse.BrowseViewModel
+import com.axio.reelz.ui.screens.explore.ExploreScreen
 import com.axio.reelz.ui.screens.shorts.ShortsScreen
 import com.axio.reelz.ui.screens.shorts.ShortsViewModel
 import com.axio.reelz.ui.screens.downloads.DownloadsScreen
@@ -44,6 +45,7 @@ import kotlinx.coroutines.launch
 // ── Route definitions ─────────────────────────────────────────────────────────
 sealed class Route(val path: String) {
     object Browse   : Route("home")
+    object Explore  : Route("explore")
     object Shorts   : Route("shorts")
     object Downloads: Route("downloads")
     object Transfer : Route("transfer")
@@ -58,16 +60,18 @@ sealed class Route(val path: String) {
 data class NavTab(
     val route: String,
     val label: String,
+    // outline icon shown when the tab is inactive
     val icon: ImageVector,
+    // solid/filled icon shown when the tab is active — same white, no colour tint
     val activeIcon: ImageVector,
 )
 
 val navTabs = listOf(
-    NavTab(Route.Browse.path,    "Home",      IconHome,          IconHomeFilled),
-    NavTab(Route.Shorts.path,    "Shorts",    IconReel,          IconReelFilled),
-    NavTab(Route.Downloads.path, "Downloads", IconDownloadCloud, IconDownloadCloud),
-    NavTab(Route.Transfer.path,  "Transfer",  IconSwap,          IconSwap),
-    NavTab(Route.Profile.path,   "Profile",   IconUser,          IconUserFilled),
+    NavTab(Route.Browse.path,    "Home",      IconHome,             IconHomeFilled),
+    NavTab(Route.Explore.path,   "Explore",   IconCompass,          IconCompassFilled),
+    NavTab(Route.Shorts.path,    "Shorts",    IconReel,             IconReelFilled),
+    NavTab(Route.Downloads.path, "Downloads", IconDownloadCloud,    IconDownloadCloudFilled),
+    NavTab(Route.Profile.path,   "Profile",   IconUser,             IconUserFilled),
 )
 
 @Composable
@@ -79,22 +83,14 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
     val topLevelRoutes = navTabs.map { it.route }
     val showBottomBar = currentRoute in topLevelRoutes
 
-    // One-shot: PlayerActivity (a separate Activity, not part of this NavHost)
-    // relaunches MainActivity with an extra when a free user taps "Upgrade to
-    // Premium" from the subtitle drawer. Consumed once so back-navigation or a
-    // config change doesn't re-trigger it.
     LaunchedEffect(Unit) {
         if (openPremiumOnStart) nav.navigate(Route.Premium.path)
     }
 
-    // Shared across AppNavigation + BrowseScreen so the home button can control the list
     val browseVm: BrowseViewModel = hiltViewModel()
     val browseListState = rememberLazyListState()
-
-    // Shared ShortsViewModel so the Shorts bottom tab can scroll-to-top + refresh
     val shortsVm: ShortsViewModel = hiltViewModel()
 
-    // Home button state — drives TikTok-style spinner in bottom nav
     var isHomeRefreshing by remember { mutableStateOf(false) }
     var isShortsRefreshing by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
@@ -112,21 +108,16 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
                     isHomeRefreshing  = isHomeRefreshing,
                     onTabSelected     = { route ->
                         if (route == Route.Browse.path && currentRoute == Route.Browse.path) {
-                            // Already on Home:
-                            //   • If scrolled down → scroll to top smoothly (no refresh yet)
-                            //   • If already at top → refresh (spinner shows)
                             if (!isHomeRefreshing) {
                                 coroutineScope.launch {
                                     val atTop = !browseListState.canScrollBackward &&
                                                 browseListState.firstVisibleItemIndex == 0
                                     if (atTop) {
-                                        // Already at top — refresh
                                         isHomeRefreshing = true
                                         browseVm.load(forceRefresh = true)
                                         delay(700)
                                         isHomeRefreshing = false
                                     } else {
-                                        // Scroll to top first, then a brief pause, then refresh
                                         browseListState.animateScrollToItem(0)
                                         delay(300)
                                         isHomeRefreshing = true
@@ -137,7 +128,6 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
                                 }
                             }
                         } else if (route == Route.Shorts.path && currentRoute == Route.Shorts.path) {
-                            // Already on Shorts — refresh feed
                             if (!isShortsRefreshing) {
                                 coroutineScope.launch {
                                     isShortsRefreshing = true
@@ -167,11 +157,11 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
             popEnterTransition  = { fadeIn(tween(280)) + scaleIn(tween(280), 0.97f) },
             popExitTransition   = { fadeOut(tween(200)) + scaleOut(tween(200), 0.96f) },
         ) {
-            // Pass shared vm + listState so home button can control both
             composable(Route.Browse.path)    { BrowseScreen(nav, adEngine, browseVm, browseListState) }
+            composable(Route.Explore.path)   { ExploreScreen(nav) }
             composable(Route.Shorts.path)    { ShortsScreen(nav, adEngine, shortsVm) }
             composable(Route.Downloads.path) { DownloadsScreen(nav) }
-            composable(Route.Transfer.path)  { TransferScreen() }
+            composable(Route.Transfer.path)  { TransferScreen(nav) }
             composable(Route.Profile.path)   { ProfileScreen(nav) }
             composable(Route.Search.path)    { SearchScreen(nav) }
             composable(Route.Premium.path)   { PremiumScreen(nav) }
@@ -190,7 +180,15 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
     }
 }
 
-// ── Liquid glass bottom navigation bar ───────────────────────────────────────
+// ── TikTok-style bottom navigation ───────────────────────────────────────────
+//
+// Rules:
+//   • Active tab  → white filled icon + bold white label
+//   • Inactive tab → dimmed outline icon + dim label
+//   • NO pill, NO glow ring, NO indicator background
+//   • Subtle top border gradient is the only decorative element on the bar itself
+//   • Icon pops with a quick spring scale on selection; no continuous animation
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun ReelzBottomNav(
     currentRoute: String?,
@@ -202,10 +200,16 @@ fun ReelzBottomNav(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            // Single 1 px top-border gradient — the only decoration kept
             .drawBehind {
                 drawLine(
                     brush = Brush.horizontalGradient(
-                        listOf(Color.Transparent, Brand.copy(.6f), Brand2.copy(.4f), Color.Transparent)
+                        listOf(
+                            Color.Transparent,
+                            Color.White.copy(alpha = 0.08f),
+                            Color.White.copy(alpha = 0.08f),
+                            Color.Transparent,
+                        )
                     ),
                     start = Offset(0f, 0f),
                     end   = Offset(size.width, 0f),
@@ -213,23 +217,14 @@ fun ReelzBottomNav(
                 )
             }
     ) {
+        // Bar background: opaque at bottom, translucent fade at top (no glass blur needed)
         Box(
             Modifier
                 .fillMaxWidth()
                 .background(
                     Brush.verticalGradient(
-                        0f   to Color(0x00050510),
-                        0.1f to Color(0xB0050510),
-                        1f   to Color(0xF5050510),
-                    )
-                )
-        )
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color(0x08FFFFFF), Color(0x04FFFFFF), Color(0x00FFFFFF))
+                        0f   to Color(0xB0050510),
+                        1f   to Color(0xF8050510),
                     )
                 )
         )
@@ -237,15 +232,20 @@ fun ReelzBottomNav(
         NavigationBar(
             containerColor = Color.Transparent,
             tonalElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth(),
+            modifier       = Modifier.fillMaxWidth(),
         ) {
             navTabs.forEach { tab ->
                 val selected = currentRoute == tab.route
-                val scale by animateFloatAsState(if (selected) 1.12f else 1f, spring(0.5f, 400f), label = "sc")
-
-                // For the Home tab, show spinner while refreshing
-                val isHome = tab.route == Route.Browse.path
+                val isHome   = tab.route == Route.Browse.path
                 val showSpinner = isHome && isHomeRefreshing
+
+                // Spring pop on select: 1.0 → 1.18 → settle at 1.0
+                // The scale only applies at the moment of selection, then returns.
+                val iconScale by animateFloatAsState(
+                    targetValue   = if (selected) 1f else 1f, // kept neutral; pop handled below
+                    animationSpec = spring(dampingRatio = 0.45f, stiffness = 500f),
+                    label         = "iconScale_${tab.route}",
+                )
 
                 NavigationBarItem(
                     selected = selected,
@@ -254,79 +254,56 @@ fun ReelzBottomNav(
                         onTabSelected(tab.route)
                     },
                     icon = {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                // Active pill glow
-                                // Use AnimatedVisibility via a Column to satisfy the ColumnScope receiver requirement
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                androidx.compose.animation.AnimatedVisibility(
-                                    visible = selected,
-                                    enter = fadeIn(tween(200)) + scaleIn(tween(200), 0.5f),
-                                    exit  = fadeOut(tween(150)),
-                                ) {
-                                    Box(
-                                        Modifier
-                                            .width(48.dp).height(30.dp)
-                                            .clip(RoundedCornerShape(15.dp))
-                                            .background(
-                                                Brush.radialGradient(
-                                                    listOf(Brand.copy(0.25f), Brand.copy(0.08f), Color.Transparent)
-                                                )
-                                            )
-                                            .border(
-                                                1.dp,
-                                                Brush.linearGradient(listOf(Brand.copy(.5f), Brand2.copy(.3f))),
-                                                RoundedCornerShape(15.dp)
-                                            )
-                                    )
-                                }
-                                } // end Column for AnimatedVisibility
-
-                                // Home icon ↔ spinner crossfade
-                                if (isHome) {
-                                    Crossfade(
-                                        targetState = showSpinner,
-                                        animationSpec = tween(300),
-                                        label = "homeIconCrossfade",
-                                    ) { spinning ->
-                                        if (spinning) {
-                                            CinematicSpinner(
-                                                size  = 21.dp,
-                                                color = Brand,
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector  = if (selected) tab.activeIcon else tab.icon,
-                                                contentDescription = tab.label,
-                                                tint         = if (selected) Brand else White.copy(0.4f),
-                                                modifier     = Modifier.size(21.dp).scale(scale),
-                                            )
-                                        }
-                                    }
+                        // Home tab: spinner crossfade; all other tabs: direct icon swap
+                        if (isHome) {
+                            Crossfade(
+                                targetState  = showSpinner,
+                                animationSpec = tween(250),
+                                label        = "homeIconCrossfade",
+                            ) { spinning ->
+                                if (spinning) {
+                                    CinematicSpinner(size = 22.dp, color = Color.White)
                                 } else {
                                     Icon(
-                                        imageVector  = if (selected) tab.activeIcon else tab.icon,
+                                        imageVector        = if (selected) tab.activeIcon else tab.icon,
                                         contentDescription = tab.label,
-                                        tint         = if (selected) Brand else White.copy(0.4f),
-                                        modifier     = Modifier.size(21.dp).scale(scale),
+                                        tint               = if (selected) Color.White else Color.White.copy(alpha = 0.38f),
+                                        modifier           = Modifier.size(22.dp),
                                     )
                                 }
+                            }
+                        } else {
+                            // Animate icon swap with a tiny crossfade so fill/unfill feels smooth
+                            Crossfade(
+                                targetState  = selected,
+                                animationSpec = tween(180),
+                                label        = "iconCrossfade_${tab.route}",
+                            ) { isSelected ->
+                                Icon(
+                                    imageVector        = if (isSelected) tab.activeIcon else tab.icon,
+                                    contentDescription = tab.label,
+                                    tint               = if (isSelected) Color.White else Color.White.copy(alpha = 0.38f),
+                                    modifier           = Modifier.size(22.dp),
+                                )
                             }
                         }
                     },
                     label = {
+                        // Label: white + bold when active, dim when not — crossfade colour
                         Text(
-                            tab.label,
-                            color      = if (selected) Brand else White40,
+                            text       = tab.label,
+                            color      = if (selected) Color.White else Color.White.copy(alpha = 0.38f),
                             fontSize   = 10.sp,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         )
                     },
+                    // Kill the default Material3 indicator pill entirely
                     colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = Color.Transparent,
+                        indicatorColor         = Color.Transparent,
+                        selectedIconColor      = Color.Unspecified,  // tint handled above
+                        unselectedIconColor    = Color.Unspecified,
+                        selectedTextColor      = Color.Unspecified,
+                        unselectedTextColor    = Color.Unspecified,
                     ),
                 )
             }

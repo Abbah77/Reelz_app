@@ -37,6 +37,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.axio.reelz.BuildConfig
+import com.axio.reelz.data.local.WatchlistDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.ui.Route
@@ -62,6 +63,7 @@ sealed class FeedRow {
 @HiltViewModel
 class BrowseViewModel @Inject constructor(
     private val repo: MediaRepository,
+    private val watchlistDao: WatchlistDao,
 ) : ViewModel() {
 
     data class UiState(
@@ -80,6 +82,8 @@ class BrowseViewModel @Inject constructor(
         val continueWatching: List<WatchHistory> = emptyList(),
         val isLoadingMore: Boolean = false,
         val isCacheLoaded: Boolean = false,
+        // Set of tmdbIds currently in the watchlist — used by the hero banner button
+        val watchlistedIds: Set<Int> = emptySet(),
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -95,6 +99,31 @@ class BrowseViewModel @Inject constructor(
         viewModelScope.launch {
             repo.getHistory().collect { h ->
                 _ui.update { it.copy(continueWatching = h) }
+            }
+        }
+        // Keep watchlist set in sync so hero banner button reflects current state instantly
+        viewModelScope.launch {
+            watchlistDao.getAll().collect { list ->
+                _ui.update { it.copy(watchlistedIds = list.map { w -> w.tmdbId }.toSet()) }
+            }
+        }
+    }
+
+    /** Toggle a media item in/out of the watchlist from the hero banner. */
+    fun toggleHeroWatchlist(media: Media) {
+        viewModelScope.launch {
+            val existing = watchlistDao.get(media.tmdbId)
+            if (existing != null) {
+                watchlistDao.delete(media.tmdbId)
+            } else {
+                watchlistDao.insert(
+                    WatchlistItem(
+                        tmdbId    = media.tmdbId,
+                        title     = media.title,
+                        posterPath = media.posterPath,
+                        mediaType = media.mediaType.name,
+                    )
+                )
             }
         }
     }
@@ -461,7 +490,12 @@ fun BrowseScreen(
                     // ── Hero pager ────────────────────────────────────────────
                     if (ui.featured.isNotEmpty()) {
                         item(key = "hero") {
-                            HeroBannerPager(ui.featured, onClick = { goDetail(it.tmdbId, it.mediaType) })
+                            HeroBannerPager(
+                                items           = ui.featured,
+                                watchlistedIds  = ui.watchlistedIds,
+                                onWatchlist     = { vm.toggleHeroWatchlist(it) },
+                                onClick         = { goDetail(it.tmdbId, it.mediaType) },
+                            )
                         }
                     } else if (ui.isLoading) {
                         item(key = "heroBannerSkeleton") { SkeletonBannerLoader() }
@@ -1023,7 +1057,12 @@ fun LoadMoreSkeleton() {
 
 // ── Hero banner pager ──────────────────────────────────────────────────────────
 @Composable
-fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
+fun HeroBannerPager(
+    items: List<Media>,
+    watchlistedIds: Set<Int> = emptySet(),
+    onWatchlist: (Media) -> Unit = {},
+    onClick: (Media) -> Unit,
+) {
     val pagerState = rememberPagerState { items.size }
 
     LaunchedEffect(pagerState) {
@@ -1045,6 +1084,7 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
             val media      = items[page]
             val pageOffset = (pagerState.currentPage - page + pagerState.currentPageOffsetFraction)
                 .coerceIn(-1f, 1f)
+            val isWatchlisted = media.tmdbId in watchlistedIds
 
             Box(
                 Modifier
@@ -1138,7 +1178,10 @@ fun HeroBannerPager(items: List<Media>, onClick: (Media) -> Unit) {
                             onClick = { onClick(media) },
                             icon  = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(16.dp)) },
                         )
-                        GhostButton(text = "+ Watchlist", onClick = {})
+                        GhostButton(
+                            text    = if (isWatchlisted) "✓ Saved" else "+ Watchlist",
+                            onClick = { onWatchlist(media) },
+                        )
                     }
                 }
             }

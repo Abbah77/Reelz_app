@@ -159,7 +159,6 @@ class PremiumViewModel @Inject constructor(
                             it.copy(
                                 isInitiatingPayment = false,
                                 checkoutUrl         = staticUrl,
-                                refreshMessage      = "Using direct payment link. After paying, tap \"I've already paid — refresh status\".",
                             )
                         }
                     } else {
@@ -356,27 +355,6 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                                 )
                             }
                             Spacer(Modifier.height(20.dp))
-
-                            // Manual-grant flow: after Paystack confirms the payment (dashboard
-                            // or email receipt) and you add their email to manual_grants, this
-                            // is the button that picks it up. Independent of which processor is
-                            // used — this is the entitlement check, not the checkout itself.
-                            OutlinedButton(
-                                onClick = { vm.refreshStatus() },
-                                enabled = !ui.isRefreshing,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = White),
-                            ) {
-                                if (ui.isRefreshing) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), color = White, strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(8.dp))
-                                }
-                                Text("I've already paid — refresh status")
-                            }
-                            ui.refreshMessage?.let { msg ->
-                                Spacer(Modifier.height(10.dp))
-                                Text(msg, color = Brand2, fontSize = 12.sp, textAlign = TextAlign.Center)
-                            }
                         }
                     }
                 }

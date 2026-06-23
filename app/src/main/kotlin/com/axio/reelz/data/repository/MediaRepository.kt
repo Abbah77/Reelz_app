@@ -98,6 +98,55 @@ class MediaRepository @Inject constructor(
     suspend fun getMovieGenres(): List<Genre> = api.getMovieGenres().genres.map { Genre(it.id, it.name) }
     suspend fun getTvGenres(): List<Genre>    = api.getTvGenres().genres.map { Genre(it.id, it.name) }
 
+    // ── Advanced Discover (Explore screen) ───────────────────────────────────
+    suspend fun discoverMoviesAdvanced(
+        genreIds: List<Int> = emptyList(),
+        sortBy: String = "popularity.desc",
+        page: Int = 1,
+        language: String? = null,
+        yearFrom: Int? = null,
+        yearTo: Int? = null,
+        ratingFrom: Float? = null,
+        ratingTo: Float? = null,
+        minVotes: Int? = null,
+        runtimeFrom: Int? = null,
+        runtimeTo: Int? = null,
+    ): List<Media> = api.discoverMoviesAdvanced(
+        genres      = genreIds.takeIf { it.isNotEmpty() }?.joinToString(","),
+        sortBy      = sortBy,
+        page        = page,
+        language    = language,
+        yearFrom    = yearFrom?.let { "$it-01-01" },
+        yearTo      = yearTo?.let { "$it-12-31" },
+        ratingFrom  = ratingFrom,
+        ratingTo    = ratingTo,
+        minVotes    = minVotes,
+        runtimeFrom = runtimeFrom,
+        runtimeTo   = runtimeTo,
+    ).results.map { it.toMedia(MediaType.MOVIE) }
+
+    suspend fun discoverTvAdvanced(
+        genreIds: List<Int> = emptyList(),
+        sortBy: String = "popularity.desc",
+        page: Int = 1,
+        language: String? = null,
+        yearFrom: Int? = null,
+        yearTo: Int? = null,
+        ratingFrom: Float? = null,
+        ratingTo: Float? = null,
+        minVotes: Int? = null,
+    ): List<Media> = api.discoverTvAdvanced(
+        genres     = genreIds.takeIf { it.isNotEmpty() }?.joinToString(","),
+        sortBy     = sortBy,
+        page       = page,
+        language   = language,
+        yearFrom   = yearFrom?.let { "$it-01-01" },
+        yearTo     = yearTo?.let { "$it-12-31" },
+        ratingFrom = ratingFrom,
+        ratingTo   = ratingTo,
+        minVotes   = minVotes,
+    ).results.map { it.toMedia(MediaType.TV) }
+
     // ── Detail ────────────────────────────────────────────────────────────────
 
     /** Fast — no append_to_response. Returns in ~300ms. Shows the screen immediately. */

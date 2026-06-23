@@ -40,6 +40,17 @@ interface LikedDao {
     @Query("DELETE FROM liked_media WHERE tmdbId = :id") suspend fun delete(id: Int)
 }
 
+// ── Saved videos (bookmarked from hero / detail, visible in Profile) ──────────
+@Dao
+interface SavedVideoDao {
+    @Query("SELECT * FROM saved_videos ORDER BY savedAt DESC")
+    fun getAll(): Flow<List<SavedVideoItem>>
+    @Query("SELECT * FROM saved_videos WHERE tmdbId = :id LIMIT 1")
+    suspend fun get(id: Int): SavedVideoItem?
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(i: SavedVideoItem)
+    @Query("DELETE FROM saved_videos WHERE tmdbId = :id") suspend fun delete(id: Int)
+}
+
 // ── Metadata cache ────────────────────────────────────────────────────────────
 @Dao
 interface CachedMediaDao {
@@ -260,19 +271,35 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+// ── Migration v5 → v6: saved videos ──────────────────────────────────────────
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS saved_videos (
+                tmdbId INTEGER PRIMARY KEY NOT NULL,
+                title TEXT NOT NULL,
+                posterPath TEXT,
+                mediaType TEXT NOT NULL,
+                savedAt INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+    }
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 @Database(
     entities = [
         WatchlistItem::class,
         WatchHistory::class,
         LikedItem::class,
+        SavedVideoItem::class,
         CachedMedia::class,
         DownloadItem::class,
         TransferRecord::class,
         DownloadSubtitle::class,
         UserSession::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 @TypeConverters(com.axio.reelz.data.model.MediaConverters::class)
@@ -280,6 +307,7 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun watchlistDao(): WatchlistDao
     abstract fun watchHistoryDao(): WatchHistoryDao
     abstract fun likedDao(): LikedDao
+    abstract fun savedVideoDao(): SavedVideoDao
     abstract fun cachedMediaDao(): CachedMediaDao
     abstract fun downloadDao(): DownloadDao
     abstract fun downloadSubtitleDao(): DownloadSubtitleDao

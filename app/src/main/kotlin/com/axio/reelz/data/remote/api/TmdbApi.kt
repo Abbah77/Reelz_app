@@ -90,6 +90,41 @@ interface TmdbApi {
     @GET("genre/tv/list")
     suspend fun getTvGenres(): TmdbGenreListDto
 
+    // ── Advanced Discover (Explore screen) ──────────────────────────────────────
+    // Exposes TMDB's full discover/movie + discover/tv filter surface:
+    // multi-genre AND-matching, year range, rating range + vote-count floor
+    // (so "top rated" isn't skewed by a single 10/10 vote), runtime range,
+    // original language, and every sort TMDB supports.
+    @GET("discover/movie")
+    suspend fun discoverMoviesAdvanced(
+        @Query("with_genres")                genres: String? = null,        // "28,12" = AND match
+        @Query("sort_by")                    sortBy: String = "popularity.desc",
+        @Query("page")                       page: Int = 1,
+        @Query("with_original_language")     language: String? = null,
+        @Query("primary_release_date.gte")   yearFrom: String? = null,       // "1995-01-01"
+        @Query("primary_release_date.lte")   yearTo: String? = null,         // "1999-12-31"
+        @Query("vote_average.gte")           ratingFrom: Float? = null,
+        @Query("vote_average.lte")           ratingTo: Float? = null,
+        @Query("vote_count.gte")             minVotes: Int? = null,
+        @Query("with_runtime.gte")           runtimeFrom: Int? = null,
+        @Query("with_runtime.lte")           runtimeTo: Int? = null,
+        @Query("include_adult")              includeAdult: Boolean = false,
+    ): TmdbPageDto<TmdbMovieDto>
+
+    @GET("discover/tv")
+    suspend fun discoverTvAdvanced(
+        @Query("with_genres")                genres: String? = null,
+        @Query("sort_by")                    sortBy: String = "popularity.desc",
+        @Query("page")                       page: Int = 1,
+        @Query("with_original_language")     language: String? = null,
+        @Query("first_air_date.gte")         yearFrom: String? = null,
+        @Query("first_air_date.lte")         yearTo: String? = null,
+        @Query("vote_average.gte")           ratingFrom: Float? = null,
+        @Query("vote_average.lte")           ratingTo: Float? = null,
+        @Query("vote_count.gte")             minVotes: Int? = null,
+        @Query("include_adult")              includeAdult: Boolean = false,
+    ): TmdbPageDto<TmdbTvDto>
+
     // ── Search ─────────────────────────────────────────────────────────────────
     @GET("search/movie")
     suspend fun searchMovies(@Query("query") q: String, @Query("page") page: Int = 1): TmdbPageDto<TmdbMovieDto>

@@ -38,6 +38,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.navigation.NavController
 import com.google.zxing.*
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
@@ -64,6 +65,13 @@ import javax.inject.Inject
 private const val QR_SCHEME = "reelz://"
 
 // Custom icons
+private val IconBack: ImageVector get() = ImageVector.Builder("TransferBack", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(19f, 12f); lineTo(5f, 12f); moveTo(12f, 19f); lineTo(5f, 12f); lineTo(12f, 5f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round,
+       strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
+}.build()
+
 private val IconUpload: ImageVector get() = ImageVector.Builder("Upload", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
         moveTo(12f, 3f); lineTo(12f, 15f)
@@ -142,7 +150,7 @@ class TransferViewModel @Inject constructor(
 }
 
 @Composable
-fun TransferScreen(vm: TransferViewModel = hiltViewModel()) {
+fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewModel()) {
     val ctx                = LocalContext.current
     val history           by vm.history.collectAsState()
     val progress          by vm.progress.collectAsState()
@@ -158,6 +166,15 @@ fun TransferScreen(vm: TransferViewModel = hiltViewModel()) {
             Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (nav != null) {
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).background(GlassMd)
+                        .border(1.dp, GlassBorderMd, CircleShape)
+                        .clickable { nav.popBackStack() },
+                    Alignment.Center,
+                ) { Icon(IconBack, null, tint = White, modifier = Modifier.size(18.dp)) }
+                Spacer(Modifier.width(12.dp))
+            }
             Column {
                 Text("Transfer", style = MaterialTheme.typography.headlineMedium.copy(
                     color = White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp

@@ -107,12 +107,13 @@ object AppModule {
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): ReelzDatabase =
         Room.databaseBuilder(ctx, ReelzDatabase::class.java, "reelz.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .build()
 
     @Provides fun provideWatchlistDao(db: ReelzDatabase)        = db.watchlistDao()
     @Provides fun provideWatchHistoryDao(db: ReelzDatabase)     = db.watchHistoryDao()
     @Provides fun provideLikedDao(db: ReelzDatabase)            = db.likedDao()
+    @Provides fun provideSavedVideoDao(db: ReelzDatabase)       = db.savedVideoDao()
     @Provides fun provideCachedMediaDao(db: ReelzDatabase)      = db.cachedMediaDao()
     @Provides fun provideDownloadDao(db: ReelzDatabase)         = db.downloadDao()
     @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase) = db.downloadSubtitleDao()

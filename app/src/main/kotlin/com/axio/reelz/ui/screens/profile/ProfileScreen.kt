@@ -30,7 +30,7 @@ import coil.compose.AsyncImage
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.axio.reelz.data.local.LikedDao
+import com.axio.reelz.data.local.SavedVideoDao
 import com.axio.reelz.data.local.WatchlistDao
 import com.axio.reelz.data.local.WatchHistoryDao
 import com.axio.reelz.data.model.*
@@ -89,16 +89,6 @@ private val IconBookmarkSolid: ImageVector get() = ImageVector.Builder("Bookmark
     }, fill = SolidColor(Color(0xFFE8A020)))
 }.build()
 
-private val IconHeartSolid: ImageVector get() = ImageVector.Builder("HeartFill", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(20.84f, 4.61f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 8.5f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 3.16f, 4.61f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 20f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 20.84f, 4.61f); close()
-    }, fill = SolidColor(Color(0xFFFF3D6E)))
-}.build()
-
 private val IconHistory: ImageVector get() = ImageVector.Builder("History", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
         moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 2f, 12f)
@@ -117,6 +107,16 @@ private val IconCrown: ImageVector get() = ImageVector.Builder("Crown", 24.dp, 2
     }, fill = SolidColor(Color.White))
 }.build()
 
+private val IconVideoSolid: ImageVector get() = ImageVector.Builder("VideoFill", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(2f, 8f); arcTo(2f, 2f, 0f, false, true, 4f, 6f); lineTo(14f, 6f)
+        arcTo(2f, 2f, 0f, false, true, 16f, 8f); lineTo(16f, 16f)
+        arcTo(2f, 2f, 0f, false, true, 14f, 18f); lineTo(4f, 18f)
+        arcTo(2f, 2f, 0f, false, true, 2f, 16f); close()
+        moveTo(22f, 8.5f); lineTo(18f, 11f); lineTo(18f, 13f); lineTo(22f, 15.5f); close()
+    }, fill = SolidColor(Color(0xFF5B7FFF)))
+}.build()
+
 data class UserProfile(
     val name: String = "",
     val email: String = "",
@@ -128,16 +128,16 @@ data class UserProfile(
 class ProfileViewModel @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
     private val watchlistDao: WatchlistDao,
-    private val likedDao: LikedDao,
     private val historyDao: WatchHistoryDao,
+    private val savedVideoDao: SavedVideoDao,
     private val userSessionRepository: com.axio.reelz.data.repository.UserSessionRepository,
     private val premiumGate: com.axio.reelz.remoteconfig.PremiumGate,
 ) : ViewModel() {
     data class UiState(
         val profile: UserProfile = UserProfile(),
         val watchlist: List<WatchlistItem> = emptyList(),
-        val liked: List<LikedItem> = emptyList(),
         val history: List<WatchHistory> = emptyList(),
+        val saved: List<SavedVideoItem> = emptyList(),
         val activeTab: Int = 0,
         val userState: com.axio.reelz.remoteconfig.UserState = com.axio.reelz.remoteconfig.UserState.GUEST,
         val daysUntilExpiry: Int = 0,
@@ -148,8 +148,8 @@ class ProfileViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { watchlistDao.getAll().collect { wl -> _ui.update { it.copy(watchlist = wl) } } }
-        viewModelScope.launch { likedDao.getAll().collect { l -> _ui.update { it.copy(liked = l) } } }
         viewModelScope.launch { historyDao.getRecent().collect { h -> _ui.update { it.copy(history = h) } } }
+        viewModelScope.launch { savedVideoDao.getAll().collect { s -> _ui.update { it.copy(saved = s) } } }
 
         restoreProfileFromSession()
 
@@ -164,7 +164,7 @@ class ProfileViewModel @Inject constructor(
                         profile         = if (session != null)
                             UserProfile(session.name, session.email, session.photoUrl, true)
                         else
-                            it.profile, // keep whatever profile is already set
+                            it.profile,
                     )
                 }
             }
@@ -207,6 +207,102 @@ class ProfileViewModel @Inject constructor(
 fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
+
+    // ── Settings dialog state ──────────────────────────────────────────────────
+    var showStorageDialog       by remember { mutableStateOf(false) }
+    var showPrivacyDialog       by remember { mutableStateOf(false) }
+    var showNotificationsDialog by remember { mutableStateOf(false) }
+    var showAboutDialog         by remember { mutableStateOf(false) }
+
+    // ── Settings dialogs ───────────────────────────────────────────────────────
+    if (showStorageDialog) {
+        AlertDialog(
+            onDismissRequest = { showStorageDialog = false },
+            containerColor   = BgCard,
+            shape            = RoundedCornerShape(20.dp),
+            title = { Text("Storage Usage", color = White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Reelz stores:\n\n• Watch history — saved locally on your device\n• Watchlist & saved videos — saved locally on your device\n• Downloaded videos — stored in your app's private folder\n\nTo free up space, delete downloads from the Downloads tab.",
+                        color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showStorageDialog = false }) {
+                    Text("Got it", color = Brand)
+                }
+            },
+        )
+    }
+
+    if (showPrivacyDialog) {
+        AlertDialog(
+            onDismissRequest = { showPrivacyDialog = false },
+            containerColor   = BgCard,
+            shape            = RoundedCornerShape(20.dp),
+            title = { Text("Privacy & Security", color = White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Your privacy matters:\n\n• Sign-in is handled securely via Google — we never see your password\n• Your watchlist, history, and likes live only on your device\n• Premium status is verified server-side via Paystack webhooks\n• No personal data is sold or shared with third parties",
+                        color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPrivacyDialog = false }) {
+                    Text("Got it", color = Brand)
+                }
+            },
+        )
+    }
+
+    if (showNotificationsDialog) {
+        AlertDialog(
+            onDismissRequest = { showNotificationsDialog = false },
+            containerColor   = BgCard,
+            shape            = RoundedCornerShape(20.dp),
+            title = { Text("Notifications", color = White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Reelz sends notifications for:\n\n• Download completions — when your video is ready to watch offline\n• Premium renewal reminders — a few days before your plan renews\n\nYou can manage notification permissions in your device Settings → Apps → Reelz → Notifications.",
+                        color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showNotificationsDialog = false }) {
+                    Text("Got it", color = Brand)
+                }
+            },
+        )
+    }
+
+    if (showAboutDialog) {
+        AlertDialog(
+            onDismissRequest = { showAboutDialog = false },
+            containerColor   = BgCard,
+            shape            = RoundedCornerShape(20.dp),
+            title = { Text("About Reelz", color = White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Reelz", color = Brand, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                    Text(
+                        "Your personal cinema — stream movies and TV shows, download for offline viewing, and discover what to watch next.\n\nBuilt with ❤️ using Kotlin & Jetpack Compose.",
+                        color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAboutDialog = false }) {
+                    Text("Close", color = Brand)
+                }
+            },
+        )
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().background(Bg).statusBarsPadding(),
@@ -341,11 +437,11 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
             Spacer(Modifier.height(14.dp))
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                StatCard("Saved",   ui.watchlist.size.toString(), IconBookmarkSolid, Modifier.weight(1f))
-                StatCard("Liked",   ui.liked.size.toString(),     IconHeartSolid,    Modifier.weight(1f))
-                StatCard("Watched", ui.history.size.toString(),   IconHistory,       Modifier.weight(1f))
+                StatCard("Watchlist", ui.watchlist.size.toString(), IconBookmarkSolid, Modifier.weight(1f))
+                StatCard("Saved",    ui.saved.size.toString(),     IconVideoSolid,    Modifier.weight(1f))
+                StatCard("Watched",  ui.history.size.toString(),   IconHistory,       Modifier.weight(1f))
             }
         }
 
@@ -356,7 +452,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                listOf("Watchlist", "Liked", "History").forEachIndexed { i, label ->
+                listOf("Watchlist", "Saved", "History").forEachIndexed { i, label ->
                     GenrePill(label, ui.activeTab == i) { vm.setTab(i) }
                 }
             }
@@ -366,19 +462,19 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
         // ── Tab content ────────────────────────────────────────────────
         when (ui.activeTab) {
             0 -> if (ui.watchlist.isEmpty()) {
-                item { EmptyTabHint("Nothing saved yet", "Bookmark movies to find them here") }
+                item { EmptyTabHint("Nothing in your watchlist", "Tap + Watchlist on any movie or show") }
             } else {
                 items(ui.watchlist, key = { it.tmdbId }) { w ->
                     val type = if (w.mediaType == "TV") MediaType.TV else MediaType.MOVIE
-                    LibraryRow(w.title, w.posterPath, "Saved") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(w.tmdbId, type)) }
+                    LibraryRow(w.title, w.posterPath, "Watchlist") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(w.tmdbId, type)) }
                 }
             }
-            1 -> if (ui.liked.isEmpty()) {
-                item { EmptyTabHint("Nothing liked yet", "Tap the heart on any movie or show") }
+            1 -> if (ui.saved.isEmpty()) {
+                item { EmptyTabHint("No saved videos yet", "Tap Save on any movie or show") }
             } else {
-                items(ui.liked, key = { it.tmdbId }) { l ->
-                    val type = if (l.mediaType == "TV") MediaType.TV else MediaType.MOVIE
-                    LibraryRow(l.title, l.posterPath, "Liked") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(l.tmdbId, type)) }
+                items(ui.saved, key = { it.tmdbId }) { s ->
+                    val type = if (s.mediaType == "TV") MediaType.TV else MediaType.MOVIE
+                    LibraryRow(s.title, s.posterPath, "Saved") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(s.tmdbId, type)) }
                 }
             }
             2 -> {
@@ -409,10 +505,10 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
         item { SectionHeader("Settings") }
         item {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SettingRow(IconStorage,     "Storage Usage")
-                SettingRow(IconShield,      "Privacy & Security")
-                SettingRow(IconBell,        "Notifications")
-                SettingRow(IconInfoOutline, "About Reelz")
+                SettingRow(IconStorage,     "Storage Usage")       { showStorageDialog = true }
+                SettingRow(IconShield,      "Privacy & Security")  { showPrivacyDialog = true }
+                SettingRow(IconBell,        "Notifications")       { showNotificationsDialog = true }
+                SettingRow(IconInfoOutline, "About Reelz")         { showAboutDialog = true }
             }
         }
     }
