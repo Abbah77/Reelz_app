@@ -34,6 +34,7 @@ import com.axio.reelz.remoteconfig.ConfigSyncWorker
 import com.axio.reelz.remoteconfig.SyncState
 import com.axio.reelz.ui.screens.update.MaintenanceScreen
 import com.axio.reelz.ui.screens.update.UpdateScreen
+import com.axio.reelz.update.ApkUpdateManager
 import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
@@ -45,6 +46,7 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var remoteConfig: RemoteConfigRepository
     @Inject lateinit var adEngine: AdEngine
+    @Inject lateinit var apkUpdateManager: ApkUpdateManager
 
     // Track cold start — App Open ad fires ONCE on cold start, not every resume
     private var isColdStart = true
@@ -150,6 +152,7 @@ class MainActivity : ComponentActivity() {
                                 downloadUrl   = downloadUrl,
                                 changelog     = changelog,
                                 forceUpdate   = true,
+                                updateManager = apkUpdateManager,
                             )
                             return@ReelzTheme
                         }
@@ -161,6 +164,7 @@ class MainActivity : ComponentActivity() {
                                 changelog     = changelog,
                                 forceUpdate   = false,
                                 onSkip        = { skipOptional = true },
+                                updateManager = apkUpdateManager,
                             )
                             return@ReelzTheme
                         }

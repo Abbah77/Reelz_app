@@ -31,6 +31,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- ── APK self-update (PackageInstaller) ───────────────────────────── -->
+    <!-- Required for PackageInstaller.Session.commit() on all API levels -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
@@ -125,6 +129,18 @@
             android:exported="false"
             tools:replace="android:theme"
             android:theme="@style/com.applovin.mediation.MaxDebuggerActivity.Theme" />
+
+
+        <!-- ── APK update install result receiver ───────────────────────── -->
+        <!-- Application-level receiver so it survives screen recomposition. -->
+        <!-- Not exported — only receives broadcasts from our own process.   -->
+        <receiver
+            android:name=".update.ApkInstallStatusReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.axio.reelz.INSTALL_STATUS" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>

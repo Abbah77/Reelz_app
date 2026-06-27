@@ -88,7 +88,9 @@ class BackendSessionSource @Inject constructor(
         }
 
         // ── 3. Call backend ───────────────────────────────────────────────
-        val backendUrl = remoteConfig.backendConfig().backendUrl.trimEnd('/')
+        // normalizedUrl auto-adds "https://" if config.json's backend_url
+        // is ever saved without a scheme (see BackendConfig.normalizedUrl).
+        val backendUrl = remoteConfig.backendConfig().normalizedUrl
         if (backendUrl.isBlank()) {
             Log.e(TAG, "backend_url not set in config.json — cannot check subscription")
             return@withContext null

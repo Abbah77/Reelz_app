@@ -56,8 +56,6 @@ import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,6 +65,64 @@ import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
+
+// ═════════════════════════════════════════════════════════════════════════════
+// HOW THIS SCREEN WORKS (read this before touching playback code)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// This mirrors how TikTok / Instagram Reels actually do it — a small fixed
+// pool of player engines (ExoPlayer under the hood is what Reels uses too;
+// TikTok's own engine solves the identical problem the identical way), NOT
+// "ping-pong" between 2 views and NOT one player per item. A `LazyColumn`
+// with thousands of live ExoPlayer/IJK instances is exactly what crashes a
+// feed — you must recycle a small window of decoders across an arbitrarily
+// long, paginated list.
+//
+//   • ONE VerticalPager drives the whole feed (per tab). No more stacking
+//     two pagers and toggling alpha=0 — that was the source of player
+//     hand-off bugs across tab switches (the player pool would get bound
+//     to a page index from the *other* pager).
+//
+//   • A POOL of `PLAYER_POOL_SIZE` ExoPlayer instances is recycled by
+//     index, never recreated per item. Memory stays flat no matter how
+//     many pages have been scraped — 3 decoders alive at any time, period.
+//
+//   • LOOKAHEAD: while the user is on page N, the pool keeps page N (active,
+//     playing), N+1 and N+2 warm and pre-buffered. The moment the pager
+//     settles on N+1, that slot is already fully prepared → instant play,
+//     zero black-frame, matches the "always one ready ahead" rule that
+//     makes TikTok feel instant even on a fling.
+//
+//   • SCROLLING BACK is just moving the pager to a lower index — Compose's
+//     `beyondViewportPageCount` keeps nearby pages (and their thumbnails)
+//     composed, so the frame is already there. We don't keep a dead player
+//     alive for every visited page (that's what would eventually crash);
+//     we re-bind a pool slot to that video and seek, which is instant
+//     because direct MP4 byte-range requests resume fast and the poster
+///    frame is already on screen while it does.
+//
+//   • PAGINATION is cursor-style "load next batch" merged into one flat
+//     list (`vm.loadMore()` fires N items before the end) — not "load
+//     everything", not page-by-page navigation. This is what TikTok calls
+//     its feed cursor under the hood.
+//
+//   • CRASH SAFETY: any pool player that throws a playback error
+//     auto-skips forward instead of freezing the feed on a dead video —
+//     TikTok silently skips broken/removed posts rather than stalling.
+//
+// ═════════════════════════════════════════════════════════════════════════════
+
+// 4 players: 1 active + 1 backward (instant scroll-back) + 2 forward
+// (buffer ahead of a fast fling). Going from 3→4 trades one extra
+// ExoPlayer instance (~a few MB) for headroom that actually matches how
+// the pool is used — with 3 players there was no slack for fast forward
+// scrolling once a backward slot was reserved, which is what caused
+// "scroll back loads again" under quick swipes.
+private const val PLAYER_POOL_SIZE = 4
+// Forward-only lookahead the pool keeps warm (separate from the 1
+// backward slot, which the pool always reserves automatically).
+private const val LOOKAHEAD_PAGES = PLAYER_POOL_SIZE - 2
+private const val LOAD_MORE_THRESHOLD = 5
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Feed mode
@@ -184,7 +240,7 @@ private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = bu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ViewModel  —  ALL scraping now happens server-side via GET /shorts/feed
+// ViewModel  —  ALL scraping happens server-side via GET /shorts/feed
 // ─────────────────────────────────────────────────────────────────────────────
 
 @HiltViewModel
@@ -196,22 +252,17 @@ class ShortsViewModel @Inject constructor(
 
     val shortsConfig       get() = remoteConfig.shortsConfig()
     private val categories get() = shortsConfig.categories
-
-    // Backend base URL comes from config (e.g. "https://tt-b577.onrender.com")
-    private val backendUrl get() = remoteConfig.backendConfig().backendUrl.trimEnd('/')
-
-    // For-You community slugs — "+" separated from config
+    // normalizedUrl auto-adds "https://" if config.json's backend_url is
+    // ever saved without a scheme — see BackendConfig.normalizedUrl for why.
+    private val backendUrl get() = remoteConfig.backendConfig().normalizedUrl
     private val forYouSubs get() = shortsConfig.forYouSubs.trim()
 
-    // ── OkHttp — used to call OUR backend, not ifunny directly ───────────────
     private val okHttp by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .build()
     }
-
-    // ── UI state ──────────────────────────────────────────────────────────────
 
     data class UiState(
         val feedMode: FeedMode = FeedMode.FOR_YOU,
@@ -242,6 +293,12 @@ class ShortsViewModel @Inject constructor(
     val liked: StateFlow<Set<String>> = _liked.asStateFlow()
     val saved: StateFlow<Set<String>> = _saved.asStateFlow()
 
+    // Video ids that errored during playback this session — skipped on
+    // future encounters so a single dead link can never re-stall the feed.
+    private val _deadIds = MutableStateFlow<Set<String>>(emptySet())
+    val deadIds: StateFlow<Set<String>> = _deadIds.asStateFlow()
+    fun markDead(id: String) { _deadIds.update { it + id } }
+
     init {
         _ui.update { it.copy(forYouLoading = true) }
         viewModelScope.launch {
@@ -256,7 +313,7 @@ class ShortsViewModel @Inject constructor(
         }
     }
 
-    // ── Public actions ────────────────────────────────────────────────────────
+    fun logFromUi(msg: String) = dbg(msg)
 
     fun refresh() {
         _ui.update { it.copy(isRefreshing = true, error = null) }
@@ -302,16 +359,12 @@ class ShortsViewModel @Inject constructor(
     fun toggleLike(id: String) { _liked.update { if (id in it) it - id else it + id } }
     fun toggleSave(id: String) { _saved.update { if (id in it) it - id else it + id } }
 
-    // ── Private loaders ───────────────────────────────────────────────────────
-
     private fun loadForYou(append: Boolean = false) {
         if (append) _ui.update { it.copy(forYouLoadingMore = true) }
         else        _ui.update { it.copy(forYouLoading = true, error = null) }
 
         viewModelScope.launch {
-            val videos = withContext(Dispatchers.IO) {
-                fetchFromBackend(subs = forYouSubs)
-            }
+            val videos = withContext(Dispatchers.IO) { fetchFromBackend(subs = forYouSubs) }
             dbg("✓ forYou total=${videos.size}")
             if (append) {
                 _ui.update { it.copy(forYouVideos = it.forYouVideos + videos, forYouLoadingMore = false) }
@@ -332,9 +385,7 @@ class ShortsViewModel @Inject constructor(
         else         _ui.update { it.copy(discLoadingMore = true) }
 
         viewModelScope.launch {
-            val videos = withContext(Dispatchers.IO) {
-                fetchFromBackend(subs = slugString)
-            }
+            val videos = withContext(Dispatchers.IO) { fetchFromBackend(subs = slugString) }
             dbg("✓ discovery cat=$categoryIndex total=${videos.size}")
             if (!append) {
                 _ui.update { it.copy(
@@ -348,22 +399,12 @@ class ShortsViewModel @Inject constructor(
         }
     }
 
-    // ── Core: call backend GET /shorts/feed ───────────────────────────────────
-    //
-    // The backend scrapes ifunny.club server-side and returns a JSON array
-    // of ShortVideo-compatible objects. The app no longer needs WebView or
-    // any direct connection to ifunny.club.
-    //
-    // URL: GET {backendUrl}/shorts/feed?subs=slug1+slug2&base_url=https://ifunny.club
-
     private fun fetchFromBackend(subs: String): List<ShortVideo> {
         if (backendUrl.isBlank() || subs.isBlank()) {
             dbg("✗ backend URL or subs blank — skipping")
             return emptyList()
         }
 
-        // URL-encode the subs param ('+' must survive as a literal '+' separator
-        // on the server side, so we encode space to %20 and keep '+' as-is)
         val encodedSubs = subs.trim()
             .split("+")
             .joinToString("+") { URLEncoder.encode(it.trim(), "UTF-8") }
@@ -374,11 +415,7 @@ class ShortsViewModel @Inject constructor(
         dbg("→ backend $feedUrl")
 
         return try {
-            val req = Request.Builder()
-                .url(feedUrl)
-                .get()
-                .build()
-
+            val req = Request.Builder().url(feedUrl).get().build()
             okHttp.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     dbg("✗ backend returned ${resp.code}")
@@ -393,7 +430,10 @@ class ShortsViewModel @Inject constructor(
         }
     }
 
-    // ── JSON parser: backend response → List<ShortVideo> ─────────────────────
+    private fun JSONObject.optUrlString(key: String): String {
+        val raw = optString(key).trim()
+        return if (raw.isBlank() || raw.equals("null", ignoreCase = true)) "" else raw
+    }
 
     private fun parseShortVideos(json: String): List<ShortVideo> {
         return try {
@@ -402,17 +442,18 @@ class ShortsViewModel @Inject constructor(
             val result = mutableListOf<ShortVideo>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                val hlsUrl = o.optString("hlsUrl").trim()
-                if (hlsUrl.isBlank()) continue
+                val hlsUrl      = o.optUrlString("hlsUrl")
+                val fallbackUrl = o.optUrlString("fallbackUrl")
+                if (hlsUrl.isBlank() && fallbackUrl.isBlank()) continue
                 result += ShortVideo(
                     id          = o.optString("id").ifBlank { "v_$i" },
                     title       = o.optString("title"),
                     author      = o.optString("author"),
                     community   = o.optString("community"),
-                    hlsUrl      = hlsUrl,
-                    audioUrl    = o.optString("audioUrl").ifBlank { null },
-                    fallbackUrl = o.optString("fallbackUrl").ifBlank { hlsUrl },
-                    thumbnail   = o.optString("thumbnail"),
+                    hlsUrl      = hlsUrl.ifBlank { fallbackUrl },
+                    audioUrl    = o.optUrlString("audioUrl").ifBlank { null }.takeIf { !it.isNullOrBlank() },
+                    fallbackUrl = fallbackUrl.ifBlank { hlsUrl },
+                    thumbnail   = o.optUrlString("thumbnail"),
                     ups         = o.optInt("ups", 0),
                     duration    = o.optInt("duration", 0),
                     hasAudio    = o.optBoolean("hasAudio", true),
@@ -435,16 +476,250 @@ class ShortsViewModel @Inject constructor(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Screen  (UI is IDENTICAL to original — zero changes below this line)
+// Player pool — the single source of truth for which ExoPlayer plays what.
+//
+// This is intentionally its own small class instead of inline state: the
+// previous version managed pool assignment with raw mutableStateMaps spread
+// across the composable body, which is exactly how the old code ended up
+// with two pagers fighting over one pool across tab switches. Centralizing
+// it here means there is exactly one place that decides "pool slot X plays
+// video Y" — and tab switches / pagination can't desync it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(UnstableApi::class)
+private class ShortsPlayerPool(
+    private val players: List<ExoPlayer>,
+    private val buildMediaSource: (ShortVideo) -> androidx.media3.exoplayer.source.MediaSource,
+    private val onError: (videoId: String, poolIdx: Int, msg: String) -> Unit,
+) {
+    // Which page index (not pool index) each slot currently holds. -1 means
+    // empty/unassigned. This is the actual fix for the "previous video
+    // keeps playing" and "scroll back reloads" bugs: the old version
+    // assigned slots as (activeIdx + offset) % size, which only made sense
+    // when offset was measured from wherever activeIdx ALREADY was — on a
+    // fast scroll that math could collide with whatever slot was still
+    // mid-playback, instead of cleanly retiring it. Tracking the actual
+    // page index per slot means we always know exactly what's loaded where,
+    // and can mute/stop everything that isn't the target page, every time.
+    private val loadedPageIndex = IntArray(players.size) { -1 }
+    private val loadedVideoId = arrayOfNulls<String>(players.size)
+
+    var activeIdx by mutableIntStateOf(0)
+        private set
+
+    val activePlayer: ExoPlayer get() = players[activeIdx]
+
+    init {
+        players.forEachIndexed { idx, player ->
+            player.addListener(object : Player.Listener {
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    val cause = error.cause?.let { c -> "${c::class.simpleName}: ${c.message}" } ?: "no cause"
+                    val vid = loadedVideoId[idx] ?: "unknown"
+                    onError(vid, idx, "${error.errorCodeName} cause=$cause")
+                }
+            })
+        }
+    }
+
+    private fun slotForPage(pageIndex: Int): Int? =
+        loadedPageIndex.indexOfFirst { it == pageIndex }.takeIf { it >= 0 }
+
+    /** Picks a slot to (re)use for [pageIndex]: reuse if already loaded, else the least-recently-relevant idle slot. */
+    private fun slotToUseFor(pageIndex: Int, wantedPages: Set<Int>): Int {
+        slotForPage(pageIndex)?.let { return it }
+        // Prefer a slot that isn't currently holding any page we still want
+        // to keep warm (active, lookahead, or lookbehind) — this is what
+        // lets scroll-back stay instant: we don't evict a neighbor we'll
+        // likely need again in favor of one we just walked away from.
+        val freeSlot = loadedPageIndex.indexOfFirst { it !in wantedPages }
+        return if (freeSlot >= 0) freeSlot else activeIdx
+    }
+
+    /** Loads [video]/[pageIndex] into [poolIdx], reusing playback if already loaded there. */
+    private fun ensurePrepared(poolIdx: Int, pageIndex: Int, video: ShortVideo, playWhenReady: Boolean, muted: Boolean) {
+        val player = players[poolIdx]
+        if (loadedVideoId[poolIdx] == video.id && loadedPageIndex[poolIdx] == pageIndex) {
+            player.playWhenReady = playWhenReady
+            player.volume = if (playWhenReady && !muted) 1f else 0f
+            return
+        }
+        player.apply {
+            setMediaSource(buildMediaSource(video))
+            prepare()
+            this.playWhenReady = playWhenReady
+            volume = if (playWhenReady && !muted) 1f else 0f
+        }
+        loadedVideoId[poolIdx] = video.id
+        loadedPageIndex[poolIdx] = pageIndex
+    }
+
+    /**
+     * Keeps [centerPageIndex], 1 page backward, and up to (PLAYER_POOL_SIZE - 2)
+     * pages forward warm and pre-buffered — using every slot in the pool.
+     * The backward slot is what makes "scroll down then back up" instant
+     * instead of reloading. [lookahead] is accepted for call-site
+     * compatibility but capped to what the pool can actually hold without
+     * starving the backward slot.
+     */
+    fun primeWindow(items: List<ShortsItem>, centerPageIndex: Int, lookahead: Int, muted: Boolean) {
+        if (items.isEmpty()) return
+        val maxForward = (players.size - 2).coerceAtLeast(0)
+        val effectiveLookahead = lookahead.coerceAtMost(maxForward)
+        val wantedRange = (centerPageIndex - 1)..(centerPageIndex + effectiveLookahead)
+        val wantedPages = wantedRange.toSet()
+
+        for (pageIndex in wantedRange) {
+            val video = (items.getOrNull(pageIndex) as? ShortsItem.Video)?.video ?: continue
+            val poolIdx = slotToUseFor(pageIndex, wantedPages)
+            // The active slot must NEVER be touched here — this is exactly
+            // what caused the "thumbnail loads but video never plays"
+            // regression: activate() would start playback, then the very
+            // next primeWindow() call (which always ran right after, to
+            // top up the lookahead window) re-applied playWhenReady=false
+            // to every slot it iterated, including the one that was just
+            // started, pausing it a frame later. Buffering/lookahead
+            // management for neighboring pages should never override the
+            // play state of whatever's actually on screen.
+            if (poolIdx == activeIdx) continue
+            ensurePrepared(poolIdx, pageIndex, video, playWhenReady = false, muted = muted)
+        }
+    }
+
+    /**
+     * Promotes whichever pool slot holds [pageIndex]/[video] to active and
+     * plays it, while unconditionally silencing every OTHER slot. This is
+     * the actual fix for "I hear the previous video's sound" — we never
+     * rely on "whatever activeIdx was before" being the right thing to
+     * pause; every non-target player gets stopped, every single call.
+     */
+    fun activate(items: List<ShortsItem>, pageIndex: Int, lookahead: Int, video: ShortVideo, muted: Boolean) {
+        val effectiveLookahead = lookahead.coerceAtMost((players.size - 2).coerceAtLeast(0))
+        var target = slotForPage(pageIndex)
+        if (target == null) {
+            // Not primed yet (e.g. a very fast fling outran lookahead) —
+            // grab any slot and load it now rather than leaving the old
+            // video's player as the de-facto "active" one by default.
+            target = slotToUseFor(pageIndex, ((pageIndex - 1)..(pageIndex + effectiveLookahead)).toSet())
+            ensurePrepared(target, pageIndex, video, playWhenReady = false, muted = muted)
+        }
+        activeIdx = target
+
+        players.forEachIndexed { idx, player ->
+            if (idx == target) {
+                player.playWhenReady = true
+                player.volume = if (muted) 0f else 1f
+                player.play()
+            } else {
+                // Unconditional — every non-target slot is paused and
+                // silenced, regardless of what it was doing before.
+                player.playWhenReady = false
+                player.volume = 0f
+            }
+        }
+
+        // Top up the window now that activeIdx has actually moved, so the
+        // next primeWindow call's "keep warm" set is anchored correctly.
+        primeWindow(items, pageIndex, lookahead, muted)
+    }
+
+    fun setMuted(muted: Boolean) {
+        activePlayer.volume = if (muted) 0f else 1f
+    }
+
+    fun pauseActive() {
+        activePlayer.playWhenReady = false
+    }
+
+    fun playerForVideoIfActive(video: ShortVideo): ExoPlayer? =
+        if (loadedVideoId[activeIdx] == video.id) activePlayer else null
+
+    fun release() {
+        players.forEach { it.release() }
+    }
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+private fun rememberShortsPlayerPool(
+    httpFactory: DefaultHttpDataSource.Factory,
+    onError: (videoId: String, poolIdx: Int, msg: String) -> Unit,
+): ShortsPlayerPool {
+    val ctx = LocalContext.current
+    val players = remember {
+        List(PLAYER_POOL_SIZE) {
+            ExoPlayer.Builder(ctx).build().apply {
+                repeatMode    = Player.REPEAT_MODE_ONE
+                playWhenReady = false
+                volume        = 0f
+            }
+        }
+    }
+    DisposableEffect(Unit) { onDispose { players.forEach { it.release() } } }
+
+    fun buildMediaSource(video: ShortVideo): androidx.media3.exoplayer.source.MediaSource {
+        val primaryUrl = video.hlsUrl.ifBlank { video.fallbackUrl }
+        val isRealHls  = primaryUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+        val videoSrc = if (isRealHls) {
+            HlsMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(primaryUrl))
+        } else {
+            ProgressiveMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(primaryUrl))
+        }
+        return if (video.audioUrl != null) {
+            val audioSrc = ProgressiveMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(video.audioUrl))
+            MergingMediaSource(videoSrc, audioSrc)
+        } else videoSrc
+    }
+
+    return remember(players) { ShortsPlayerPool(players, ::buildMediaSource, onError) }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Feed toggle pill
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun FeedToggle(feedMode: FeedMode, onSwitch: (FeedMode) -> Unit) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color(0x88000000))
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(50))
+            .padding(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        FeedTab("For You",   feedMode == FeedMode.FOR_YOU)   { onSwitch(FeedMode.FOR_YOU) }
+        FeedTab("Discovery", feedMode == FeedMode.DISCOVERY) { onSwitch(FeedMode.DISCOVERY) }
+    }
+}
+
+@Composable
+private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg    by animateColorAsState(if (selected) White else Color.Transparent, tween(200), label = "tabBg")
+    val txt   by animateColorAsState(if (selected) Color.Black else White60, tween(200), label = "tabTxt")
+    val scale by animateFloatAsState(if (selected) 1f else 0.95f, spring(0.7f, 600f), label = "tabS")
+    Box(
+        Modifier.scale(scale).clip(RoundedCornerShape(50)).background(bg)
+            .clickable(indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 7.dp),
+        Alignment.Center,
+    ) {
+        Text(label, color = txt, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen — single VerticalPager, mode switch swaps the backing item list
 // ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(UnstableApi::class)
 @Composable
 fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = hiltViewModel()) {
-    val ui    by vm.ui.collectAsState()
-    val liked by vm.liked.collectAsState()
-    val saved by vm.saved.collectAsState()
-    val ctx   = LocalContext.current
+    val ui      by vm.ui.collectAsState()
+    val liked   by vm.liked.collectAsState()
+    val saved   by vm.saved.collectAsState()
+    val deadIds by vm.deadIds.collectAsState()
 
     var pullOverscrollPx   by remember { mutableStateOf(0f) }
     val maxPullPx          = with(androidx.compose.ui.platform.LocalDensity.current) { 80.dp.toPx() }
@@ -463,101 +738,93 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             .setReadTimeoutMs(12_000)
     }
 
-    val exoA = remember {
-        ExoPlayer.Builder(ctx).build().apply {
-            repeatMode    = Player.REPEAT_MODE_ONE
-            playWhenReady = true
-            volume        = 1f
-        }
+    val pool = rememberShortsPlayerPool(httpFactory) { videoId, poolIdx, msg ->
+        vm.logFromUi("✗ EXO[$poolIdx] err=$msg")
+        if (videoId != "unknown") vm.markDead(videoId)
     }
-    val exoB = remember {
-        ExoPlayer.Builder(ctx).build().apply {
-            repeatMode    = Player.REPEAT_MODE_ONE
-            playWhenReady = false
-            volume        = 0f
-        }
-    }
-    DisposableEffect(Unit) { onDispose { exoA.release(); exoB.release() } }
-
-    var activeIdx by remember { mutableIntStateOf(0) }
-    val activePlayer  = if (activeIdx == 0) exoA else exoB
-    val preloadPlayer = if (activeIdx == 0) exoB else exoA
 
     var isMuted    by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
 
-    val forYouItems by remember(ui.forYouVideos) { derivedStateOf { buildShortsItemList(ui.forYouVideos) } }
-    val discItems   by remember(ui.discVideos)   { derivedStateOf { buildShortsItemList(ui.discVideos) } }
-
-    val forYouPager = rememberPagerState { forYouItems.size.coerceAtLeast(1) }
-    val discPager   = rememberPagerState { discItems.size.coerceAtLeast(1) }
-    val activePager = if (ui.feedMode == FeedMode.FOR_YOU) forYouPager else discPager
-    val currentPage = activePager.currentPage
-
-    fun buildMediaSource(video: ShortVideo): androidx.media3.exoplayer.source.MediaSource {
-        val videoSrc = HlsMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(video.hlsUrl))
-        return if (video.audioUrl != null) {
-            val audioSrc = ProgressiveMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(video.audioUrl))
-            MergingMediaSource(videoSrc, audioSrc)
-        } else videoSrc
-    }
-
-    val activeItems = if (ui.feedMode == FeedMode.FOR_YOU) forYouItems else discItems
-
-    LaunchedEffect(currentPage, ui.videos, ui.feedMode) {
-        if (ui.videos.isEmpty()) return@LaunchedEffect
-        val current = (activeItems.getOrNull(currentPage) as? ShortsItem.Video)?.video ?: return@LaunchedEffect
-        val next    = activeItems.drop(currentPage + 1).filterIsInstance<ShortsItem.Video>().firstOrNull()?.video
-
-        activePlayer.apply {
-            setMediaSource(buildMediaSource(current))
-            prepare()
-            volume        = if (isMuted) 0f else 1f
-            playWhenReady = true
-            play()
-        }
-        if (next != null) {
-            preloadPlayer.apply {
-                setMediaSource(buildMediaSource(next))
-                prepare()
-                volume        = 0f
-                playWhenReady = false
-            }
+    // ── Single flat item list for whichever mode is active ──────────────────
+    // Dead (errored) videos are filtered out here so a broken link can never
+    // resurface in the pager and re-trigger the same failure.
+    val rawItems by remember(ui.feedMode, ui.forYouVideos, ui.discVideos, deadIds) {
+        derivedStateOf {
+            val source = if (ui.feedMode == FeedMode.FOR_YOU) ui.forYouVideos else ui.discVideos
+            buildShortsItemList(source.filter { it.id !in deadIds })
         }
     }
 
-    var lastPage by remember { mutableIntStateOf(0) }
-    LaunchedEffect(currentPage) {
-        if (currentPage == lastPage || ui.videos.isEmpty()) return@LaunchedEffect
-        val isForward = currentPage > lastPage
-        lastPage = currentPage
+    // A single PagerState drives both tabs (For You / Discovery) — no more
+    // stacking two VerticalPagers and hiding one with alpha=0f, which was
+    // the root cause of the old "wrong video plays after switching tabs"
+    // bug (the player pool would get bound to a page index from whichever
+    // pager wasn't visible). pageCount is read lazily via the lambda so
+    // pagination (appending more videos) never resets scroll position.
+    //
+    // PagerState's constructor is internal — rememberPagerState() is the
+    // only public way to obtain one, and it has no "key" parameter to
+    // recreate it per tab (that incorrect assumption is what broke an
+    // earlier build: "No parameter with name 'key' found"). So instead we
+    // keep ONE PagerState alive for the whole screen's lifetime and
+    // explicitly scroll it back to page 0 whenever feedMode changes.
+    val pagerState = rememberPagerState { rawItems.size.coerceAtLeast(1) }
+    LaunchedEffect(ui.feedMode) {
+        if (pagerState.currentPage != 0) pagerState.scrollToPage(0)
+    }
 
-        if (isForward) {
-            activeIdx = 1 - activeIdx
-            val newActive  = if (activeIdx == 0) exoA else exoB
-            val newPreload = if (activeIdx == 0) exoB else exoA
+    val currentPage = pagerState.currentPage.coerceIn(0, (rawItems.size.coerceAtLeast(1)) - 1)
 
-            newActive.volume        = if (isMuted) 0f else 1f
-            newActive.playWhenReady = true
-            newActive.play()
-
-            newPreload.pause()
-            newPreload.volume = 0f
-
-            val nextVideo = ui.videos.getOrNull(currentPage + 1)
-            if (nextVideo != null) {
-                newPreload.setMediaSource(buildMediaSource(nextVideo))
-                newPreload.prepare()
-                newPreload.playWhenReady = false
+    // ── Priming: start buffering ahead as soon as the user commits to a
+    //    swipe (any movement, not just past a threshold) — this is what
+    //    makes a fast fling land on an already-buffered page instead of a
+    //    spinner, same as TikTok's own pre-fetch-on-drag behavior.
+    LaunchedEffect(pagerState, ui.feedMode, rawItems) {
+        snapshotFlow { Triple(pagerState.currentPage, pagerState.currentPageOffsetFraction, pagerState.isScrollInProgress) }
+            .distinctUntilChanged()
+            .collect { (page, offsetFraction, scrolling) ->
+                if (rawItems.isEmpty()) return@collect
+                if (scrolling) {
+                    val target = if (offsetFraction >= 0f) page + 1 else page
+                    pool.primeWindow(rawItems, target, LOOKAHEAD_PAGES, isMuted)
+                }
             }
+    }
+
+    // ── Settle: promote the landed page's player to active, top up the
+    //    lookahead window, and trigger pagination near the end of the list.
+    var lastPage by remember(ui.feedMode) { mutableIntStateOf(0) }
+    LaunchedEffect(currentPage, ui.feedMode, rawItems) {
+        if (rawItems.isEmpty()) return@LaunchedEffect
+        val currentVideo = (rawItems.getOrNull(currentPage) as? ShortsItem.Video)?.video
+        if (currentVideo != null) {
+            // activate() also tops up the priming window internally, so a
+            // separate primeWindow call right after is unnecessary — and
+            // was actually part of the bug: calling both let the second
+            // call re-evaluate "wanted pages" against a stale activeIdx
+            // for one frame, which is how a fast scroll could end up
+            // priming the wrong slot.
+            pool.activate(rawItems, currentPage, LOOKAHEAD_PAGES, currentVideo, isMuted)
         }
 
-        if (ui.videos.isNotEmpty() && currentPage >= ui.videos.size - 5) vm.loadMore()
+        if (currentPage != lastPage) {
+            lastPage = currentPage
+            val totalVideos = if (ui.feedMode == FeedMode.FOR_YOU) ui.forYouVideos.size else ui.discVideos.size
+            if (totalVideos > 0 && currentPage >= totalVideos - LOAD_MORE_THRESHOLD) vm.loadMore()
+        }
     }
 
     LaunchedEffect(ui.isRefreshing) { if (!ui.isRefreshing) pullOverscrollPx = 0f }
-    LaunchedEffect(isMuted) { activePlayer.volume = if (isMuted) 0f else 1f }
+    LaunchedEffect(isMuted) { pool.setMuted(isMuted) }
+
+    // Pause playback entirely while the search overlay is open, matching
+    // TikTok's behavior of not playing audio under a modal search sheet.
+    LaunchedEffect(showSearch) { if (showSearch) pool.pauseActive() else {
+        val v = (rawItems.getOrNull(currentPage) as? ShortsItem.Video)?.video
+        if (v != null) pool.activate(rawItems, currentPage, LOOKAHEAD_PAGES, v, isMuted)
+    }}
 
     val nestedScroll = remember {
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
@@ -566,7 +833,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                 available: androidx.compose.ui.geometry.Offset,
                 source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
             ): androidx.compose.ui.geometry.Offset {
-                if (activePager.currentPage == 0 && available.y > 0f
+                if (pagerState.currentPage == 0 && available.y > 0f
                     && source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput) {
                     pullOverscrollPx = (pullOverscrollPx + available.y * 0.4f).coerceAtMost(maxPullPx)
                 }
@@ -604,53 +871,30 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                 }
             }
 
-            else -> Box(Modifier.fillMaxSize()) {
-                VerticalPager(
-                    state             = forYouPager,
-                    modifier          = Modifier.fillMaxSize()
-                        .then(if (ui.feedMode != FeedMode.FOR_YOU) Modifier.alpha(0f) else Modifier),
-                    userScrollEnabled = ui.feedMode == FeedMode.FOR_YOU,
-                ) { page ->
-                    when (val item = forYouItems.getOrNull(page)) {
-                        is ShortsItem.AdSlot -> ShortsNativeAdPage(adEngine = adEngine)
-                        is ShortsItem.Video  -> ShortVideoPage(
-                            video        = item.video,
-                            activePlayer = activePlayer,
-                            isActive     = page == forYouPager.currentPage && ui.feedMode == FeedMode.FOR_YOU,
-                            isMuted      = isMuted,
-                            isLiked      = item.video.id in liked,
-                            isSaved      = item.video.id in saved,
-                            onLike       = { vm.toggleLike(item.video.id) },
-                            onSave       = { vm.toggleSave(item.video.id) },
-                            onMute       = { isMuted = !isMuted },
-                        )
-                        null -> Unit
-                    }
-                }
-
-                if (ui.feedMode == FeedMode.DISCOVERY || ui.discVideos.isNotEmpty()) {
-                    VerticalPager(
-                        state             = discPager,
-                        modifier          = Modifier.fillMaxSize()
-                            .then(if (ui.feedMode != FeedMode.DISCOVERY) Modifier.alpha(0f) else Modifier),
-                        userScrollEnabled = ui.feedMode == FeedMode.DISCOVERY,
-                    ) { page ->
-                        when (val item = discItems.getOrNull(page)) {
-                            is ShortsItem.AdSlot -> ShortsNativeAdPage(adEngine = adEngine)
-                            is ShortsItem.Video  -> ShortVideoPage(
-                                video        = item.video,
-                                activePlayer = activePlayer,
-                                isActive     = page == discPager.currentPage && ui.feedMode == FeedMode.DISCOVERY,
-                                isMuted      = isMuted,
-                                isLiked      = item.video.id in liked,
-                                isSaved      = item.video.id in saved,
-                                onLike       = { vm.toggleLike(item.video.id) },
-                                onSave       = { vm.toggleSave(item.video.id) },
-                                onMute       = { isMuted = !isMuted },
-                            )
-                            null -> Unit
-                        }
-                    }
+            else -> VerticalPager(
+                state                   = pagerState,
+                modifier                = Modifier.fillMaxSize(),
+                userScrollEnabled       = !showSearch,
+                // Keeps this many pages composed off-screen so thumbnails are
+                // already loaded by the time a page becomes visible — fixes
+                // any "thumbnail pops in late" flash on fast scrolling.
+                beyondViewportPageCount = LOOKAHEAD_PAGES,
+                key                     = { idx -> (rawItems.getOrNull(idx) as? ShortsItem.Video)?.video?.id ?: "ad_$idx" },
+            ) { page ->
+                when (val item = rawItems.getOrNull(page)) {
+                    is ShortsItem.AdSlot -> ShortsNativeAdPage(adEngine = adEngine)
+                    is ShortsItem.Video  -> ShortVideoPage(
+                        video        = item.video,
+                        activePlayer = pool.playerForVideoIfActive(item.video),
+                        isActive     = page == pagerState.currentPage,
+                        isMuted      = isMuted,
+                        isLiked      = item.video.id in liked,
+                        isSaved      = item.video.id in saved,
+                        onLike       = { vm.toggleLike(item.video.id) },
+                        onSave       = { vm.toggleSave(item.video.id) },
+                        onMute       = { isMuted = !isMuted },
+                    )
+                    null -> Unit
                 }
             }
         }
@@ -813,42 +1057,6 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Feed toggle pill
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun FeedToggle(feedMode: FeedMode, onSwitch: (FeedMode) -> Unit) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color(0x88000000))
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(50))
-            .padding(2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        FeedTab("For You",   feedMode == FeedMode.FOR_YOU)   { onSwitch(FeedMode.FOR_YOU) }
-        FeedTab("Discovery", feedMode == FeedMode.DISCOVERY) { onSwitch(FeedMode.DISCOVERY) }
-    }
-}
-
-@Composable
-private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
-    val bg    by animateColorAsState(if (selected) White else Color.Transparent, tween(200), label = "tabBg")
-    val txt   by animateColorAsState(if (selected) Color.Black else White60, tween(200), label = "tabTxt")
-    val scale by animateFloatAsState(if (selected) 1f else 0.95f, spring(0.7f, 600f), label = "tabS")
-    Box(
-        Modifier.scale(scale).clip(RoundedCornerShape(50)).background(bg)
-            .clickable(indication = null,
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 7.dp),
-        Alignment.Center,
-    ) {
-        Text(label, color = txt, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Single video page
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -856,7 +1064,7 @@ private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 fun ShortVideoPage(
     video: ShortVideo,
-    activePlayer: ExoPlayer,
+    activePlayer: ExoPlayer?,
     isActive: Boolean,
     isMuted: Boolean,
     isLiked: Boolean,
@@ -868,7 +1076,7 @@ fun ShortVideoPage(
     var isBuffering by remember { mutableStateOf(true) }
 
     DisposableEffect(isActive, activePlayer) {
-        if (!isActive) return@DisposableEffect onDispose {}
+        if (!isActive || activePlayer == null) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) { isBuffering = state == Player.STATE_BUFFERING }
         }
@@ -878,12 +1086,16 @@ fun ShortVideoPage(
     }
 
     Box(Modifier.fillMaxSize()) {
+        // Thumbnail/poster frame is always composed (kept warm by the
+        // pager's beyondViewportPageCount window) so it's on screen the
+        // instant a page becomes visible — the player view fades in only
+        // once it's actually playing, never leaving a black gap between.
         AsyncImage(
             model = video.thumbnail, contentDescription = null,
             contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
         )
 
-        if (isActive) {
+        if (isActive && activePlayer != null) {
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {

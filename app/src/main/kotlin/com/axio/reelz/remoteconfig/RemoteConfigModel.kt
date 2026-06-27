@@ -25,7 +25,25 @@ data class RemoteConfig(
  */
 data class BackendConfig(
     @SerializedName("backend_url") val backendUrl: String = "",
-)
+) {
+    // config.json sometimes ends up with backend_url missing its scheme
+    // (e.g. "tt-b577.onrender.com" instead of "https://tt-b577.onrender.com")
+    // — easy to do when hand-editing the value later. OkHttp then throws
+    // "Expected URL scheme 'http' or 'https' but no scheme was found" on
+    // every request, silently killing the whole shorts feed. Since the
+    // whole point of keeping this in config.json is to fix it without an
+    // app update, the app itself should tolerate that mistake rather than
+    // require a perfectly-formed value every time. Always use this
+    // property instead of `backendUrl` directly when building request URLs.
+    val normalizedUrl: String
+        get() {
+            val trimmed = backendUrl.trim().trimEnd('/')
+            if (trimmed.isBlank()) return ""
+            return if (trimmed.startsWith("http://", ignoreCase = true) ||
+                       trimmed.startsWith("https://", ignoreCase = true)
+            ) trimmed else "https://$trimmed"
+        }
+}
 
 data class MetaConfig(
     @SerializedName("schema_version")     val schemaVersion: Int    = 1,

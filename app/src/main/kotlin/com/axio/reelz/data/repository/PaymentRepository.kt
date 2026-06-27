@@ -78,7 +78,9 @@ class PaymentRepository @Inject constructor(
         }
 
         // ── 2. Resolve backend URL ────────────────────────────────────────
-        val backendUrl = remoteConfig.backendConfig().backendUrl.trimEnd('/')
+        // normalizedUrl auto-adds "https://" if config.json's backend_url
+        // is ever saved without a scheme (see BackendConfig.normalizedUrl).
+        val backendUrl = remoteConfig.backendConfig().normalizedUrl
         if (backendUrl.isBlank()) {
             Log.w(TAG, "No backend_url in config — falling back to static link")
             return@withContext InitResult.FallbackToStaticLink("Backend not configured.")

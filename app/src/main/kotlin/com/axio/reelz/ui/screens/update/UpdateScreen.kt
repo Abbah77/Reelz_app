@@ -1,7 +1,5 @@
 package com.axio.reelz.ui.screens.update
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -16,10 +14,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.*
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
+import com.axio.reelz.update.ApkUpdateManager
+import com.axio.reelz.update.UpdateState
 import com.axio.reelz.ui.theme.*
 
 // ── Arrow-up icon drawn as vectors (no extra dep) ────────────────────────────
@@ -34,23 +33,25 @@ private val UpdateIconPath = androidx.compose.ui.graphics.vector.ImageVector.Bui
         },
         stroke = SolidColor(Color.White),
         strokeLineWidth = 2f,
-        strokeLineCap = androidx.compose.ui.graphics.vector.PathNode.RelativeLineTo::class.let {
-            androidx.compose.ui.graphics.StrokeCap.Round
-        },
+        strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round,
         strokeLineJoin = StrokeJoin.Round,
         fill = SolidColor(Color.Transparent),
     )
 }.build()
 
 /**
- * Shown when [forceUpdate] = true (user cannot skip) or as a dismissible banner
- * when a newer version is available but not mandatory.
+ * Shown when [forceUpdate] = true (user cannot skip) or as a dismissible
+ * screen when a newer version is available but not mandatory.
  *
- * @param latestVersion  e.g. "2.1.0" — shown in the UI
+ * This composable is a **dumb observer** — all download/install logic lives
+ * in [ApkUpdateManager]. It renders whatever [updateManager].state says.
+ *
+ * @param latestVersion  e.g. "2" — shown in the UI
  * @param downloadUrl    Direct APK download URL from remote config
  * @param changelog      Optional changelog text from remote config
- * @param forceUpdate    If true, no skip button is rendered
+ * @param forceUpdate    If true, no skip/later button is rendered
  * @param onSkip         Called when user taps "Later" (only if !forceUpdate)
+ * @param updateManager  Injected via Hilt — owns the download/install state machine
  */
 @Composable
 fun UpdateScreen(
@@ -59,8 +60,9 @@ fun UpdateScreen(
     changelog: String = "",
     forceUpdate: Boolean = false,
     onSkip: () -> Unit = {},
+    updateManager: ApkUpdateManager,
 ) {
-    val context = LocalContext.current
+    val updateState by updateManager.state.collectAsState()
 
     // Pulse animation on the icon badge
     val pulse = rememberInfiniteTransition(label = "pulse")
@@ -205,42 +207,108 @@ fun UpdateScreen(
 
                     Spacer(Modifier.height(28.dp))
 
-                    // Download / update button
-                    Button(
-                        onClick = {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl))
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                        contentPadding = PaddingValues(0.dp),
-                    ) {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.horizontalGradient(listOf(Brand, Brand2)),
-                                    RoundedCornerShape(14.dp),
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                "Download Update",
-                                color      = Color.White,
-                                fontSize   = 15.sp,
-                                fontWeight = FontWeight.Bold,
+                    // ── Action area — driven entirely by updateState ───────────
+                    when (val s = updateState) {
+
+                        // ── Idle or Cancelled → show Download button ──────────
+                        is UpdateState.Idle, is UpdateState.Cancelled -> {
+                            val label = if (s is UpdateState.Cancelled) "Try Again" else "Download Update"
+                            GradientButton(
+                                label    = label,
+                                onClick  = { updateManager.startUpdate(downloadUrl) },
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
                             )
+                        }
+
+                        // ── Downloading → progress bar + cancel ───────────────
+                        is UpdateState.Downloading -> {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    "Downloading… ${s.percent}%",
+                                    color    = White.copy(0.7f),
+                                    fontSize = 13.sp,
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                LinearProgressIndicator(
+                                    progress       = { s.percent / 100f },
+                                    modifier       = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                                    color          = Brand,
+                                    trackColor     = White.copy(0.12f),
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                TextButton(onClick = { updateManager.cancelDownload() }) {
+                                    Text("Cancel", color = White.copy(0.4f), fontSize = 13.sp)
+                                }
+                            }
+                        }
+
+                        // ── AwaitingInstallConfirmation or Installing ──────────
+                        is UpdateState.AwaitingInstallConfirmation,
+                        is UpdateState.Installing -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                CircularProgressIndicator(
+                                    color       = Brand,
+                                    strokeWidth = 2.dp,
+                                    modifier    = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    if (s is UpdateState.AwaitingInstallConfirmation)
+                                        "Waiting for your confirmation…"
+                                    else
+                                        "Installing…",
+                                    color    = White.copy(0.7f),
+                                    fontSize = 13.sp,
+                                )
+                            }
+                        }
+
+                        // ── Success ───────────────────────────────────────────
+                        is UpdateState.Success -> {
+                            Text(
+                                "✓ Update installed!",
+                                color      = Brand,
+                                fontSize   = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign  = TextAlign.Center,
+                                modifier   = Modifier.fillMaxWidth(),
+                            )
+                        }
+
+                        // ── Failed ────────────────────────────────────────────
+                        is UpdateState.Failed -> {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    s.reason,
+                                    color    = Color(0xFFFF6B6B),
+                                    fontSize = 13.sp,
+                                    textAlign = TextAlign.Center,
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                GradientButton(
+                                    label   = "Retry",
+                                    onClick = { updateManager.startUpdate(downloadUrl) },
+                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                )
+                            }
                         }
                     }
 
-                    // Skip button — only shown when update is optional
-                    if (!forceUpdate) {
+                    // ── Skip / Later button (optional update only) ────────────
+                    val showSkip = !forceUpdate &&
+                        updateState !is UpdateState.Downloading &&
+                        updateState !is UpdateState.Installing &&
+                        updateState !is UpdateState.AwaitingInstallConfirmation &&
+                        updateState !is UpdateState.Success
+
+                    if (showSkip) {
                         Spacer(Modifier.height(12.dp))
                         TextButton(
-                            onClick = onSkip,
+                            onClick  = onSkip,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
@@ -252,6 +320,40 @@ fun UpdateScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+// ── Shared gradient button ────────────────────────────────────────────────────
+
+@Composable
+private fun GradientButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Button(
+        onClick  = onClick,
+        modifier = modifier,
+        shape    = RoundedCornerShape(14.dp),
+        colors   = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(listOf(Brand, Brand2)),
+                    RoundedCornerShape(14.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                label,
+                color      = Color.White,
+                fontSize   = 15.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }

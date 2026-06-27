@@ -56,7 +56,9 @@ class BackendAuthRepository @Inject constructor(
      * existing local session or treat the user as free.
      */
     suspend fun exchangeToken(idToken: String): AuthResult? = withContext(Dispatchers.IO) {
-        val backendUrl = remoteConfig.backendConfig().backendUrl.trimEnd('/')
+        // normalizedUrl auto-adds "https://" if config.json's backend_url
+        // is ever saved without a scheme (see BackendConfig.normalizedUrl).
+        val backendUrl = remoteConfig.backendConfig().normalizedUrl
         if (backendUrl.isBlank()) {
             Log.e(TAG, "backend_url not set in config.json")
             return@withContext null
