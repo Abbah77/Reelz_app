@@ -131,16 +131,8 @@
             android:theme="@style/com.applovin.mediation.MaxDebuggerActivity.Theme" />
 
 
-        <!-- ── APK update install result receiver ───────────────────────── -->
-        <!-- Application-level receiver so it survives screen recomposition. -->
-        <!-- Not exported — only receives broadcasts from our own process.   -->
-        <receiver
-            android:name=".update.ApkInstallStatusReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.axio.reelz.INSTALL_STATUS" />
-            </intent-filter>
-        </receiver>
+        <!-- APK install status receiver is registered programmatically -->
+        <!-- inside ApkUpdateManager — no static declaration needed.   -->
 
     </application>
 </manifest>

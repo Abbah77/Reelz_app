@@ -51,8 +51,14 @@ class MainActivity : ComponentActivity() {
     // Track cold start — App Open ad fires ONCE on cold start, not every resume
     private var isColdStart = true
 
+    override fun onPause() {
+        super.onPause()
+        apkUpdateManager.detachActivity()
+    }
+
     override fun onResume() {
         super.onResume()
+        apkUpdateManager.attachActivity(this)
         // Sync config every time user opens/returns to app so updates are instant.
         remoteConfig.syncInBackground()
         // Show App Open ad on cold start only (fires during the existing splash gap)
