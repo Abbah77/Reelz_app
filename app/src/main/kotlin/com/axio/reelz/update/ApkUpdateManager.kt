@@ -47,8 +47,6 @@ sealed class UpdateState {
     object Success                                     : UpdateState()
 }
 
-data class DebugEntry(val time: String, val message: String)
-
 private const val TAG                   = "ApkUpdateManager"
 private const val ACTION_INSTALL_STATUS = "com.axio.reelz.INSTALL_STATUS"
 private const val APK_FILENAME          = "reelz_update.apk"
@@ -90,9 +88,6 @@ class ApkUpdateManager @Inject constructor(
 
     private val _state    = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
-
-    private val _debugLog = MutableStateFlow<List<DebugEntry>>(emptyList())
-    val debugLog: StateFlow<List<DebugEntry>> = _debugLog.asStateFlow()
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -488,8 +483,21 @@ class ApkUpdateManager @Inject constructor(
 
         try {
             val installer = context.packageManager.packageInstaller
-            val params    = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-            params.setAppPackageName(context.packageName)
+            val params    = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+                setAppPackageName(context.packageName)
+                // Required on Samsung One UI — without this the session is silently
+                // rejected with code 1 before the install dialog ever appears.
+                setInstallReason(android.content.pm.PackageManager.INSTALL_REASON_USER)
+                // Tell Android the APK size upfront — helps on low storage devices
+                // and prevents Samsung's installer from pre-rejecting the session.
+                setSize(apk.length())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    // API 31+ — request user confirmation explicitly
+                    // This is what forces Samsung to show the install dialog
+                    // instead of silently returning code 1.
+                    setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
+                }
+            }
 
             val sessionId = installer.createSession(params)
             log("Session created id=$sessionId")
@@ -548,8 +556,5 @@ class ApkUpdateManager @Inject constructor(
 
     private fun log(message: String) {
         Log.d(TAG, message)
-        val time  = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
-            .format(java.util.Date())
-        _debugLog.value = (_debugLog.value + DebugEntry(time, message)).takeLast(30)
     }
 }

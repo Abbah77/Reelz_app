@@ -13,7 +13,6 @@ import com.axio.reelz.remoteconfig.ConfigSyncWorker
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.service.DownloadService
-import com.axio.reelz.update.ApkUpdateManager
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +29,6 @@ class ReelzApp : Application(), ImageLoaderFactory {
     @Inject lateinit var remoteConfig: RemoteConfigRepository
     @Inject lateinit var adEngine: AdEngine
     @Inject lateinit var userSessionRepository: UserSessionRepository
-    @Inject lateinit var apkUpdateManager: ApkUpdateManager
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -59,10 +57,6 @@ class ReelzApp : Application(), ImageLoaderFactory {
 
         // Periodic background refresh every 6 hours.
         ConfigSyncWorker.schedule(this)
-
-        // Sweep any stale APK files left over from a previous update attempt
-        // (process death, missed broadcast, or crash during install).
-        apkUpdateManager.sweepStaleCachedApks()
 
         // ── Recover downloads stuck in QUEUED/DOWNLOADING state ──────────────
         recoverStuckDownloads()
