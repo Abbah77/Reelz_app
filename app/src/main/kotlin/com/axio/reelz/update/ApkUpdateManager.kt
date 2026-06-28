@@ -31,15 +31,23 @@ import java.util.zip.ZipFile
 import javax.inject.Inject
 import javax.inject.Singleton
 
+// ── State machine ─────────────────────────────────────────────────────────────
+
 sealed class UpdateState {
-    object Idle                               : UpdateState()
-    data class Downloading(val percent: Int)  : UpdateState()
-    object AwaitingInstallConfirmation        : UpdateState()
-    object Installing                         : UpdateState()
-    object Cancelled                          : UpdateState()
-    data class Failed(val reason: String)     : UpdateState()
-    object Success                            : UpdateState()
+    object Idle                                        : UpdateState()
+    data class Downloading(
+        val percent       : Int,
+        val bytesDownloaded: Long = 0L,
+        val totalBytes    : Long  = 0L,
+    ) : UpdateState()
+    object AwaitingInstallConfirmation                 : UpdateState()
+    object Installing                                  : UpdateState()
+    object Cancelled                                   : UpdateState()
+    data class Failed(val reason: String)              : UpdateState()
+    object Success                                     : UpdateState()
 }
+
+data class DebugEntry(val time: String, val message: String)
 
 private const val TAG                   = "ApkUpdateManager"
 private const val ACTION_INSTALL_STATUS = "com.axio.reelz.INSTALL_STATUS"
@@ -47,57 +55,66 @@ private const val APK_FILENAME          = "reelz_update.apk"
 private const val APK_MAX_AGE_MS        = 24L * 60 * 60 * 1000L
 private const val MIN_APK_SIZE_BYTES    = 100_000L
 
+/**
+ * APK self-update using OkHttp (streaming, 16 KB chunks → no RAM pressure)
+ * + PackageInstaller.Session (no file:// URI anywhere — we stream directly
+ * from the File into the session OutputStream).
+ *
+ * Why no file:// URI:
+ * - Android 7+ throws FileUriExposedException on file:// passed to external components
+ * - Android 10+ blocks them in DownloadManager destinations too
+ * - PackageInstaller.Session.openWrite() gives us an OutputStream we write into
+ *   directly from our own File — no URI exposure, no FileProvider needed
+ *
+ * RAM usage:
+ * - OkHttp streams in 16 KB chunks: read → write to disk → next chunk
+ * - A 50 MB APK uses ~16 KB of heap at any moment, not 50 MB
+ *
+ * Resilience:
+ * - Download runs on Dispatchers.IO coroutine
+ * - isActive checks throughout — cancellation is clean
+ * - File deleted on cancel, failure, and success
+ * - Startup sweep cleans up any orphan from process death
+ */
 @Singleton
 class ApkUpdateManager @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     private val scope       = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var downloadJob: Job? = null
+    private var downloadJob : Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Weak ref to current Activity — used ONLY to launch the install dialog
-    // so we use startActivityForResult context, not application context.
-    // WeakRef prevents leaking the Activity.
     private var activityRef: WeakReference<Activity>? = null
+    fun attachActivity(a: Activity) { activityRef = WeakReference(a) }
+    fun detachActivity()            { activityRef = null }
 
-    fun attachActivity(activity: Activity) {
-        activityRef = WeakReference(activity)
-    }
-
-    fun detachActivity() {
-        activityRef = null
-    }
-
-    private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    private val _state    = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
+
+    private val _debugLog = MutableStateFlow<List<DebugEntry>>(emptyList())
+    val debugLog: StateFlow<List<DebugEntry>> = _debugLog.asStateFlow()
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)   // No read timeout — APK can be large on slow connections
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
 
-    // ── BroadcastReceiver ─────────────────────────────────────────────────────
-    // Every line wrapped in try/catch — one uncaught exception here = full crash.
-    // startActivity is done via the attached Activity (not application context)
-    // to avoid the Samsung/Xiaomi WindowManager crash.
+    // ── PackageInstaller result receiver ──────────────────────────────────────
+    // Registered at Application level — survives screen recomposition.
+    // Every line in onReceive is inside try/catch — one uncaught exception
+    // here kills the entire process (receivers run on main thread).
 
     private val installReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
             try {
                 if (intent == null) return
-
-                val status = intent.getIntExtra(
-                    PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE
-                )
-                val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
-                    ?.takeIf { it.isNotBlank() }
-
-                Log.d(TAG, "installReceiver status=$status message=$message")
+                val status  = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+                val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.takeIf { it.isNotBlank() }
+                log("PackageInstaller → status=$status message=$message")
 
                 when (status) {
-
                     PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                         try {
                             @Suppress("DEPRECATION")
@@ -108,61 +125,64 @@ class ApkUpdateManager @Inject constructor(
                                     intent.getParcelableExtra(Intent.EXTRA_INTENT)
 
                             if (confirmIntent == null) {
+                                log("ERROR: confirmIntent is null")
                                 _state.value = UpdateState.Failed(
                                     "Android did not provide an install dialog.\n" +
                                     "Go to Settings → Apps → Special app access → " +
-                                    "Install unknown apps → enable for Reelz, then retry."
+                                    "Install unknown apps → enable for Reelz."
                                 )
                                 cleanupApk()
                                 return
                             }
 
                             _state.value = UpdateState.AwaitingInstallConfirmation
+                            log("Launching system install dialog via Activity context")
 
+                            // Must post to main thread.
+                            // Must use Activity context (not Application) on Samsung/Xiaomi
+                            // to avoid WindowManager$BadTokenException crash.
                             mainHandler.post {
                                 try {
-                                    // Prefer Activity context — avoids Samsung WindowManager crash
                                     val activity = activityRef?.get()
                                     if (activity != null && !activity.isFinishing && !activity.isDestroyed) {
-                                        Log.d(TAG, "Launching install dialog via Activity context")
                                         activity.startActivity(confirmIntent)
                                     } else {
-                                        // Fallback: application context with NEW_TASK flag
-                                        Log.d(TAG, "Launching install dialog via application context (fallback)")
+                                        log("Activity unavailable — using Application context fallback")
                                         confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                         context.startActivity(confirmIntent)
                                     }
                                 } catch (e: Exception) {
-                                    Log.e(TAG, "startActivity for install dialog failed: ${e.message}", e)
+                                    log("ERROR startActivity: ${e.message}")
                                     _state.value = UpdateState.Failed(
-                                        "Could not open install dialog: ${e.message}\n\n" +
-                                        "Go to Settings → Apps → Special app access → " +
-                                        "Install unknown apps → enable for Reelz, then retry."
+                                        "Could not open install dialog: ${e.message}\n" +
+                                        "Enable 'Install unknown apps' for Reelz in Settings."
                                     )
                                     cleanupApk()
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "PENDING_USER_ACTION handling failed: ${e.message}", e)
+                            log("ERROR handling PENDING_USER_ACTION: ${e.message}")
                             _state.value = UpdateState.Failed("Install dialog error: ${e.message}")
                             cleanupApk()
                         }
                     }
 
                     PackageInstaller.STATUS_SUCCESS -> {
-                        Log.d(TAG, "Install SUCCESS ✓")
+                        log("Install SUCCESS ✓")
                         _state.value = UpdateState.Success
                         cleanupApk()
                     }
 
                     PackageInstaller.STATUS_FAILURE_ABORTED -> {
-                        Log.d(TAG, "User dismissed install dialog — keeping APK for retry")
+                        log("User dismissed install dialog — keeping APK for instant retry")
                         _state.value = UpdateState.Cancelled
+                        // Keep the APK — "Try Again" reuses it without re-downloading
                     }
 
                     PackageInstaller.STATUS_FAILURE_BLOCKED -> {
+                        log("Install BLOCKED")
                         _state.value = UpdateState.Failed(
-                            "Install blocked.\n" +
+                            "Install blocked by Android.\n" +
                             "Go to Settings → Apps → Special app access → " +
                             "Install unknown apps → enable for Reelz."
                         )
@@ -170,52 +190,50 @@ class ApkUpdateManager @Inject constructor(
                     }
 
                     PackageInstaller.STATUS_FAILURE_INVALID -> {
+                        log("Install INVALID — keystore mismatch or corrupt APK")
                         _state.value = UpdateState.Failed(
                             "Android rejected the APK.\n" +
-                            "Most likely cause: V3 was signed with a DIFFERENT keystore than V2.\n\n" +
-                            "Fix: Uninstall Reelz completely, then install V3 fresh."
+                            "This usually means V2 and V3 were signed with different keystores.\n" +
+                            "Uninstall Reelz and install V3 fresh to fix."
                         )
                         cleanupApk()
                     }
 
                     PackageInstaller.STATUS_FAILURE_CONFLICT -> {
+                        log("Install CONFLICT — same or lower versionCode")
                         _state.value = UpdateState.Failed(
-                            "Version conflict.\n" +
-                            "The APK versionCode is not higher than installed, " +
-                            "or signed with a different keystore.\n\n" +
-                            "Fix: Uninstall Reelz completely, then install V3 fresh."
+                            "Version conflict — downloaded APK is not newer than installed version.\n" +
+                            "Make sure V3 has a higher versionCode than V2."
                         )
                         cleanupApk()
                     }
 
                     PackageInstaller.STATUS_FAILURE_STORAGE -> {
-                        _state.value = UpdateState.Failed(
-                            "Not enough storage space. Free up space and try again."
-                        )
+                        log("Install FAILED — insufficient storage")
+                        _state.value = UpdateState.Failed("Not enough storage. Free up space and try again.")
                         cleanupApk()
                     }
 
                     PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> {
-                        _state.value = UpdateState.Failed(
-                            "APK is not compatible with your device architecture."
-                        )
+                        log("Install INCOMPATIBLE — wrong ABI or minSdk")
+                        _state.value = UpdateState.Failed("APK is not compatible with your device.")
                         cleanupApk()
                     }
 
                     1 -> {
-                        // STATUS_FAILURE (generic code 1) on Samsung almost always means
-                        // keystore mismatch or the APK was signed with debug key.
+                        // Generic STATUS_FAILURE — on Samsung almost always means
+                        // keystore mismatch or versionCode not higher
+                        log("Install FAILED code=1 (Samsung generic rejection)")
                         _state.value = UpdateState.Failed(
-                            "Install failed — Samsung blocked the install.\n\n" +
-                            "This is almost always a KEYSTORE MISMATCH:\n" +
-                            "V2 and V3 must be signed with the exact same keystore.\n\n" +
-                            "Fix: Uninstall Reelz, install V3 fresh, " +
-                            "and make sure both builds use the same signing key."
+                            "Install failed (code 1).\n" +
+                            "On Samsung this usually means keystore mismatch.\n" +
+                            "Both V2 and V3 must be signed with the exact same keystore."
                         )
                         cleanupApk()
                     }
 
                     else -> {
+                        log("Install FAILED code=$status")
                         _state.value = UpdateState.Failed(
                             "Install failed (code $status): ${message ?: "Unknown error"}"
                         )
@@ -223,7 +241,8 @@ class ApkUpdateManager @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "FATAL uncaught in installReceiver.onReceive: ${e.message}", e)
+                // Last-resort catch — nothing must escape onReceive
+                log("FATAL uncaught in installReceiver: ${e.message}")
                 try {
                     _state.value = UpdateState.Failed("Unexpected install error: ${e.message}")
                     cleanupApk()
@@ -240,9 +259,9 @@ class ApkUpdateManager @Inject constructor(
             } else {
                 context.registerReceiver(installReceiver, filter)
             }
-            Log.d(TAG, "installReceiver registered OK")
+            log("installReceiver registered OK")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register installReceiver: ${e.message}", e)
+            log("ERROR registering installReceiver: ${e.message}")
         }
     }
 
@@ -250,17 +269,19 @@ class ApkUpdateManager @Inject constructor(
 
     fun startUpdate(url: String) {
         if (url.isBlank() || url.contains("yourusername") || url.contains("REPLACE")) {
-            _state.value = UpdateState.Failed("Update URL is not configured.")
+            log("ERROR: Update URL is not configured")
+            _state.value = UpdateState.Failed("Update URL is not configured. Contact the developer.")
             return
         }
-        if (_state.value is UpdateState.Downloading) return
+        if (_state.value is UpdateState.Downloading) {
+            log("Already downloading — ignoring duplicate call")
+            return
+        }
 
+        // If user previously dismissed install dialog, reuse the APK — no re-download
         val cached = apkFile()
-        if (_state.value is UpdateState.Cancelled
-            && cached.exists()
-            && cached.length() > MIN_APK_SIZE_BYTES
-        ) {
-            Log.d(TAG, "Reusing cached APK (${cached.length()} bytes)")
+        if (_state.value is UpdateState.Cancelled && cached.exists() && cached.length() > MIN_APK_SIZE_BYTES) {
+            log("Reusing cached APK for retry (${cached.length()} bytes)")
             _state.value = UpdateState.Idle
             scope.launch { commitSession(cached) }
             return
@@ -270,184 +291,265 @@ class ApkUpdateManager @Inject constructor(
     }
 
     fun cancelDownload() {
+        log("Download cancelled by user")
         downloadJob?.cancel()
         downloadJob = null
         cleanupApk()
         _state.value = UpdateState.Idle
     }
 
+    /** Call once from ReelzApp.onCreate() to clean up orphan APKs from previous crashes. */
     fun sweepStaleCachedApks() {
         scope.launch {
             try {
                 val now = System.currentTimeMillis()
                 context.cacheDir.listFiles { f ->
                     f.name.endsWith(".apk") && (now - f.lastModified()) > APK_MAX_AGE_MS
-                }?.forEach { it.delete(); Log.d(TAG, "Swept stale APK: ${it.name}") }
+                }?.forEach {
+                    it.delete()
+                    log("Swept stale APK: ${it.name}")
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "sweepStaleCachedApks: ${e.message}")
+                log("sweepStaleCachedApks error: ${e.message}")
             }
         }
     }
 
-    // ── Private ───────────────────────────────────────────────────────────────
+    // ── Download ──────────────────────────────────────────────────────────────
 
     private suspend fun downloadAndInstall(url: String) = withContext(Dispatchers.IO) {
         val dest = apkFile()
-        dest.delete()
+        dest.delete()   // Remove any stale file before starting fresh
+
         try {
             _state.value = UpdateState.Downloading(0)
-            Log.d(TAG, "Downloading: $url")
+            log("Starting OkHttp download from: $url")
 
-            val req = Request.Builder()
+            val request = Request.Builder()
                 .url(url)
                 .header("User-Agent", "Mozilla/5.0 (Android ${Build.VERSION.RELEASE})")
                 .header("Accept", "application/vnd.android.package-archive, */*")
                 .build()
 
-            http.newCall(req).execute().use { resp ->
-                Log.d(TAG, "HTTP ${resp.code} Content-Type:${resp.header("Content-Type")}")
+            http.newCall(request).execute().use { resp ->
+                log("HTTP ${resp.code} | Content-Type: ${resp.header("Content-Type")} | Content-Length: ${resp.header("Content-Length")}")
+
                 if (!resp.isSuccessful) {
-                    _state.value = UpdateState.Failed("Server returned HTTP ${resp.code}.")
+                    val reason = when (resp.code) {
+                        400  -> "HTTP 400 — Bad request. The URL may be malformed."
+                        401  -> "HTTP 401 — Unauthorized. The file requires authentication."
+                        403  -> "HTTP 403 — Forbidden. The file is not publicly accessible."
+                        404  -> "HTTP 404 — File not found. The APK URL is wrong or the file was deleted.\nUpdate the config with a valid URL."
+                        500  -> "HTTP 500 — Server error. Try again later."
+                        else -> "HTTP ${resp.code} — Unexpected response from server."
+                    }
+                    log("ERROR: $reason")
+                    _state.value = UpdateState.Failed(reason)
                     return@withContext
                 }
-                val ct = resp.header("Content-Type") ?: ""
-                if (ct.contains("text/html", ignoreCase = true)) {
+
+                // Reject HTML responses (error pages that return 200)
+                val contentType = resp.header("Content-Type") ?: ""
+                if (contentType.contains("text/html", ignoreCase = true)) {
+                    log("ERROR: Server returned HTML page instead of APK")
                     _state.value = UpdateState.Failed(
-                        "URL returned an HTML page instead of an APK.\n" +
-                        "The GitHub release may not be public or the URL is wrong."
+                        "The download URL returned an HTML page instead of an APK.\n" +
+                        "The file may have been deleted or the URL is wrong."
                     )
                     return@withContext
                 }
+
                 val body = resp.body ?: run {
-                    _state.value = UpdateState.Failed("Empty server response.")
+                    log("ERROR: Empty response body")
+                    _state.value = UpdateState.Failed("Server returned an empty response.")
                     return@withContext
                 }
-                val len = body.contentLength()
+
+                val totalBytes = body.contentLength()
+                log("Downloading ${if (totalBytes > 0) "${totalBytes / 1_048_576} MB" else "unknown size"}")
+
+                // Stream in 16 KB chunks — APK never fully loaded into RAM
                 dest.outputStream().buffered(16_384).use { out ->
                     body.byteStream().use { src ->
-                        val buf = ByteArray(16_384); var read = 0L; var n: Int
+                        val buf  = ByteArray(16_384)
+                        var read = 0L
+                        var n    : Int
                         while (src.read(buf).also { n = it } != -1) {
-                            if (!isActive) return@withContext
-                            out.write(buf, 0, n); read += n
-                            if (len > 0)
+                            if (!isActive) {
+                                log("Download cancelled mid-stream — cleaning up")
+                                return@withContext
+                            }
+                            out.write(buf, 0, n)
+                            read += n
+                            if (totalBytes > 0) {
                                 _state.value = UpdateState.Downloading(
-                                    (read * 100L / len).toInt().coerceIn(0, 99)
+                                    percent        = (read * 100L / totalBytes).toInt().coerceIn(0, 99),
+                                    bytesDownloaded = read,
+                                    totalBytes     = totalBytes,
                                 )
+                            } else {
+                                // Unknown size — show bytes downloaded only
+                                _state.value = UpdateState.Downloading(
+                                    percent        = -1,
+                                    bytesDownloaded = read,
+                                    totalBytes     = 0L,
+                                )
+                            }
                         }
                     }
                 }
             }
 
             if (!isActive) return@withContext
-            Log.d(TAG, "Download complete: ${dest.length()} bytes")
 
-            val err = validateApkFile(dest)
-            if (err != null) {
-                _state.value = UpdateState.Failed(err); dest.delete(); return@withContext
+            log("Download complete — ${dest.length()} bytes on disk")
+
+            // ── Validate ──────────────────────────────────────────────────────
+            val validationErr = validateApkFile(dest)
+            if (validationErr != null) {
+                log("Validation FAILED: $validationErr")
+                _state.value = UpdateState.Failed(validationErr)
+                dest.delete()
+                return@withContext
             }
+            log("Validation PASSED ✓")
 
-            _state.value = UpdateState.Downloading(100)
-            commitSession(dest)
+            // ── Version pre-flight ────────────────────────────────────────────
+            val downloadedVersion = getApkVersionCode(dest)
+            val installedVersion  = try {
+                context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt()
+            } catch (_: Exception) { 0 }
 
-        } catch (e: Exception) {
-            if (!isActive) return@withContext
-            Log.e(TAG, "downloadAndInstall: ${e.message}", e)
-            _state.value = UpdateState.Failed("Download failed: ${e.message}")
-            dest.delete()
-        }
-    }
+            log("Version check: installed=$installedVersion downloaded=$downloadedVersion")
 
-    private fun validateApkFile(file: File): String? {
-        if (!file.exists() || file.length() == 0L)
-            return "Downloaded file is empty."
-        if (file.length() < MIN_APK_SIZE_BYTES)
-            return "File too small (${file.length()} bytes) — not a valid APK."
-        return try {
-            ZipFile(file).use { zip ->
-                if (zip.getEntry("AndroidManifest.xml") == null)
-                    "Not a valid APK — AndroidManifest.xml missing."
-                else null
-            }
-        } catch (e: Exception) {
-            "File is corrupt or not an APK: ${e.message}"
-        }
-    }
-
-    private suspend fun commitSession(apk: File) = withContext(Dispatchers.IO) {
-        _state.value = UpdateState.Installing
-        Log.d(TAG, "Committing PackageInstaller session (${apk.length()} bytes)")
-        try {
-            // ── Pre-flight version check ──────────────────────────────────────
-            // Extract versionCode from the downloaded APK and compare against
-            // the currently installed version. Fail fast with a clear message
-            // instead of letting PackageInstaller return the cryptic code 1.
-            val downloadedVersionCode = getApkVersionCode(apk)
-            val installedVersionCode  = try {
-                context.packageManager
-                    .getPackageInfo(context.packageName, 0)
-                    .longVersionCode.toInt()
-            } catch (e: Exception) { 0 }
-
-            Log.d(TAG, "Version check: installed=$installedVersionCode downloaded=$downloadedVersionCode")
-
-            if (downloadedVersionCode > 0 && downloadedVersionCode <= installedVersionCode) {
+            if (downloadedVersion > 0 && downloadedVersion <= installedVersion) {
+                log("Downloaded APK is NOT newer than installed — aborting")
                 _state.value = UpdateState.Failed(
-                    "The downloaded APK (v$downloadedVersionCode) is not newer than " +
-                    "the installed version (v$installedVersionCode).\n\n" +
-                    "You already have the latest version installed."
+                    "Downloaded APK (v$downloadedVersion) is not newer than installed (v$installedVersion).\n" +
+                    "You already have the latest version."
                 )
                 cleanupApk()
                 return@withContext
             }
 
-            val installer = context.packageManager.packageInstaller
-            val params = PackageInstaller.SessionParams(
-                PackageInstaller.SessionParams.MODE_FULL_INSTALL
-            )
-            params.setAppPackageName(context.packageName)
+            _state.value = UpdateState.Downloading(100, dest.length(), dest.length())
+            commitSession(dest)
 
-            val sessionId = installer.createSession(params)
-            installer.openSession(sessionId).use { session ->
-                session.openWrite("reelz_apk", 0, apk.length()).use { out ->
-                    apk.inputStream().use { it.copyTo(out, 16_384) }
-                    session.fsync(out)
-                }
-                val pi = PendingIntent.getBroadcast(
-                    context, sessionId,
-                    Intent(ACTION_INSTALL_STATUS).setPackage(context.packageName),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-                session.commit(pi.intentSender)
-                Log.d(TAG, "Session committed id=$sessionId")
-            }
-        } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException: ${e.message}", e)
-            _state.value = UpdateState.Failed(
-                "Permission denied — go to Settings → Apps → Special app access → " +
-                "Install unknown apps → enable for Reelz."
-            )
-            cleanupApk()
         } catch (e: Exception) {
-            Log.e(TAG, "commitSession: ${e.message}", e)
-            _state.value = UpdateState.Failed("Install session failed: ${e.message}")
-            cleanupApk()
+            if (!isActive) return@withContext
+            log("Download exception: ${e.javaClass.simpleName}: ${e.message}")
+            _state.value = UpdateState.Failed(
+                "Download failed: ${e.message ?: "Unknown error"}.\nCheck your internet connection."
+            )
+            dest.delete()
+        }
+    }
+
+    // ── Validation ────────────────────────────────────────────────────────────
+
+    private fun validateApkFile(file: File): String? {
+        if (!file.exists() || file.length() == 0L)
+            return "Downloaded file is empty. Please try again."
+        if (file.length() < MIN_APK_SIZE_BYTES)
+            return "File too small (${file.length()} bytes) — not a valid APK.\n" +
+                   "The URL may point to an error page instead of the real APK."
+        return try {
+            ZipFile(file).use { zip ->
+                if (zip.getEntry("AndroidManifest.xml") == null)
+                    "Not a valid APK — AndroidManifest.xml missing.\n" +
+                    "Wrong file may have been uploaded to the host."
+                else null
+            }
+        } catch (e: Exception) {
+            "File is corrupt or not an APK (${e.javaClass.simpleName}).\n" +
+            "The download may have been interrupted."
         }
     }
 
     private fun getApkVersionCode(apk: File): Int {
         return try {
-            val info = context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
-            info?.longVersionCode?.toInt() ?: -1
+            context.packageManager
+                .getPackageArchiveInfo(apk.absolutePath, 0)
+                ?.longVersionCode?.toInt() ?: -1
         } catch (e: Exception) {
-            Log.w(TAG, "getApkVersionCode failed: ${e.message}")
+            log("getApkVersionCode error: ${e.message}")
             -1
         }
     }
 
-    private fun cleanupApk() {
-        try { apkFile().takeIf { it.exists() }?.delete() }
-        catch (e: Exception) { Log.w(TAG, "cleanupApk: ${e.message}") }
+    // ── PackageInstaller session ──────────────────────────────────────────────
+    // We stream the File directly into the session OutputStream.
+    // No file:// URI is ever created or passed to any external component —
+    // this is why we need neither FileProvider nor DownloadManager here.
+
+    private suspend fun commitSession(apk: File) = withContext(Dispatchers.IO) {
+        _state.value = UpdateState.Installing
+        log("Opening PackageInstaller session (${apk.length()} bytes)")
+
+        try {
+            val installer = context.packageManager.packageInstaller
+            val params    = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            params.setAppPackageName(context.packageName)
+
+            val sessionId = installer.createSession(params)
+            log("Session created id=$sessionId")
+
+            installer.openSession(sessionId).use { session ->
+                // Stream file → session. No URI. No FileProvider. No file:// exposure.
+                session.openWrite("reelz_apk", 0, apk.length()).use { out ->
+                    apk.inputStream().use { input ->
+                        input.copyTo(out, bufferSize = 65_536)
+                    }
+                    session.fsync(out)
+                }
+
+                val receiverIntent = Intent(ACTION_INSTALL_STATUS).setPackage(context.packageName)
+                val pi = PendingIntent.getBroadcast(
+                    context,
+                    sessionId,
+                    receiverIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                session.commit(pi.intentSender)
+                log("Session committed — waiting for system install dialog")
+            }
+        } catch (e: SecurityException) {
+            log("SecurityException in commitSession: ${e.message}")
+            _state.value = UpdateState.Failed(
+                "Permission denied by Android.\n" +
+                "Go to Settings → Apps → Special app access → " +
+                "Install unknown apps → enable for Reelz."
+            )
+            cleanupApk()
+        } catch (e: Exception) {
+            log("ERROR in commitSession: ${e.javaClass.simpleName}: ${e.message}")
+            _state.value = UpdateState.Failed("Install session failed: ${e.message}")
+            cleanupApk()
+        }
     }
 
+    // ── Cleanup ───────────────────────────────────────────────────────────────
+
+    private fun cleanupApk() {
+        try {
+            apkFile().takeIf { it.exists() }?.let {
+                it.delete()
+                log("Temp APK deleted from cacheDir ✓")
+            }
+        } catch (e: Exception) {
+            log("cleanupApk error: ${e.message}")
+        }
+    }
+
+    /** APK stored in cacheDir — Android may auto-purge under storage pressure (safety net). */
     private fun apkFile() = File(context.cacheDir, APK_FILENAME)
+
+    // ── Debug ─────────────────────────────────────────────────────────────────
+
+    private fun log(message: String) {
+        Log.d(TAG, message)
+        val time  = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        _debugLog.value = (_debugLog.value + DebugEntry(time, message)).takeLast(30)
+    }
 }
