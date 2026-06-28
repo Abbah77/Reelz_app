@@ -35,6 +35,7 @@ import com.axio.reelz.ui.screens.downloads.DownloadsScreen
 import com.axio.reelz.ui.screens.transfer.TransferScreen
 import com.axio.reelz.ui.screens.profile.ProfileScreen
 import com.axio.reelz.ui.screens.premium.PremiumScreen
+import com.axio.reelz.ui.screens.settings.SettingsScreen
 import com.axio.reelz.ui.screens.detail.DetailScreen
 import com.axio.reelz.ui.screens.search.SearchScreen
 import com.axio.reelz.ui.theme.*
@@ -52,6 +53,7 @@ sealed class Route(val path: String) {
     object Profile  : Route("profile")
     object Search   : Route("search")
     object Premium  : Route("premium")
+    object Settings : Route("settings")
     object Detail   : Route("detail/{tmdbId}/{mediaType}") {
         fun go(id: Int, type: MediaType) = "detail/$id/${type.name}"
     }
@@ -165,6 +167,7 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
             composable(Route.Profile.path)   { ProfileScreen(nav) }
             composable(Route.Search.path)    { SearchScreen(nav) }
             composable(Route.Premium.path)   { PremiumScreen(nav) }
+            composable(Route.Settings.path)  { com.axio.reelz.ui.screens.settings.SettingsScreen(nav) }
             composable(
                 route     = Route.Detail.path,
                 arguments = listOf(

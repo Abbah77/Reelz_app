@@ -26,7 +26,7 @@ android {
         buildConfigField("String", "TMDB_IMG_W342",            "\"https://image.tmdb.org/t/p/w342\"")
         buildConfigField("String", "TMDB_IMG_ORIGINAL",        "\"https://image.tmdb.org/t/p/original\"")
 
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++20", "-O3", "-DNDEBUG", "-ffast-math")

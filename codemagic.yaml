@@ -35,7 +35,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - yakubuyakson77@gmail.com
+          - axio.founder@gmail.com
         notify:
           success: true
           failure: true

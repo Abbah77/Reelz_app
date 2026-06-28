@@ -222,6 +222,17 @@ class MediaRepository @Inject constructor(
             season = season, episode = episode,
             positionMs = positionMs, durationMs = durationMs,
         ))
+        // Keep history lean — trim beyond 500 oldest entries silently
+        historyDao.trimToLimit(keepCount = 500)
+
+        // Smart watchlist psychology: user watched ≥ 90% → they've seen it → auto-remove.
+        // This covers the "last 10% is trailers/credits" reality — we don't force 100%.
+        // For TV shows (season > 0) we remove per-episode, so binging a season
+        // auto-clears as they finish each one. If you want whole-show removal,
+        // you'd need extra logic but per-episode is lighter and more accurate.
+        if (durationMs > 0 && positionMs.toFloat() / durationMs >= 0.90f) {
+            watchlistDao.delete(tmdbId)
+        }
     }
 }
 

@@ -20,13 +20,34 @@ interface WatchlistDao {
 // ── Watch history ─────────────────────────────────────────────────────────────
 @Dao
 interface WatchHistoryDao {
-    @Query("SELECT * FROM watch_history ORDER BY watchedAt DESC LIMIT 50")
+    /** Paginated load — load a page of N items starting at offset for lazy scroll. */
+    @Query("SELECT * FROM watch_history ORDER BY watchedAt DESC LIMIT :limit OFFSET :offset")
+    suspend fun getPage(limit: Int = 20, offset: Int = 0): List<WatchHistory>
+
+    /** Total count — used to know if there are more pages to load. */
+    @Query("SELECT COUNT(*) FROM watch_history")
+    suspend fun count(): Int
+
+    /** Flow of most recent 20 for the initial display. */
+    @Query("SELECT * FROM watch_history ORDER BY watchedAt DESC LIMIT 20")
     fun getRecent(): Flow<List<WatchHistory>>
+
     @Query("SELECT * FROM watch_history WHERE key = :key LIMIT 1")
     suspend fun get(key: String): WatchHistory?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(i: WatchHistory)
+
     @Query("DELETE FROM watch_history WHERE key = :key") suspend fun delete(key: String)
+
     @Query("DELETE FROM watch_history") suspend fun clear()
+
+    /** Trim oldest entries beyond the cap so the table never grows unbounded. */
+    @Query("""
+        DELETE FROM watch_history WHERE key IN (
+            SELECT key FROM watch_history ORDER BY watchedAt DESC LIMIT -1 OFFSET :keepCount
+        )
+    """)
+    suspend fun trimToLimit(keepCount: Int = 500)
 }
 
 // ── Liked media ───────────────────────────────────────────────────────────────

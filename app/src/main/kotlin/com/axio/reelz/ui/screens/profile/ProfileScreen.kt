@@ -2,6 +2,7 @@ package com.axio.reelz.ui.screens.profile
 
 import android.content.Context
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.*
@@ -12,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.PathData
 import androidx.compose.ui.graphics.vector.path
@@ -41,46 +43,23 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-// Custom icon vectors for settings
-private val IconStorage: ImageVector get() = ImageVector.Builder("Storage", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(2f, 6f); arcTo(2f, 2f, 0f, false, true, 4f, 4f); lineTo(20f, 4f); arcTo(2f, 2f, 0f, false, true, 22f, 6f)
-        arcTo(2f, 2f, 0f, false, true, 20f, 8f); lineTo(4f, 8f); arcTo(2f, 2f, 0f, false, true, 2f, 6f); close()
-        moveTo(2f, 12f); arcTo(2f, 2f, 0f, false, true, 4f, 10f); lineTo(20f, 10f); arcTo(2f, 2f, 0f, false, true, 22f, 12f)
-        arcTo(2f, 2f, 0f, false, true, 20f, 14f); lineTo(4f, 14f); arcTo(2f, 2f, 0f, false, true, 2f, 12f); close()
-        moveTo(2f, 18f); arcTo(2f, 2f, 0f, false, true, 4f, 16f); lineTo(20f, 16f); arcTo(2f, 2f, 0f, false, true, 22f, 18f)
-        arcTo(2f, 2f, 0f, false, true, 20f, 20f); lineTo(4f, 20f); arcTo(2f, 2f, 0f, false, true, 2f, 18f); close()
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.5f, fill = SolidColor(Color.Transparent))
-}.build()
+// ── Icon vectors ──────────────────────────────────────────────────────────────
 
-private val IconShield: ImageVector get() = ImageVector.Builder("Shield", 24.dp, 24.dp, 24f, 24f).apply {
+private val IconSettings: ImageVector get() = ImageVector.Builder("Settings", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
-        moveTo(12f, 2f); lineTo(20f, 6f); lineTo(20f, 11f)
-        arcTo(9f, 9f, 0f, false, true, 12f, 20f)
-        arcTo(9f, 9f, 0f, false, true, 4f, 11f); lineTo(4f, 6f); close()
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.5f, fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconBell: ImageVector get() = ImageVector.Builder("Bell", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(18f, 8f); arcTo(6f, 6f, 0f, false, false, 6f, 8f)
-        lineTo(5f, 17f); lineTo(19f, 17f); lineTo(18f, 8f)
-        moveTo(10.27f, 21f); arcTo(2f, 2f, 0f, false, false, 13.73f, 21f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.5f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconInfoOutline: ImageVector get() = ImageVector.Builder("Info", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 12f, 22f); arcTo(10f, 10f, 0f, false, false, 12f, 2f); close()
-        moveTo(12f, 8f); lineTo(12f, 8.01f); moveTo(12f, 11f); lineTo(12f, 16f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.5f, strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconChevronRight: ImageVector get() = ImageVector.Builder("ChevRight", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData { moveTo(9f, 18f); lineTo(15f, 12f); lineTo(9f, 6f) },
-        stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round,
-        strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
+        moveTo(12f, 8f); arcTo(4f, 4f, 0f, false, false, 12f, 16f); arcTo(4f, 4f, 0f, false, false, 12f, 8f); close()
+        moveTo(12f, 2f); lineTo(11f, 2f); lineTo(11f, 4.07f)
+        arcTo(8f, 8f, 0f, false, false, 5.14f, 7.28f); lineTo(3.71f, 5.86f); lineTo(2.29f, 7.28f)
+        lineTo(3.72f, 8.71f); arcTo(8f, 8f, 0f, false, false, 2f, 12f)
+        arcTo(8f, 8f, 0f, false, false, 3.72f, 15.29f); lineTo(2.29f, 16.71f); lineTo(3.71f, 18.14f)
+        lineTo(5.14f, 16.71f); arcTo(8f, 8f, 0f, false, false, 11f, 19.93f); lineTo(11f, 22f)
+        lineTo(13f, 22f); lineTo(13f, 19.93f)
+        arcTo(8f, 8f, 0f, false, false, 18.86f, 16.71f); lineTo(20.29f, 18.14f); lineTo(21.71f, 16.71f)
+        lineTo(20.28f, 15.28f); arcTo(8f, 8f, 0f, false, false, 22f, 12f)
+        arcTo(8f, 8f, 0f, false, false, 20.28f, 8.71f); lineTo(21.71f, 7.29f); lineTo(20.29f, 5.86f)
+        lineTo(18.86f, 7.29f); arcTo(8f, 8f, 0f, false, false, 13f, 4.07f); lineTo(13f, 2f); close()
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.4f, strokeLineCap = StrokeCap.Round,
+       strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
 }.build()
 
 private val IconBookmarkSolid: ImageVector get() = ImageVector.Builder("BookmarkFill", 24.dp, 24.dp, 24f, 24f).apply {
@@ -117,12 +96,24 @@ private val IconVideoSolid: ImageVector get() = ImageVector.Builder("VideoFill",
     }, fill = SolidColor(Color(0xFF5B7FFF)))
 }.build()
 
+private val IconChevronRight: ImageVector get() = ImageVector.Builder("ChevRight", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData { moveTo(9f, 18f); lineTo(15f, 12f); lineTo(9f, 6f) },
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
+}.build()
+
+private val White30 = Color(0x4DF8F4EE)
+
+// ── Data ──────────────────────────────────────────────────────────────────────
+
 data class UserProfile(
     val name: String = "",
     val email: String = "",
     val photoUrl: String? = null,
     val isSignedIn: Boolean = false,
 )
+
+// ── ViewModel ─────────────────────────────────────────────────────────────────
 
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
@@ -133,23 +124,36 @@ class ProfileViewModel @Inject constructor(
     private val userSessionRepository: com.axio.reelz.data.repository.UserSessionRepository,
     private val premiumGate: com.axio.reelz.remoteconfig.PremiumGate,
 ) : ViewModel() {
+
+    companion object {
+        private const val PAGE_SIZE = 20
+    }
+
     data class UiState(
         val profile: UserProfile = UserProfile(),
         val watchlist: List<WatchlistItem> = emptyList(),
-        val history: List<WatchHistory> = emptyList(),
+        // History is paginated — only loaded IDs/metadata, no images stored
+        val historyPage: List<WatchHistory> = emptyList(),
+        val historyTotal: Int = 0,
+        val historyLoading: Boolean = false,
+        val historyAllLoaded: Boolean = false,
         val saved: List<SavedVideoItem> = emptyList(),
         val activeTab: Int = 0,
         val userState: com.axio.reelz.remoteconfig.UserState = com.axio.reelz.remoteconfig.UserState.GUEST,
         val daysUntilExpiry: Int = 0,
         val showRenewBanner: Boolean = false,
     )
+
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
+    private var historyOffset = 0
+
     init {
         viewModelScope.launch { watchlistDao.getAll().collect { wl -> _ui.update { it.copy(watchlist = wl) } } }
-        viewModelScope.launch { historyDao.getRecent().collect { h -> _ui.update { it.copy(history = h) } } }
         viewModelScope.launch { savedVideoDao.getAll().collect { s -> _ui.update { it.copy(saved = s) } } }
+        // History: load first page and total count — everything on demand
+        loadNextHistoryPage()
 
         restoreProfileFromSession()
 
@@ -171,6 +175,25 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
+    /** Load the next page of history lazily — called as user scrolls. */
+    fun loadNextHistoryPage() {
+        if (_ui.value.historyLoading || _ui.value.historyAllLoaded) return
+        _ui.update { it.copy(historyLoading = true) }
+        viewModelScope.launch {
+            val page = historyDao.getPage(limit = PAGE_SIZE, offset = historyOffset)
+            val total = historyDao.count()
+            historyOffset += page.size
+            _ui.update { state ->
+                state.copy(
+                    historyPage    = state.historyPage + page,
+                    historyTotal   = total,
+                    historyLoading = false,
+                    historyAllLoaded = historyOffset >= total,
+                )
+            }
+        }
+    }
+
     private fun restoreProfileFromSession() {
         viewModelScope.launch {
             val session = userSessionRepository.currentSessionOrNull()
@@ -182,7 +205,11 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
-    fun setTab(i: Int) { _ui.update { it.copy(activeTab = i) } }
+    fun setTab(i: Int) {
+        _ui.update { it.copy(activeTab = i) }
+        // When user switches to history tab, ensure we have data
+        if (i == 2 && _ui.value.historyPage.isEmpty()) loadNextHistoryPage()
+    }
 
     fun onSignIn(idToken: String?, name: String, email: String, photoUrl: String?) {
         _ui.update { it.copy(profile = UserProfile(name, email, photoUrl, true)) }
@@ -200,109 +227,21 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
-    fun clearHistory() { viewModelScope.launch { historyDao.clear() } }
+    fun clearHistory() {
+        viewModelScope.launch {
+            historyDao.clear()
+            historyOffset = 0
+            _ui.update { it.copy(historyPage = emptyList(), historyTotal = 0, historyAllLoaded = false) }
+        }
+    }
 }
+
+// ── Screen ────────────────────────────────────────────────────────────────────
 
 @Composable
 fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
-
-    // ── Settings dialog state ──────────────────────────────────────────────────
-    var showStorageDialog       by remember { mutableStateOf(false) }
-    var showPrivacyDialog       by remember { mutableStateOf(false) }
-    var showNotificationsDialog by remember { mutableStateOf(false) }
-    var showAboutDialog         by remember { mutableStateOf(false) }
-
-    // ── Settings dialogs ───────────────────────────────────────────────────────
-    if (showStorageDialog) {
-        AlertDialog(
-            onDismissRequest = { showStorageDialog = false },
-            containerColor   = BgCard,
-            shape            = RoundedCornerShape(20.dp),
-            title = { Text("Storage Usage", color = White, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Reelz stores:\n\n• Watch history — saved locally on your device\n• Watchlist & saved videos — saved locally on your device\n• Downloaded videos — stored in your app's private folder\n\nTo free up space, delete downloads from the Downloads tab.",
-                        color = White60, fontSize = 13.sp, lineHeight = 20.sp,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showStorageDialog = false }) {
-                    Text("Got it", color = Brand)
-                }
-            },
-        )
-    }
-
-    if (showPrivacyDialog) {
-        AlertDialog(
-            onDismissRequest = { showPrivacyDialog = false },
-            containerColor   = BgCard,
-            shape            = RoundedCornerShape(20.dp),
-            title = { Text("Privacy & Security", color = White, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Your privacy matters:\n\n• Sign-in is handled securely via Google — we never see your password\n• Your watchlist, history, and likes live only on your device\n• Premium status is verified server-side via Paystack webhooks\n• No personal data is sold or shared with third parties",
-                        color = White60, fontSize = 13.sp, lineHeight = 20.sp,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showPrivacyDialog = false }) {
-                    Text("Got it", color = Brand)
-                }
-            },
-        )
-    }
-
-    if (showNotificationsDialog) {
-        AlertDialog(
-            onDismissRequest = { showNotificationsDialog = false },
-            containerColor   = BgCard,
-            shape            = RoundedCornerShape(20.dp),
-            title = { Text("Notifications", color = White, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Reelz sends notifications for:\n\n• Download completions — when your video is ready to watch offline\n• Premium renewal reminders — a few days before your plan renews\n\nYou can manage notification permissions in your device Settings → Apps → Reelz → Notifications.",
-                        color = White60, fontSize = 13.sp, lineHeight = 20.sp,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showNotificationsDialog = false }) {
-                    Text("Got it", color = Brand)
-                }
-            },
-        )
-    }
-
-    if (showAboutDialog) {
-        AlertDialog(
-            onDismissRequest = { showAboutDialog = false },
-            containerColor   = BgCard,
-            shape            = RoundedCornerShape(20.dp),
-            title = { Text("About Reelz", color = White, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Reelz", color = Brand, fontWeight = FontWeight.Black, fontSize = 18.sp)
-                    Text(
-                        "Your personal cinema — stream movies and TV shows, download for offline viewing, and discover what to watch next.\n\nBuilt with ❤️ using Kotlin & Jetpack Compose.",
-                        color = White60, fontSize = 13.sp, lineHeight = 20.sp,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showAboutDialog = false }) {
-                    Text("Close", color = Brand)
-                }
-            },
-        )
-    }
 
     LazyColumn(
         Modifier.fillMaxSize().background(Bg).statusBarsPadding(),
@@ -321,7 +260,18 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                     Text("Your personal cinema", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
                 Spacer(Modifier.weight(1f))
-                Icon(IconUser, null, tint = Brand.copy(.6f), modifier = Modifier.size(26.dp))
+                // Settings gear icon — navigates to Settings screen
+                Box(
+                    Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(GlassMd)
+                        .border(1.dp, GlassBorderMd, CircleShape)
+                        .clickable { nav.navigate(com.axio.reelz.ui.Route.Settings.path) },
+                    Alignment.Center,
+                ) {
+                    Icon(IconSettings, "Settings", tint = White60, modifier = Modifier.size(18.dp))
+                }
             }
         }
 
@@ -441,7 +391,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
             ) {
                 StatCard("Watchlist", ui.watchlist.size.toString(), IconBookmarkSolid, Modifier.weight(1f))
                 StatCard("Saved",    ui.saved.size.toString(),     IconVideoSolid,    Modifier.weight(1f))
-                StatCard("Watched",  ui.history.size.toString(),   IconHistory,       Modifier.weight(1f))
+                StatCard("Watched",  ui.historyTotal.toString(),   IconHistory,       Modifier.weight(1f))
             }
         }
 
@@ -461,14 +411,27 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
 
         // ── Tab content ────────────────────────────────────────────────
         when (ui.activeTab) {
+            // ── Watchlist ──────────────────────────────────────────────
             0 -> if (ui.watchlist.isEmpty()) {
-                item { EmptyTabHint("Nothing in your watchlist", "Tap + Watchlist on any movie or show") }
+                item { EmptyTabHint("Nothing in your watchlist", "Tap + Watchlist on any movie or show\nIt auto-removes once you've watched it") }
             } else {
                 items(ui.watchlist, key = { it.tmdbId }) { w ->
                     val type = if (w.mediaType == "TV") MediaType.TV else MediaType.MOVIE
                     LibraryRow(w.title, w.posterPath, "Watchlist") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(w.tmdbId, type)) }
                 }
+                // Subtle hint about auto-removal
+                item {
+                    Text(
+                        "Items auto-remove after you watch 90% of them",
+                        color = White30,
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 24.dp),
+                    )
+                }
             }
+
+            // ── Saved ──────────────────────────────────────────────────
             1 -> if (ui.saved.isEmpty()) {
                 item { EmptyTabHint("No saved videos yet", "Tap Save on any movie or show") }
             } else {
@@ -477,8 +440,13 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                     LibraryRow(s.title, s.posterPath, "Saved") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(s.tmdbId, type)) }
                 }
             }
+
+            // ── History (paginated + skeleton) ─────────────────────────
             2 -> {
-                if (ui.history.isEmpty()) {
+                if (ui.historyPage.isEmpty() && ui.historyLoading) {
+                    // Initial load — show skeletons
+                    items(8) { HistoryRowSkeleton() }
+                } else if (ui.historyPage.isEmpty()) {
                     item { EmptyTabHint("No watch history yet", "Start watching something!") }
                 } else {
                     item {
@@ -486,7 +454,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             TextButton(onClick = { vm.clearHistory() }) { Text("Clear All", color = Error, fontSize = 12.sp) }
                         }
                     }
-                    items(ui.history, key = { it.key }) { h ->
+                    items(ui.historyPage, key = { it.key }) { h ->
                         val type = if (h.mediaType == "TV") MediaType.TV else MediaType.MOVIE
                         val progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
                         LibraryRow(
@@ -497,63 +465,120 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             onClick  = { nav.navigate(com.axio.reelz.ui.Route.Detail.go(h.tmdbId, type)) },
                         )
                     }
+                    // Load-more trigger
+                    if (!ui.historyAllLoaded) {
+                        if (ui.historyLoading) {
+                            items(4) { HistoryRowSkeleton() }
+                        } else {
+                            item {
+                                LaunchedEffect(Unit) { vm.loadNextHistoryPage() }
+                            }
+                        }
+                    } else if (ui.historyTotal > 20) {
+                        item {
+                            Text(
+                                "That's all your history (${ui.historyTotal} items)",
+                                color = White30,
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                            )
+                        }
+                    }
                 }
-            }
-        }
-
-        // ── Settings ───────────────────────────────────────────────────
-        item { SectionHeader("Settings") }
-        item {
-            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SettingRow(IconStorage,     "Storage Usage")       { showStorageDialog = true }
-                SettingRow(IconShield,      "Privacy & Security")  { showPrivacyDialog = true }
-                SettingRow(IconBell,        "Notifications")       { showNotificationsDialog = true }
-                SettingRow(IconInfoOutline, "About Reelz")         { showAboutDialog = true }
             }
         }
     }
 }
 
+// ── Shimmer skeleton for a history row ───────────────────────────────────────
+
+@Composable
+fun HistoryRowSkeleton() {
+    val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerX by infiniteTransition.animateFloat(
+        initialValue = -400f, targetValue = 400f,
+        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart),
+        label = "shimmerX",
+    )
+    val shimmer = Brush.linearGradient(
+        colors = listOf(
+            White.copy(alpha = 0.04f),
+            White.copy(alpha = 0.12f),
+            White.copy(alpha = 0.04f),
+        ),
+        start = Offset(shimmerX, 0f),
+        end   = Offset(shimmerX + 300f, 200f),
+    )
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        // Poster skeleton
+        Box(
+            Modifier.width(58.dp).height(82.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(BgRaised)
+                .background(shimmer)
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Title skeleton
+            Box(Modifier.fillMaxWidth(0.65f).height(14.dp).clip(RoundedCornerShape(6.dp))
+                .background(BgRaised).background(shimmer))
+            // Subtitle skeleton
+            Box(Modifier.fillMaxWidth(0.35f).height(11.dp).clip(RoundedCornerShape(6.dp))
+                .background(BgRaised).background(shimmer))
+        }
+    }
+    Box(Modifier.fillMaxWidth().height(0.5.dp).padding(horizontal = 16.dp).background(GlassBorder))
+}
+
+// ── Google Sign-In button with loading/lock feedback ─────────────────────────
+
 @Composable
 fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, String?) -> Unit) {
     val scope = rememberCoroutineScope()
     val activity = ctx as? android.app.Activity
-    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var errorMsg   by remember { mutableStateOf<String?>(null) }
+    var isLoading  by remember { mutableStateOf(false) }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(100.dp))
-                .background(BgRaised)
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(100.dp))
-                .clickable {
+                .background(if (isLoading) BgRaised.copy(alpha = 0.7f) else BgRaised)
+                .border(1.dp, if (isLoading) Brand.copy(.4f) else GlassBorderMd, RoundedCornerShape(100.dp))
+                .clickable(enabled = !isLoading) {
                     if (activity == null) {
                         errorMsg = "Sign-in unavailable. Please restart the app."
                         return@clickable
                     }
                     errorMsg = null
+                    isLoading = true
                     scope.launch {
                         val credManager = CredentialManager.create(ctx)
-                        val webClientId = "52667585435-dak9bl4krql0qdgv6he8p037u1se06lj.apps.googleusercontent.com"
+                        val webClientId = "52667585435-dak9bl4krql0qdgv6he8b037u1se06lj.apps.googleusercontent.com"
 
                         suspend fun handleCredentialResult(result: GetCredentialResponse) {
                             val credential = result.credential
                             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                                 val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
-                                // idToken is now threaded through to the backend for server-side verification
                                 val idToken = googleCred.idToken
                                 android.util.Log.d("ReelzAuth", "signed in as: id=${googleCred.id} name=${googleCred.displayName} hasToken=${idToken.isNotBlank()}")
                                 withContext(Dispatchers.Main) {
+                                    isLoading = false
                                     onSignedIn(idToken, googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString())
                                 }
                             } else {
                                 withContext(Dispatchers.Main) {
+                                    isLoading = false
                                     errorMsg = "Sign-in failed. Unexpected credential type."
                                 }
                             }
                         }
 
-                        // Step 1 — try One Tap (fast, no UI if already authorized)
+                        // Step 1 — One Tap (fast path)
                         try {
                             val req = GetCredentialRequest(listOf(
                                 GetGoogleIdOption.Builder()
@@ -565,13 +590,14 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
                             handleCredentialResult(result)
                             return@launch
                         } catch (e: androidx.credentials.exceptions.NoCredentialException) {
-                            android.util.Log.w("ReelzAuth", "One Tap failed (${e.message}), falling back to Sign In With Google")
+                            android.util.Log.w("ReelzAuth", "One Tap failed (${e.message}), falling back")
                         } catch (e: androidx.credentials.exceptions.GetCredentialCancellationException) {
                             android.util.Log.d("ReelzAuth", "Sign-in cancelled by user")
+                            withContext(Dispatchers.Main) { isLoading = false }
                             return@launch
                         }
 
-                        // Step 2 — fallback to full Google Sign-In bottom sheet
+                        // Step 2 — Full Google Sign-In bottom sheet
                         try {
                             val req = GetCredentialRequest(listOf(
                                 GetSignInWithGoogleOption.Builder(webClientId).build()
@@ -580,18 +606,30 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
                             handleCredentialResult(result)
                         } catch (e: androidx.credentials.exceptions.GetCredentialCancellationException) {
                             android.util.Log.d("ReelzAuth", "Sign-in cancelled by user")
+                            withContext(Dispatchers.Main) { isLoading = false }
                         } catch (e: Exception) {
                             android.util.Log.e("ReelzAuth", "Sign-in fallback error: ${e.javaClass.name}: ${e.message}")
-                            errorMsg = "Sign-in failed. Please try again."
+                            withContext(Dispatchers.Main) {
+                                isLoading = false
+                                errorMsg = "Sign-in failed. Please try again."
+                            }
                         }
                     }
                 }
                 .padding(vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("G", color = Brand, fontWeight = FontWeight.Black, fontSize = 16.sp)
-                Text("Continue with Google", color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            // Show spinner while loading — prevents user re-tapping
+            if (isLoading) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CinematicSpinner(size = 16.dp, color = Brand)
+                    Text("Opening Google…", color = White60, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("G", color = Brand, fontWeight = FontWeight.Black, fontSize = 16.sp)
+                    Text("Continue with Google", color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                }
             }
         }
         if (errorMsg != null) {
@@ -600,6 +638,8 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
         }
     }
 }
+
+// ── Shared composables ────────────────────────────────────────────────────────
 
 @Composable
 fun StatCard(label: String, value: String, icon: ImageVector, modifier: Modifier = Modifier) {
@@ -632,7 +672,25 @@ fun LibraryRow(title: String, poster: String?, subtitle: String = "", progress: 
                 .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp))
                 .background(BgRaised)
         ) {
-            AsyncImage(model = "https://image.tmdb.org/t/p/w342$poster", contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            // Shimmer behind the image while it loads
+            val infiniteTransition = rememberInfiniteTransition(label = "imgShimmer")
+            val shimmerX by infiniteTransition.animateFloat(
+                initialValue = -200f, targetValue = 200f,
+                animationSpec = infiniteRepeatable(tween(1000, easing = LinearEasing), RepeatMode.Restart),
+                label = "imgShimmerX",
+            )
+            Box(Modifier.fillMaxSize().background(
+                Brush.linearGradient(
+                    listOf(White.copy(0.03f), White.copy(0.08f), White.copy(0.03f)),
+                    start = Offset(shimmerX, 0f), end = Offset(shimmerX + 200f, 200f),
+                )
+            ))
+            AsyncImage(
+                model = "https://image.tmdb.org/t/p/w185$poster",
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
             if (progress > 0f) {
                 Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(White20))
                 Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(progress).height(3.dp)
@@ -656,32 +714,16 @@ fun EmptyTabHint(title: String, subtitle: String) {
     Box(Modifier.fillMaxWidth().height(200.dp), Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(title,    color = White60, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            Text(subtitle, color = White40, fontSize = 13.sp)
+            Text(subtitle, color = White40, fontSize = 13.sp, textAlign = TextAlign.Center, lineHeight = 19.sp)
         }
     }
 }
 
 @Composable
-fun SettingRow(icon: ImageVector, label: String, onClick: () -> Unit = {}) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Box(
-            Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
-                .background(GlassMd)
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp)),
-            Alignment.Center,
-        ) { Icon(icon, null, tint = White60, modifier = Modifier.size(18.dp)) }
-        Text(label, color = White80, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        Icon(IconChevronRight, null, tint = White30, modifier = Modifier.size(16.dp))
-    }
+fun ProfileSectionHeader(text: String) {
+    Text(
+        text, color = White60, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+        letterSpacing = 0.6.sp,
+        modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 8.dp),
+    )
 }
-
-private val White30 = Color(0x4DF8F4EE)
