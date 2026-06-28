@@ -77,7 +77,7 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
                 val results = repo.search(q)
                 _ui.update { it.copy(results = applyFilters(results), isLoading = false, hasSearched = true) }
             } catch (e: Exception) {
-                _ui.update { it.copy(isLoading = false, error = e.message, hasSearched = true) }
+                _ui.update { it.copy(isLoading = false, error = friendlySearchError(e), hasSearched = true) }
             }
         }
     }
@@ -462,5 +462,16 @@ fun SmallFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     ) {
         Text(label, color = if (selected) Color.White else White60, fontSize = 12.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+private fun friendlySearchError(e: Exception): String {
+    val msg = e.message?.lowercase() ?: ""
+    return when {
+        msg.contains("unable to resolve host") ||
+        msg.contains("network") ||
+        msg.contains("timeout") ||
+        msg.contains("connect") -> "No internet connection. Check your connection and try again."
+        else -> "Search failed. Please try again."
     }
 }

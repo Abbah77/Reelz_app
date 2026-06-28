@@ -278,7 +278,6 @@ class ShortsViewModel @Inject constructor(
         val categories: List<ShortCategory> = emptyList(),
         val error: String? = null,
         val isRefreshing: Boolean = false,
-        val debugLog: List<String> = emptyList(),
     ) {
         val videos        get() = if (feedMode == FeedMode.FOR_YOU) forYouVideos else discVideos
         val isLoading     get() = if (feedMode == FeedMode.FOR_YOU) forYouLoading else discLoading
@@ -313,7 +312,7 @@ class ShortsViewModel @Inject constructor(
         }
     }
 
-    fun logFromUi(msg: String) = dbg(msg)
+    fun logFromUi(msg: String) { android.util.Log.d("ShortsVM", msg) }
 
     fun refresh() {
         _ui.update { it.copy(isRefreshing = true, error = null) }
@@ -365,7 +364,7 @@ class ShortsViewModel @Inject constructor(
 
         viewModelScope.launch {
             val videos = withContext(Dispatchers.IO) { fetchFromBackend(subs = forYouSubs) }
-            dbg("✓ forYou total=${videos.size}")
+            dbg("forYou total=${videos.size}")
             if (append) {
                 _ui.update { it.copy(forYouVideos = it.forYouVideos + videos, forYouLoadingMore = false) }
             } else {
@@ -471,7 +470,6 @@ class ShortsViewModel @Inject constructor(
 
     private fun dbg(msg: String) {
         android.util.Log.d("ShortsVM", msg)
-        _ui.update { it.copy(debugLog = (it.debugLog + msg).takeLast(30)) }
     }
 }
 
@@ -1028,31 +1026,6 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             }
         }
 
-        // DEBUG OVERLAY — remove before release
-        if (ui.debugLog.isNotEmpty()) {
-            androidx.compose.foundation.lazy.LazyColumn(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .heightIn(max = 260.dp)
-                    .padding(bottom = 90.dp)
-                    .background(Color(0xDD000000))
-                    .padding(8.dp),
-                reverseLayout = true,
-            ) {
-                items(ui.debugLog.reversed().size) { i ->
-                    Text(
-                        text     = ui.debugLog.reversed()[i],
-                        color    = if (ui.debugLog.reversed()[i].startsWith("✗")) Color(0xFFFF5555)
-                                   else if (ui.debugLog.reversed()[i].startsWith("✓")) Color(0xFF55FF55)
-                                   else Color(0xFFFFFFCC),
-                        fontSize = 10.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        modifier = Modifier.padding(vertical = 1.dp),
-                    )
-                }
-            }
-        }
     }
 }
 

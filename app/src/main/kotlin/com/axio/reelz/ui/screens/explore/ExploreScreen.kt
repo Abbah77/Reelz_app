@@ -150,7 +150,7 @@ class ExploreViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
-                _ui.update { it.copy(isLoading = false, isLoadingMore = false, error = e.message ?: "Failed to load") }
+                _ui.update { it.copy(isLoading = false, isLoadingMore = false, error = friendlyExploreError(e)) }
             }
         }
     }
@@ -534,5 +534,16 @@ fun SmallFilterChip(label: String, selected: Boolean, accent: Color = Brand, onC
     ) {
         Text(label, color = if (selected) Color.White else White60, fontSize = 12.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+private fun friendlyExploreError(e: Exception): String {
+    val msg = e.message?.lowercase() ?: ""
+    return when {
+        msg.contains("unable to resolve host") ||
+        msg.contains("network") ||
+        msg.contains("timeout") ||
+        msg.contains("connect") -> "No internet connection. Check your connection and try again."
+        else -> "Couldn't load content. Pull down to try again."
     }
 }

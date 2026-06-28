@@ -254,7 +254,7 @@ class DetailViewModel @Inject constructor(
                         }
                 }
             } catch (e: Exception) {
-                _ui.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") }
+                _ui.update { it.copy(isLoading = false, error = friendlyDetailError(e)) }
             }
         }
     }
@@ -1365,6 +1365,30 @@ fun MetaChip(label: String, value: String) {
 fun formatRuntime(minutes: Int): String {
     val h = minutes / 60; val m = minutes % 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+/**
+ * Translates raw exceptions into user-facing messages for the Detail screen.
+ * Never exposes internal exception class names or raw stack details.
+ */
+private fun friendlyDetailError(e: Exception): String {
+    val msg = e.message?.lowercase() ?: ""
+    return when {
+        msg.contains("unable to resolve host") ||
+        msg.contains("no route to host") ||
+        msg.contains("network") ||
+        msg.contains("timeout") ||
+        msg.contains("connect") -> "No internet connection. Check your connection and try again."
+        msg.contains("404") ||
+        msg.contains("not found") -> "This title couldn't be found. It may have been removed."
+        msg.contains("401") ||
+        msg.contains("403") ||
+        msg.contains("unauthorized") -> "Access denied. Please try again later."
+        msg.contains("500") ||
+        msg.contains("502") ||
+        msg.contains("503") -> "The server is temporarily unavailable. Try again in a moment."
+        else -> "Something went wrong loading this title. Pull down to retry."
+    }
 }
 
 /**

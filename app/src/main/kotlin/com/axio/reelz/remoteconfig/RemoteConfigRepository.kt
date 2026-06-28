@@ -50,9 +50,9 @@ private const val SUPPORTED_SCHEMA_VERSION = 1
 // deletion, rate limits). A fourth fallback from a genuinely independent provider
 // should be added once one is chosen.
 private val CDN_URLS = listOf(
+    "https://cdn.jsdelivr.net/gh/Abbah77/reelz-config@main/reelz_config.json",       // jsDelivr → GitHub
+    "https://raw.githubusercontent.com/Abbah77/reelz-config/main/reelz_config.json", // GitHub raw
     "https://falling-credit-954c.yakubuyakson777.workers.dev/",           // Independent (Cloudflare Worker)
-    "https://raw.githubusercontent.com/Abbah777/reelz-config/main/reelz_config.json", // GitHub raw
-    "https://cdn.jsdelivr.net/gh/Abbah777/reelz-config@main/reelz_config.json",       // jsDelivr → GitHub
 )
 
 /** Three-state readiness so the UI never races against DataStore. */

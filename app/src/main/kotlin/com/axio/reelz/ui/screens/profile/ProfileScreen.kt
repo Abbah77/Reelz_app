@@ -582,7 +582,7 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
                             android.util.Log.d("ReelzAuth", "Sign-in cancelled by user")
                         } catch (e: Exception) {
                             android.util.Log.e("ReelzAuth", "Sign-in fallback error: ${e.javaClass.name}: ${e.message}")
-                            errorMsg = "Sign-in failed: ${e.message}"
+                            errorMsg = "Sign-in failed. Please try again."
                         }
                     }
                 }

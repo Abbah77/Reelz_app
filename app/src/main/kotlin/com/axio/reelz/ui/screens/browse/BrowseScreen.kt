@@ -203,7 +203,7 @@ class BrowseViewModel @Inject constructor(
                     categorySectionsEmitted = true
                 } catch (e: Exception) {
                     _ui.update {
-                        it.copy(isLoading = false, error = e.message ?: "Failed to load")
+                        it.copy(isLoading = false, error = friendlyBrowseError(e))
                     }
                 }
             }
@@ -234,7 +234,7 @@ class BrowseViewModel @Inject constructor(
                 categorySectionsEmitted = true
             } catch (e: Exception) {
                 _ui.update {
-                    it.copy(isRefreshing = false, error = e.message ?: "Failed to load")
+                    it.copy(isRefreshing = false, error = friendlyBrowseError(e))
                 }
             }
         }
@@ -1252,3 +1252,18 @@ fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
     }
 }
 
+private fun friendlyBrowseError(e: Exception): String {
+    val msg = e.message?.lowercase() ?: ""
+    return when {
+        msg.contains("unable to resolve host") ||
+        msg.contains("no route to host") ||
+        msg.contains("network") ||
+        msg.contains("timeout") ||
+        msg.contains("connect") -> "No internet connection. Check your connection and try again."
+        msg.contains("404") -> "Content couldn't be loaded. Pull down to try again."
+        msg.contains("500") ||
+        msg.contains("502") ||
+        msg.contains("503") -> "The server is temporarily unavailable. Pull down to retry."
+        else -> "Couldn't load content. Pull down to try again."
+    }
+}
