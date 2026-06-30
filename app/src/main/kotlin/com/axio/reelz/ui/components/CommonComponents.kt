@@ -27,390 +27,425 @@ import com.axio.reelz.data.model.*
 import com.axio.reelz.ui.theme.*
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Custom SVG-style icon vectors
+// Icon vectors  (Fluent UI / Lucide / FontAwesome / Bootstrap quality)
+// Colors:
+//   • Nav inactive  → Color.White (full opacity, tint applied at call site via White60)
+//   • Nav active    → Color.White (full opacity, tint applied at call site via Brand)
+//   • Heart outline → Color.White stroke
+//   • Heart filled  → Instagram red #FF2D55 (matches Instagram, universal heart colour)
+//   • Star          → Amber #FFCC44
+//   • All other UI icons → Color.White so tint works at call site
 // ─────────────────────────────────────────────────────────────────────────────
 
-val IconPlay: ImageVector get() = ImageVector.Builder("Play", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(
-        pathData = PathData {
-            moveTo(8f, 5.5f); lineTo(8f, 18.5f); lineTo(19f, 12f); close()
-        },
-        fill = SolidColor(Color.White),
-    )
+// ── Play (FontAwesome solid triangle — industry standard) ─────────────────────
+val IconPlay: ImageVector get() = ImageVector.Builder("Play", 24.dp, 24.dp, 448f, 512f).apply {
+    addPath(pathData = PathData {
+        moveTo(424.4f, 214.7f)
+        lineTo(72.4f, 6.6f)
+        curveTo(43.8f, -10.3f, 0f, 6.1f, 0f, 47.9f)
+        verticalLineTo(464f)
+        curveTo(0f, 501.5f, 40.7f, 524.1f, 72.4f, 505.3f)
+        lineTo(424.4f, 297.3f)
+        curveTo(455.8f, 278.8f, 455.9f, 233.2f, 424.4f, 214.7f)
+        close()
+    }, fill = SolidColor(Color.White))
 }.build()
 
+// ── Search (Feather — clean circle + line, stroke-based) ─────────────────────
 val IconSearch: ImageVector get() = ImageVector.Builder("Search", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
-        moveTo(10.5f, 3f)
-        arcTo(7.5f, 7.5f, 0f, false, false, 10.5f, 18f)
-        arcTo(7.5f, 7.5f, 0f, false, false, 10.5f, 3f); close()
-    }, fill = SolidColor(Color.Transparent), stroke = SolidColor(Color.White), strokeLineWidth = 1.8f)
-    addPath(pathData = PathData { moveTo(16.5f, 16.5f); lineTo(21f, 21f) },
-        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
-        strokeLineCap = StrokeCap.Round)
+        moveTo(19f, 11f)
+        arcTo(8f, 8f, 0f, false, true, 11f, 19f)
+        arcTo(8f, 8f, 0f, false, true, 3f, 11f)
+        arcTo(8f, 8f, 0f, false, true, 19f, 11f)
+        close()
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 2f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+    addPath(pathData = PathData { moveTo(21f, 21f); lineTo(16.65f, 16.65f) },
+        stroke = SolidColor(Color.White), strokeLineWidth = 2f,
+        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+        fill = SolidColor(Color.Transparent))
 }.build()
 
+// ── Star (5-point filled — amber, used for ratings) ──────────────────────────
 val IconStar: ImageVector get() = ImageVector.Builder("Star", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
         moveTo(12f, 2f)
-        lineTo(14.6f, 8.26f); lineTo(21.5f, 9.27f); lineTo(16.75f, 13.9f)
-        lineTo(17.97f, 20.8f); lineTo(12f, 17.6f); lineTo(6.03f, 20.8f)
-        lineTo(7.25f, 13.9f); lineTo(2.5f, 9.27f); lineTo(9.4f, 8.26f); close()
+        lineTo(15.09f, 8.26f); lineTo(22f, 9.27f)
+        lineTo(17f, 14.14f); lineTo(18.18f, 21.02f)
+        lineTo(12f, 17.77f); lineTo(5.82f, 21.02f)
+        lineTo(7f, 14.14f); lineTo(2f, 9.27f)
+        lineTo(8.91f, 8.26f); close()
     }, fill = SolidColor(Color(0xFFFFCC44)))
 }.build()
 
-// ── Heart / Like icon (filled red heart) ─────────────────────────────────────
-val IconHeart: ImageVector get() = ImageVector.Builder("Heart", 24.dp, 24.dp, 24f, 24f).apply {
+// ── Heart outline (Bootstrap — white stroke, used before liked) ───────────────
+val IconHeart: ImageVector get() = ImageVector.Builder("Heart", 24.dp, 24.dp, 16f, 16f).apply {
     addPath(pathData = PathData {
-        moveTo(12f, 21f)
-        curveTo(12f, 21f, 3f, 14f, 3f, 8f)
-        arcTo(4.5f, 4.5f, 0f, false, true, 12f, 6.1f)
-        arcTo(4.5f, 4.5f, 0f, false, true, 21f, 8f)
-        curveTo(21f, 14f, 12f, 21f, 12f, 21f); close()
+        moveTo(8f, 2.748f)
+        lineToRelative(-0.717f, -0.737f)
+        curveTo(5.6f, 0.281f, 2.514f, 0.878f, 1.4f, 3.053f)
+        curveToRelative(-0.523f, 1.023f, -0.641f, 2.5f, 0.314f, 4.385f)
+        curveToRelative(0.92f, 1.815f, 2.834f, 3.989f, 6.286f, 6.357f)
+        curveToRelative(3.452f, -2.368f, 5.365f, -4.542f, 6.286f, -6.357f)
+        curveToRelative(0.955f, -1.886f, 0.838f, -3.362f, 0.314f, -4.385f)
+        curveTo(13.486f, 0.878f, 10.4f, 0.28f, 8.717f, 2.01f)
+        close()
+        moveTo(8f, 15f)
+        curveTo(-7.333f, 4.868f, 3.279f, -3.04f, 7.824f, 1.143f)
+        quadToRelative(0.09f, 0.083f, 0.176f, 0.171f)
+        arcToRelative(3f, 3f, 0f, false, true, 0.176f, -0.17f)
+        curveTo(12.72f, -3.042f, 23.333f, 4.867f, 8f, 15f)
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 0.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+}.build()
+
+// ── Heart filled (Bootstrap — Instagram red, universal "liked" colour) ─────────
+val IconHeartFilled: ImageVector get() = ImageVector.Builder("HeartFilled", 24.dp, 24.dp, 16f, 16f).apply {
+    addPath(pathData = PathData {
+        moveTo(8f, 1.314f)
+        curveTo(12.438f, -3.248f, 23.534f, 4.735f, 8f, 15f)
+        curveTo(-7.534f, 4.736f, 3.562f, -3.248f, 8f, 1.314f)
+    }, fill = SolidColor(Color(0xFFFF2D55)))
+}.build()
+
+// ── Home outline (Fluent UI — Microsoft design system, very clean) ─────────────
+val IconHome: ImageVector get() = ImageVector.Builder("Home", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(10.5495f, 2.53189f)
+        curveTo(11.3874f, 1.82531f, 12.6126f, 1.82531f, 13.4505f, 2.5319f)
+        lineTo(20.2005f, 8.224f)
+        curveTo(20.7074f, 8.65152f, 21f, 9.2809f, 21f, 9.94406f)
+        lineTo(21f, 19.2539f)
+        curveTo(21f, 20.2204f, 20.2165f, 21.0039f, 19.25f, 21.0039f)
+        horizontalLineTo(15.75f)
+        curveTo(14.7835f, 21.0039f, 14f, 20.2204f, 14f, 19.2539f)
+        lineTo(14f, 14.2468f)
+        curveTo(14f, 14.1088f, 13.8881f, 13.9968f, 13.75f, 13.9968f)
+        horizontalLineTo(10.25f)
+        curveTo(10.1119f, 13.9968f, 9.99999f, 14.1088f, 9.99999f, 14.2468f)
+        lineTo(9.99999f, 19.2539f)
+        curveTo(9.99999f, 20.2204f, 9.2165f, 21.0039f, 8.25f, 21.0039f)
+        horizontalLineTo(4.75f)
+        curveTo(3.7835f, 21.0039f, 3f, 20.2204f, 3f, 19.2539f)
+        verticalLineTo(9.94406f)
+        curveTo(3f, 9.2809f, 3.29255f, 8.65152f, 3.79952f, 8.224f)
+        lineTo(10.5495f, 2.53189f)
+        close()
+        moveTo(12.4835f, 3.6786f)
+        curveTo(12.2042f, 3.44307f, 11.7958f, 3.44307f, 11.5165f, 3.6786f)
+        lineTo(4.76651f, 9.37071f)
+        curveTo(4.59752f, 9.51321f, 4.5f, 9.72301f, 4.5f, 9.94406f)
+        lineTo(4.5f, 19.2539f)
+        curveTo(4.5f, 19.392f, 4.61193f, 19.5039f, 4.75f, 19.5039f)
+        horizontalLineTo(8.25f)
+        curveTo(8.38807f, 19.5039f, 8.49999f, 19.392f, 8.49999f, 19.2539f)
+        lineTo(8.49999f, 14.2468f)
+        curveTo(8.49999f, 13.2803f, 9.2835f, 12.4968f, 10.25f, 12.4968f)
+        horizontalLineTo(13.75f)
+        curveTo(14.7165f, 12.4968f, 15.5f, 13.2803f, 15.5f, 14.2468f)
+        lineTo(15.5f, 19.2539f)
+        curveTo(15.5f, 19.392f, 15.6119f, 19.5039f, 15.75f, 19.5039f)
+        horizontalLineTo(19.25f)
+        curveTo(19.3881f, 19.5039f, 19.5f, 19.392f, 19.5f, 19.2539f)
+        lineTo(19.5f, 9.94406f)
+        curveTo(19.5f, 9.72301f, 19.4025f, 9.51321f, 19.2335f, 9.37071f)
+        lineTo(12.4835f, 3.6786f)
+        close()
+    }, fill = SolidColor(Color.White))
+}.build()
+
+// ── Home filled (Fluent UI filled variant) ────────────────────────────────────
+val IconHomeFilled: ImageVector get() = ImageVector.Builder("HomeFilled", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(13.4508f, 2.53318f)
+        curveTo(12.6128f, 1.82618f, 11.3872f, 1.82618f, 10.5492f, 2.53318f)
+        lineTo(3.79916f, 8.22772f)
+        curveTo(3.29241f, 8.65523f, 3f, 9.28447f, 3f, 9.94747f)
+        verticalLineTo(19.2526f)
+        curveTo(3f, 20.2191f, 3.7835f, 21.0026f, 4.75f, 21.0026f)
+        horizontalLineTo(7.75f)
+        curveTo(8.7165f, 21.0026f, 9.5f, 20.2191f, 9.5f, 19.2526f)
+        verticalLineTo(15.25f)
+        curveTo(9.5f, 14.5707f, 10.0418f, 14.018f, 10.7169f, 14.0004f)
+        horizontalLineTo(13.2831f)
+        curveTo(13.9582f, 14.018f, 14.5f, 14.5707f, 14.5f, 15.25f)
+        verticalLineTo(19.2526f)
+        curveTo(14.5f, 20.2191f, 15.2835f, 21.0026f, 16.25f, 21.0026f)
+        horizontalLineTo(19.25f)
+        curveTo(20.2165f, 21.0026f, 21f, 20.2191f, 21f, 19.2526f)
+        verticalLineTo(9.94747f)
+        curveTo(21f, 9.28447f, 20.7076f, 8.65523f, 20.2008f, 8.22772f)
+        lineTo(13.4508f, 2.53318f)
+        close()
+    }, fill = SolidColor(Color.White))
+}.build()
+
+// ── Shorts / Reels (YouTube Shorts official shape)
+// Outline: same icon at reduced stroke — no separate outline exists officially,
+// so we use the filled shape at 70% opacity via White60 tint at call site.
+// This is exactly what YouTube does on their own app. ─────────────────────────
+val IconReel: ImageVector get() = ImageVector.Builder("Shorts", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(18.931f, 9.99f)
+        lineToRelative(-1.441f, -0.601f)
+        lineToRelative(1.717f, -0.913f)
+        arcToRelative(4.48f, 4.48f, 0f, false, false, 1.874f, -6.078f)
+        arcToRelative(4.506f, 4.506f, 0f, false, false, -6.09f, -1.874f)
+        lineTo(4.792f, 5.929f)
+        arcToRelative(4.504f, 4.504f, 0f, false, false, -2.402f, 4.193f)
+        arcToRelative(4.521f, 4.521f, 0f, false, false, 2.666f, 3.904f)
+        curveToRelative(0.036f, 0.012f, 1.442f, 0.6f, 1.442f, 0.6f)
+        lineToRelative(-1.706f, 0.901f)
+        arcToRelative(4.51f, 4.51f, 0f, false, false, -2.369f, 3.967f)
+        arcTo(4.528f, 4.528f, 0f, false, false, 6.93f, 24f)
+        curveToRelative(0.725f, 0f, 1.437f, -0.174f, 2.08f, -0.508f)
+        lineToRelative(10.21f, -5.406f)
+        arcToRelative(4.494f, 4.494f, 0f, false, false, 2.39f, -4.192f)
+        arcToRelative(4.525f, 4.525f, 0f, false, false, -2.678f, -3.904f)
+        close()
+        moveTo(9.597f, 15.19f)
+        verticalLineTo(8.824f)
+        lineToRelative(6.007f, 3.184f)
+        close()
+    }, fill = SolidColor(Color.White))
+}.build()
+
+// Filled = same icon, full white — tint at call site makes it Brand blue when active
+val IconReelFilled: ImageVector get() = IconReel
+
+// ── Profile outline (FontAwesome — industry standard, universally recognised) ──
+val IconUser: ImageVector get() = ImageVector.Builder("Profile", 24.dp, 24.dp, 448f, 512f).apply {
+    addPath(pathData = PathData {
+        moveTo(313.6f, 304f)
+        curveToRelative(-28.7f, 0f, -42.5f, 16f, -89.6f, 16f)
+        curveToRelative(-47.1f, 0f, -60.8f, -16f, -89.6f, -16f)
+        curveTo(60.2f, 304f, 0f, 364.2f, 0f, 438.4f)
+        verticalLineTo(464f)
+        curveToRelative(0f, 26.5f, 21.5f, 48f, 48f, 48f)
+        horizontalLineToRelative(352f)
+        curveToRelative(26.5f, 0f, 48f, -21.5f, 48f, -48f)
+        verticalLineToRelative(-25.6f)
+        curveToRelative(0f, -74.2f, -60.2f, -134.4f, -134.4f, -134.4f)
+        close()
+        moveTo(400f, 464f)
+        horizontalLineTo(48f)
+        verticalLineToRelative(-25.6f)
+        curveToRelative(0f, -47.6f, 38.8f, -86.4f, 86.4f, -86.4f)
+        curveToRelative(14.6f, 0f, 38.3f, 16f, 89.6f, 16f)
+        curveToRelative(51.7f, 0f, 74.9f, -16f, 89.6f, -16f)
+        curveToRelative(47.6f, 0f, 86.4f, 38.8f, 86.4f, 86.4f)
+        verticalLineTo(464f)
+        close()
+        moveTo(224f, 288f)
+        curveTo(303.5f, 288f, 368f, 223.5f, 368f, 144f)
+        reflectiveCurveTo(303.5f, 0f, 224f, 0f)
+        reflectiveCurveTo(80f, 64.5f, 80f, 144f)
+        reflectiveCurveToRelative(64.5f, 144f, 144f, 144f)
+        close()
+        moveTo(224f, 48f)
+        curveToRelative(52.9f, 0f, 96f, 43.1f, 96f, 96f)
+        reflectiveCurveToRelative(-43.1f, 96f, -96f, 96f)
+        reflectiveCurveToRelative(-96f, -43.1f, -96f, -96f)
+        reflectiveCurveToRelative(43.1f, -96f, 96f, -96f)
+        close()
+    }, fill = SolidColor(Color.White))
+}.build()
+
+// ── Profile filled (FontAwesome solid) ───────────────────────────────────────
+val IconUserFilled: ImageVector get() = ImageVector.Builder("ProfileFilled", 24.dp, 24.dp, 448f, 512f).apply {
+    addPath(pathData = PathData {
+        moveTo(224f, 256f)
+        curveTo(294.7f, 256f, 352f, 198.7f, 352f, 128f)
+        reflectiveCurveTo(294.7f, 0f, 224f, 0f)
+        reflectiveCurveTo(96f, 57.3f, 96f, 128f)
+        reflectiveCurveToRelative(57.3f, 128f, 128f, 128f)
+        close()
+        moveTo(313.6f, 288f)
+        horizontalLineToRelative(-16.7f)
+        curveToRelative(-22.2f, 10.2f, -46.9f, 16f, -72.9f, 16f)
+        reflectiveCurveToRelative(-50.6f, -5.8f, -72.9f, -16f)
+        horizontalLineToRelative(-16.7f)
+        curveTo(60.2f, 288f, 0f, 348.2f, 0f, 422.4f)
+        verticalLineTo(464f)
+        curveTo(0f, 490.5f, 21.5f, 512f, 48f, 512f)
+        horizontalLineToRelative(352f)
+        curveToRelative(26.5f, 0f, 48f, -21.5f, 48f, -48f)
+        verticalLineToRelative(-41.6f)
+        curveToRelative(0f, -74.2f, -60.2f, -134.4f, -134.4f, -134.4f)
+        close()
+    }, fill = SolidColor(Color.White))
+}.build()
+
+// ── Wi-Fi Off (Lucide — clean diagnostic icon) ────────────────────────────────
+val IconWifiOff: ImageVector get() = ImageVector.Builder("WifiOff", 24.dp, 24.dp, 24f, 24f).apply {
+    // Diagonal slash
+    addPath(pathData = PathData { moveTo(2f, 2f); lineTo(22f, 22f) },
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round,
+        fill = SolidColor(Color.Transparent))
+    // Arcs clipped by slash
+    addPath(pathData = PathData {
+        moveTo(8.5f, 16.5f)
+        arcToRelative(5f, 5f, 0f, false, true, 7f, 0f)
+        moveTo(5f, 12.5f)
+        arcToRelative(9f, 9f, 0f, false, true, 5.2f, -2.5f)
+        moveTo(14.4f, 9.9f)
+        arcToRelative(9f, 9f, 0f, false, true, 4.6f, 2.6f)
+        moveTo(2f, 8.82f)
+        arcToRelative(15f, 15f, 0f, false, true, 4.49f, -2.33f)
+        moveTo(12f, 20f)
+        lineTo(12f, 20.01f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
+}.build()
+
+// ── Movie Slate (Lucide clapperboard — clean film icon) ───────────────────────
+val IconMovieSlate: ImageVector get() = ImageVector.Builder("MovieSlate", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(20f, 20f)
+        arcToRelative(2f, 2f, 0f, false, true, -2f, 2f)
+        horizontalLineTo(6f)
+        arcToRelative(2f, 2f, 0f, false, true, -2f, -2f)
+        verticalLineTo(4f)
+        arcToRelative(2f, 2f, 0f, false, true, 2f, -2f)
+        horizontalLineTo(18f)
+        arcToRelative(2f, 2f, 0f, false, true, 2f, 2f)
+        close()
+        moveTo(4f, 8f)
+        lineTo(20f, 8f)
+        moveTo(8f, 2f)
+        lineTo(8f, 8f)
+        moveTo(12f, 2f)
+        lineTo(12f, 8f)
+        moveTo(16f, 2f)
+        lineTo(16f, 8f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
+}.build()
+
+// ── Downloads outline (Lucide — arrow into tray, clean and modern) ────────────
+val IconDownloadCloud: ImageVector get() = ImageVector.Builder("Downloads", 24.dp, 24.dp, 24f, 24f).apply {
+    // Tray base
+    addPath(pathData = PathData {
+        moveTo(21f, 15f)
+        verticalLineTo(19f)
+        arcToRelative(2f, 2f, 0f, false, true, -2f, 2f)
+        horizontalLineTo(5f)
+        arcToRelative(2f, 2f, 0f, false, true, -2f, -2f)
+        verticalLineTo(15f)
     }, fill = SolidColor(Color.Transparent),
        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
-}.build()
-
-val IconHeartFilled: ImageVector get() = ImageVector.Builder("HeartFilled", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(12f, 21f)
-        curveTo(12f, 21f, 3f, 14f, 3f, 8f)
-        arcTo(4.5f, 4.5f, 0f, false, true, 12f, 6.1f)
-        arcTo(4.5f, 4.5f, 0f, false, true, 21f, 8f)
-        curveTo(21f, 14f, 12f, 21f, 12f, 21f); close()
-    }, fill = SolidColor(Color(0xFFFF2D55)),
-       stroke = SolidColor(Color(0xFFFF2D55)), strokeLineWidth = 1f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
-}.build()
-
-// ── Home icons ─────────────────────────────────────────────────────────────────
-// House silhouette with a rounded doorway cutout
-val IconHome: ImageVector get() = ImageVector.Builder("Home", 24.dp, 24.dp, 24f, 24f).apply {
-    // Roof
-    addPath(pathData = PathData {
-        moveTo(3f, 10f); lineTo(12f, 3f); lineTo(21f, 10f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
-    // Body + doorway cutout
-    addPath(pathData = PathData {
-        moveTo(5f, 10f)
-        lineTo(5f, 19f)
-        arcTo(1f, 1f, 0f, false, false, 6f, 20f)
-        lineTo(9f, 20f)
-        lineTo(9f, 16f)
-        arcTo(1f, 1f, 0f, false, true, 10f, 15f)
-        lineTo(14f, 15f)
-        arcTo(1f, 1f, 0f, false, true, 15f, 16f)
-        lineTo(15f, 20f)
-        lineTo(18f, 20f)
-        arcTo(1f, 1f, 0f, false, false, 19f, 19f)
-        lineTo(19f, 10f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
-}.build()
-
-val IconHomeFilled: ImageVector get() = ImageVector.Builder("HomeFilled", 24.dp, 24.dp, 24f, 24f).apply {
-    // Filled roof triangle
-    addPath(pathData = PathData {
-        moveTo(2f, 10.5f); lineTo(12f, 2.5f); lineTo(22f, 10.5f); close()
-    }, fill = SolidColor(Color.White))
-    // Filled body silhouette (doorway is the negative space, auto-closed across the top)
-    addPath(pathData = PathData {
-        moveTo(5f, 10f)
-        lineTo(5f, 19f)
-        arcTo(1f, 1f, 0f, false, false, 6f, 20f)
-        lineTo(9f, 20f)
-        lineTo(9f, 16f)
-        arcTo(1f, 1f, 0f, false, true, 10f, 15f)
-        lineTo(14f, 15f)
-        arcTo(1f, 1f, 0f, false, true, 15f, 16f)
-        lineTo(15f, 20f)
-        lineTo(18f, 20f)
-        arcTo(1f, 1f, 0f, false, false, 19f, 19f)
-        lineTo(19f, 10f)
-        close()
-    }, fill = SolidColor(Color.White))
-}.build()
-
-// ── Reel / Shorts icons ────────────────────────────────────────────────────────
-// Vertical phone with a play triangle
-val IconReel: ImageVector get() = ImageVector.Builder("Shorts", 24.dp, 24.dp, 24f, 24f).apply {
-    // Phone body
-    addPath(pathData = PathData {
-        moveTo(9f, 2f)
-        lineTo(15f, 2f)
-        arcTo(3f, 3f, 0f, false, true, 18f, 5f)
-        lineTo(18f, 19f)
-        arcTo(3f, 3f, 0f, false, true, 15f, 22f)
-        lineTo(9f, 22f)
-        arcTo(3f, 3f, 0f, false, true, 6f, 19f)
-        lineTo(6f, 5f)
-        arcTo(3f, 3f, 0f, false, true, 9f, 2f)
-        close()
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
-    // Play triangle — always solid white, even when inactive
-    addPath(pathData = PathData {
-        moveTo(10f, 9f); lineTo(10f, 15f); lineTo(15f, 12f); close()
-    }, fill = SolidColor(Color.White))
-    // Bottom home-bar accent
-    addPath(pathData = PathData {
-        moveTo(10f, 19.5f); lineTo(14f, 19.5f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.2f, strokeLineCap = StrokeCap.Round)
-}.build()
-
-val IconReelFilled: ImageVector get() = ImageVector.Builder("ShortsFilled", 24.dp, 24.dp, 24f, 24f).apply {
-    // Filled phone body
-    addPath(pathData = PathData {
-        moveTo(9f, 2f)
-        lineTo(15f, 2f)
-        arcTo(3f, 3f, 0f, false, true, 18f, 5f)
-        lineTo(18f, 19f)
-        arcTo(3f, 3f, 0f, false, true, 15f, 22f)
-        lineTo(9f, 22f)
-        arcTo(3f, 3f, 0f, false, true, 6f, 19f)
-        lineTo(6f, 5f)
-        arcTo(3f, 3f, 0f, false, true, 9f, 2f)
-        close()
-    }, fill = SolidColor(Color.White))
-    // Play triangle punched through in the nav-bar background colour
-    addPath(pathData = PathData {
-        moveTo(10f, 9f); lineTo(10f, 15f); lineTo(15f, 12f); close()
-    }, fill = SolidColor(Color(0xFF050510)))
-    // Home-bar punched through (tiny rounded pill)
-    addPath(pathData = PathData {
-        moveTo(10.6f, 18.8f)
-        lineTo(13.4f, 18.8f)
-        arcTo(0.6f, 0.6f, 0f, false, true, 14f, 19.4f)
-        arcTo(0.6f, 0.6f, 0f, false, true, 13.4f, 20f)
-        lineTo(10.6f, 20f)
-        arcTo(0.6f, 0.6f, 0f, false, true, 10f, 19.4f)
-        arcTo(0.6f, 0.6f, 0f, false, true, 10.6f, 18.8f)
-        close()
-    }, fill = SolidColor(Color(0xFF050510)))
-}.build()
-
-// ── User icons ────────────────────────────────────────────────────────────────
-val IconUser: ImageVector get() = ImageVector.Builder("Profile", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(12f, 3f)
-        arcTo(4f, 4f, 0f, false, true, 12f, 11f)
-        arcTo(4f, 4f, 0f, false, true, 12f, 3f)
-        close()
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f)
-    addPath(pathData = PathData {
-        moveTo(4f, 21f); arcTo(8f, 8f, 0f, false, true, 20f, 21f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round)
-}.build()
-
-val IconUserFilled: ImageVector get() = ImageVector.Builder("ProfileFilled", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(12f, 3f)
-        arcTo(4f, 4f, 0f, false, true, 12f, 11f)
-        arcTo(4f, 4f, 0f, false, true, 12f, 3f)
-        close()
-    }, fill = SolidColor(Color.White))
-    addPath(pathData = PathData {
-        moveTo(4f, 21f); arcTo(8f, 8f, 0f, false, true, 20f, 21f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 2.2f, strokeLineCap = StrokeCap.Round)
-}.build()
-
-val IconWifiOff: ImageVector get() = ImageVector.Builder("WifiOff", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData { moveTo(2f, 2f); lineTo(22f, 22f) },
-        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round)
-    addPath(pathData = PathData {
-        moveTo(10.7f, 6.3f)
-        arcTo(10.5f, 10.5f, 0f, false, true, 21f, 9f)
-        moveTo(3f, 9f)
-        arcTo(10.5f, 10.5f, 0f, false, true, 7.45f, 6.4f)
-        moveTo(6.6f, 12.6f)
-        arcTo(7f, 7f, 0f, false, true, 17.5f, 12.6f)
-        moveTo(12f, 21f); lineTo(12f, 21.01f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round)
-}.build()
-
-val IconMovieSlate: ImageVector get() = ImageVector.Builder("MovieSlate", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(4f, 6f); lineTo(4f, 20f)
-        arcTo(1f, 1f, 0f, false, false, 5f, 21f); lineTo(19f, 21f)
-        arcTo(1f, 1f, 0f, false, false, 20f, 20f); lineTo(20f, 8f); lineTo(4f, 8f)
-        moveTo(4f, 8f); lineTo(4f, 6f); lineTo(20f, 6f); lineTo(20f, 8f)
-        moveTo(8f, 4f); lineTo(8f, 8f); moveTo(12f, 4f); lineTo(12f, 8f); moveTo(16f, 4f); lineTo(16f, 8f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round,
-       strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
-}.build()
-
-// ── Download icons ────────────────────────────────────────────────────────────
-// Inbox tray with a down-arrow
-val IconDownloadCloud: ImageVector get() = ImageVector.Builder("Downloads", 24.dp, 24.dp, 24f, 24f).apply {
-    // Tray
-    addPath(pathData = PathData {
-        moveTo(3f, 15f)
-        lineTo(21f, 15f)
-        lineTo(21f, 19f)
-        arcTo(1f, 1f, 0f, false, true, 20f, 20f)
-        lineTo(4f, 20f)
-        arcTo(1f, 1f, 0f, false, true, 3f, 19f)
-        close()
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
-    // Arrow shaft
-    addPath(pathData = PathData {
-        moveTo(12f, 3f); lineTo(12f, 14f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round)
+    // Arrow stem
+    addPath(pathData = PathData { moveTo(12f, 3f); lineTo(12f, 15f) },
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+        strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
     // Arrow head
-    addPath(pathData = PathData {
-        moveTo(8f, 10f); lineTo(12f, 14f); lineTo(16f, 10f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+    addPath(pathData = PathData { moveTo(7f, 10f); lineTo(12f, 15f); lineTo(17f, 10f) },
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+        fill = SolidColor(Color.Transparent))
 }.build()
 
+// ── Downloads filled (filled tray + solid arrow) ──────────────────────────────
 val IconDownloadCloudFilled: ImageVector get() = ImageVector.Builder("DownloadsFilled", 24.dp, 24.dp, 24f, 24f).apply {
     // Filled tray
     addPath(pathData = PathData {
-        moveTo(3f, 15f)
-        lineTo(21f, 15f)
-        lineTo(21f, 19f)
-        arcTo(1f, 1f, 0f, false, true, 20f, 20f)
-        lineTo(4f, 20f)
-        arcTo(1f, 1f, 0f, false, true, 3f, 19f)
+        moveTo(2f, 14f)
+        horizontalLineTo(22f)
+        verticalLineTo(19f)
+        arcToRelative(3f, 3f, 0f, false, true, -3f, 3f)
+        horizontalLineTo(5f)
+        arcToRelative(3f, 3f, 0f, false, true, -3f, -3f)
         close()
     }, fill = SolidColor(Color.White))
-    // Bold arrow shaft
+    // Arrow (on top of tray — app bg colour to punch through)
     addPath(pathData = PathData {
-        moveTo(12f, 3f); lineTo(12f, 14f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 2.2f, strokeLineCap = StrokeCap.Round)
-    // Bold arrow head
-    addPath(pathData = PathData {
-        moveTo(8f, 10f); lineTo(12f, 14f); lineTo(16f, 10f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 2.2f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+        moveTo(12f, 2f)
+        lineTo(12f, 14f)
+        moveTo(7f, 9f)
+        lineTo(12f, 14f)
+        lineTo(17f, 9f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 2f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
 }.build()
 
+// ── Swap / Transfer (two arrows — used in transfer screen header) ──────────────
 val IconSwap: ImageVector get() = ImageVector.Builder("Swap", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
         moveTo(7f, 16f); lineTo(3f, 12f); lineTo(7f, 8f)
         moveTo(3f, 12f); lineTo(21f, 12f)
         moveTo(17f, 8f); lineTo(21f, 12f); lineTo(17f, 16f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round,
-       strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
 }.build()
 
-// ── Compass (Explore) icons ────────────────────────────────────────────────────
-// Telescope — barrel + extended lens cone + eyepiece + tripod legs
-// (val names kept as IconCompass/IconCompassFilled so navTabs needs no changes)
-val IconCompass: ImageVector get() = ImageVector.Builder("Telescope", 24.dp, 24.dp, 24f, 24f).apply {
-    // Barrel (stadium / pill shape)
-    addPath(pathData = PathData {
-        moveTo(5f, 9f)
-        lineTo(13f, 9f)
-        arcTo(3f, 3f, 0f, false, true, 16f, 12f)
-        arcTo(3f, 3f, 0f, false, true, 13f, 15f)
-        lineTo(5f, 15f)
-        arcTo(3f, 3f, 0f, false, true, 2f, 12f)
-        arcTo(3f, 3f, 0f, false, true, 5f, 9f)
-        close()
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
-    // Extended lens cone
-    addPath(pathData = PathData {
-        moveTo(16f, 10.5f); lineTo(22f, 7.5f); lineTo(22f, 16.5f); lineTo(16f, 13.5f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
-    // Eyepiece ring
-    addPath(pathData = PathData {
-        moveTo(4f, 12f)
-        arcTo(2f, 2f, 0f, false, true, 8f, 12f)
-        arcTo(2f, 2f, 0f, false, true, 4f, 12f)
-        close()
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f)
-    // Tripod legs
-    addPath(pathData = PathData {
-        moveTo(10f, 15f); lineTo(7f, 21f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round)
-    addPath(pathData = PathData {
-        moveTo(12f, 15f); lineTo(15f, 21f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round)
+// ── Explore outline (Tabler grid — universally means "browse") ────────────────
+val IconCompass: ImageVector get() = ImageVector.Builder("Explore", 24.dp, 24.dp, 24f, 24f).apply {
+    listOf(
+        PathData { moveTo(4f,5f); arcToRelative(1f,1f,0f,false,true,1f,-1f); horizontalLineToRelative(4f); arcToRelative(1f,1f,0f,false,true,1f,1f); verticalLineToRelative(4f); arcToRelative(1f,1f,0f,false,true,-1f,1f); horizontalLineToRelative(-4f); arcToRelative(1f,1f,0f,false,true,-1f,-1f); close() },
+        PathData { moveTo(14f,5f); arcToRelative(1f,1f,0f,false,true,1f,-1f); horizontalLineToRelative(4f); arcToRelative(1f,1f,0f,false,true,1f,1f); verticalLineToRelative(4f); arcToRelative(1f,1f,0f,false,true,-1f,1f); horizontalLineToRelative(-4f); arcToRelative(1f,1f,0f,false,true,-1f,-1f); close() },
+        PathData { moveTo(4f,15f); arcToRelative(1f,1f,0f,false,true,1f,-1f); horizontalLineToRelative(4f); arcToRelative(1f,1f,0f,false,true,1f,1f); verticalLineToRelative(4f); arcToRelative(1f,1f,0f,false,true,-1f,1f); horizontalLineToRelative(-4f); arcToRelative(1f,1f,0f,false,true,-1f,-1f); close() },
+        PathData { moveTo(14f,15f); arcToRelative(1f,1f,0f,false,true,1f,-1f); horizontalLineToRelative(4f); arcToRelative(1f,1f,0f,false,true,1f,1f); verticalLineToRelative(4f); arcToRelative(1f,1f,0f,false,true,-1f,1f); horizontalLineToRelative(-4f); arcToRelative(1f,1f,0f,false,true,-1f,-1f); close() },
+    ).forEach { pd ->
+        addPath(pathData = pd, fill = SolidColor(Color.Transparent),
+            stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+            strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+    }
 }.build()
 
-val IconCompassFilled: ImageVector get() = ImageVector.Builder("TelescopeFilled", 24.dp, 24.dp, 24f, 24f).apply {
-    // Filled barrel
-    addPath(pathData = PathData {
-        moveTo(5f, 9f)
-        lineTo(13f, 9f)
-        arcTo(3f, 3f, 0f, false, true, 16f, 12f)
-        arcTo(3f, 3f, 0f, false, true, 13f, 15f)
-        lineTo(5f, 15f)
-        arcTo(3f, 3f, 0f, false, true, 2f, 12f)
-        arcTo(3f, 3f, 0f, false, true, 5f, 9f)
-        close()
-    }, fill = SolidColor(Color.White))
-    // Filled lens cone
-    addPath(pathData = PathData {
-        moveTo(16f, 10.5f); lineTo(22f, 7.5f); lineTo(22f, 16.5f); lineTo(16f, 13.5f); close()
-    }, fill = SolidColor(Color.White))
-    // Eyepiece punched through in the nav-bar background colour
-    addPath(pathData = PathData {
-        moveTo(4.5f, 12f)
-        arcTo(1.5f, 1.5f, 0f, false, true, 7.5f, 12f)
-        arcTo(1.5f, 1.5f, 0f, false, true, 4.5f, 12f)
-        close()
-    }, fill = SolidColor(Color(0xFF050510)))
-    // Bold tripod legs
-    addPath(pathData = PathData {
-        moveTo(10f, 15f); lineTo(7f, 21f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round)
-    addPath(pathData = PathData {
-        moveTo(12f, 15f); lineTo(15f, 21f)
-    }, fill = SolidColor(Color.Transparent),
-       stroke = SolidColor(Color.White), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round)
+// ── Explore filled (Tabler grid filled) ──────────────────────────────────────
+val IconCompassFilled: ImageVector get() = ImageVector.Builder("ExploreFilled", 24.dp, 24.dp, 24f, 24f).apply {
+    listOf(
+        PathData { moveTo(9f,3f); arcToRelative(2f,2f,0f,false,true,2f,2f); verticalLineToRelative(4f); arcToRelative(2f,2f,0f,false,true,-2f,2f); horizontalLineToRelative(-4f); arcToRelative(2f,2f,0f,false,true,-2f,-2f); verticalLineToRelative(-4f); arcToRelative(2f,2f,0f,false,true,2f,-2f); close() },
+        PathData { moveTo(19f,3f); arcToRelative(2f,2f,0f,false,true,2f,2f); verticalLineToRelative(4f); arcToRelative(2f,2f,0f,false,true,-2f,2f); horizontalLineToRelative(-4f); arcToRelative(2f,2f,0f,false,true,-2f,-2f); verticalLineToRelative(-4f); arcToRelative(2f,2f,0f,false,true,2f,-2f); close() },
+        PathData { moveTo(9f,13f); arcToRelative(2f,2f,0f,false,true,2f,2f); verticalLineToRelative(4f); arcToRelative(2f,2f,0f,false,true,-2f,2f); horizontalLineToRelative(-4f); arcToRelative(2f,2f,0f,false,true,-2f,-2f); verticalLineToRelative(-4f); arcToRelative(2f,2f,0f,false,true,2f,-2f); close() },
+        PathData { moveTo(19f,13f); arcToRelative(2f,2f,0f,false,true,2f,2f); verticalLineToRelative(4f); arcToRelative(2f,2f,0f,false,true,-2f,2f); horizontalLineToRelative(-4f); arcToRelative(2f,2f,0f,false,true,-2f,-2f); verticalLineToRelative(-4f); arcToRelative(2f,2f,0f,false,true,2f,-2f); close() },
+    ).forEach { pd -> addPath(pathData = pd, fill = SolidColor(Color.White)) }
 }.build()
 
+// ── Play circle (used on movie cards) ─────────────────────────────────────────
 val IconPlayCircle: ImageVector get() = ImageVector.Builder("PlayCircle", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
-        moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 12f, 22f); arcTo(10f, 10f, 0f, false, false, 12f, 2f); close()
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.6f, fill = SolidColor(Color.Transparent))
+        moveTo(12f, 2f); arcTo(10f, 10f, 0f, false, false, 12f, 22f)
+        arcTo(10f, 10f, 0f, false, false, 12f, 2f); close()
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1.6f)
     addPath(pathData = PathData { moveTo(10f, 8f); lineTo(16f, 12f); lineTo(10f, 16f); close() },
         fill = SolidColor(Color.White))
 }.build()
 
+// ── Filter / funnel (Lucide) ──────────────────────────────────────────────────
 val IconFilter: ImageVector get() = ImageVector.Builder("Filter", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
-        moveTo(3f, 6f); lineTo(21f, 6f)
-        moveTo(7f, 12f); lineTo(17f, 12f)
-        moveTo(10f, 18f); lineTo(14f, 18f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round)
+        moveTo(22f, 3f); horizontalLineTo(2f); lineTo(10f, 12.46f); verticalLineTo(19f)
+        lineTo(14f, 21f); verticalLineTo(12.46f); close()
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
 }.build()
 
+// ── Chevron down (Lucide) ─────────────────────────────────────────────────────
 val IconChevronDown: ImageVector get() = ImageVector.Builder("ChevDown", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData { moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f) },
-        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round,
-        strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+        fill = SolidColor(Color.Transparent))
 }.build()
 
+// ── Close / X (Lucide) ───────────────────────────────────────────────────────
 val IconClose: ImageVector get() = ImageVector.Builder("Close", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData { moveTo(18f, 6f); lineTo(6f, 18f); moveTo(6f, 6f); lineTo(18f, 18f) },
-        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round)
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round,
+        fill = SolidColor(Color.Transparent))
 }.build()
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Glass card container
@@ -442,11 +477,14 @@ fun BrandButton(
     icon: @Composable (() -> Unit)? = null,
     small: Boolean = false,
     enabled: Boolean = true,
+    color: Color = Brand,
 ) {
     val shimmer = rememberInfiniteTransition(label = "btnShimmer")
     val shimmerX by shimmer.animateFloat(
         0f, 1f, infiniteRepeatable(tween(2200, easing = LinearEasing)), label = "sx"
     )
+    val colorDeep = color.copy(alpha = color.alpha * 0.5f)
+    val colorBright = color.copy(alpha = minOf(color.alpha * 1.15f, 1f))
 
     Box(
         modifier = modifier
@@ -455,17 +493,17 @@ fun BrandButton(
                 if (enabled) {
                     Brush.linearGradient(
                         colorStops = arrayOf(
-                            0f to BrandDeep,
-                            0.4f to Brand,
-                            shimmerX to Brand2.copy(alpha = 0.9f),
-                            1f to Brand,
+                            0f to colorDeep,
+                            0.4f to color,
+                            shimmerX to colorBright.copy(alpha = 0.9f),
+                            1f to color,
                         )
                     )
                 } else {
                     Brush.linearGradient(listOf(GlassMd, GlassMd))
                 }
             )
-            .border(1.dp, if (enabled) Brand2.copy(.4f) else GlassBorderMd, RoundedCornerShape(100.dp))
+            .border(1.dp, if (enabled) colorBright.copy(.4f) else GlassBorderMd, RoundedCornerShape(100.dp))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(
                 horizontal = if (small) 16.dp else 24.dp,

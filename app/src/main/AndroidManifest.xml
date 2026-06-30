@@ -14,6 +14,7 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <!-- ── Storage / Downloads ──────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
