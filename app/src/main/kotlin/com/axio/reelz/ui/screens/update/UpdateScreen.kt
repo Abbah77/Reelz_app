@@ -30,8 +30,8 @@ fun UpdateScreen(
     changelog     : String  = "",
     forceUpdate   : Boolean = false,
     onSkip        : () -> Unit = {},
-    val d = LocalDimensions.current
 ) {
+    val d = LocalDimensions.current
     val context = LocalContext.current
 
     val pulse = rememberInfiniteTransition(label = "pulse")

@@ -745,8 +745,8 @@ fun MovieRow(
 
 @Composable
 fun StatusBadge(status: String) {
-    val (color, label) = when (status) {
     val d = LocalDimensions.current
+    val (color, label) = when (status) {
         DownloadStatus.DONE.name        -> Success to "Ready"
         DownloadStatus.DOWNLOADING.name -> Brand to "Downloading"
         DownloadStatus.QUEUED.name      -> White60 to "Queued"

@@ -1345,7 +1345,6 @@ fun EpisodeRow(
 fun CastCard(cast: CastMember) {
     val d = LocalDimensions.current
     Column(Modifier.width(d.avatarLg + d.spaceLg - d.spaceXxs), horizontalAlignment = Alignment.CenterHorizontally) {
-    val d = LocalDimensions.current
         Box(Modifier.size(d.avatarLg).clip(CircleShape).background(BgRaised)) {
             if (cast.profilePath != null) {
                 AsyncImage(
@@ -1369,7 +1368,6 @@ fun CastCard(cast: CastMember) {
 fun MetaChip(label: String, value: String) {
     val d = LocalDimensions.current
     Column {
-    val d = LocalDimensions.current
         Text(label, color = White40, fontSize = d.textXxs)
         Text(value, color = White80, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
     }
@@ -1466,7 +1464,6 @@ fun DetailSkeleton() {
     val d = LocalDimensions.current
     val screenH = LocalConfiguration.current.screenHeightDp.dp
     Column(Modifier.fillMaxSize().background(Bg)) {
-    val d = LocalDimensions.current
         // Backdrop placeholder
         ShimmerBox(
             Modifier.fillMaxWidth().height(screenH * 0.46f),
@@ -1505,7 +1502,6 @@ fun CastRowSkeleton() {
         Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs),
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
-    val d = LocalDimensions.current
         repeat(5) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1527,7 +1523,6 @@ fun MediaRowSkeleton() {
         Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs),
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs),
     ) {
-    val d = LocalDimensions.current
         repeat(4) {
             Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                 ShimmerBox(Modifier.width(d.cardRowWidth).height(d.cardRowHeight), radius = d.radiusMd - d.spaceXs)

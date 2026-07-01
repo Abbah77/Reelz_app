@@ -249,7 +249,6 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
         Modifier.fillMaxSize().background(Bg).statusBarsPadding(),
         contentPadding = PaddingValues(bottom = d.spaceXxl * 3.1f),
     ) {
-    val d = LocalDimensions.current
         // ── Header ─────────────────────────────────────────────────────
         item {
             Row(
@@ -519,7 +518,6 @@ fun HistoryRowSkeleton() {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
-    val d = LocalDimensions.current
         // Poster skeleton
         Box(
             Modifier.width(d.avatarLg - d.spaceXs).height(d.continueCardThumbHeight - d.spaceXs)
@@ -657,7 +655,6 @@ fun StatCard(label: String, value: String, icon: ImageVector, modifier: Modifier
             .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd + d.spaceXs))
             .padding(vertical = d.spaceLg),
     ) {
-    val d = LocalDimensions.current
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, null, tint = Brand, modifier = Modifier.size(d.iconMd))
             Spacer(Modifier.height(d.spaceSm))
@@ -675,7 +672,6 @@ fun LibraryRow(title: String, poster: String?, subtitle: String = "", progress: 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
-    val d = LocalDimensions.current
         Box(
             Modifier.width(d.avatarLg - d.spaceXs).height(d.continueCardThumbHeight - d.spaceXs)
                 .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
@@ -723,7 +719,6 @@ fun LibraryRow(title: String, poster: String?, subtitle: String = "", progress: 
 fun EmptyTabHint(title: String, subtitle: String) {
     val d = LocalDimensions.current
     Box(Modifier.fillMaxWidth().height(d.spaceXxl * 6.25f), Alignment.Center) {
-    val d = LocalDimensions.current
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
             Text(title,    color = White60, fontWeight = FontWeight.SemiBold, fontSize = d.textLg)
             Text(subtitle, color = White40, fontSize = d.textMd, textAlign = TextAlign.Center, lineHeight = (d.textMd.value * 1.45f).sp)

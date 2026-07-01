@@ -877,8 +877,6 @@ fun TransferHistoryRow(record: TransferRecord) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
     ) {
-    val d = LocalDimensions.current
-    val screenH = LocalConfiguration.current.screenHeightDp.dp
         Box(
             Modifier.size(d.buttonHeightSm - d.spaceMd).clip(CircleShape)
                 .background(AmberGlass).border(1.dp, AmberBorder, CircleShape),

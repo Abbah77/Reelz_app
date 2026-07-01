@@ -25,9 +25,9 @@ import com.axio.reelz.ui.theme.LocalDimensions
 fun MaintenanceScreen(
     message: String = "We're making things better. Check back soon!",
     onRetry: () -> Unit = {},
+) {
     val d = LocalDimensions.current
     val screenH = LocalConfiguration.current.screenHeightDp.dp
-) {
     // Slow rotate on the wrench icon ring
     val rotation = rememberInfiniteTransition(label = "spin")
     val angle by rotation.animateFloat(

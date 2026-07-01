@@ -678,7 +678,6 @@ fun MediaPosterCard(
 fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val d = LocalDimensions.current
     var pressed by remember { mutableStateOf(false) }
-    val d = LocalDimensions.current
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.95f else 1f,
         animationSpec = spring(dampingRatio = 0.5f, stiffness = 500f),
@@ -842,7 +841,6 @@ fun SkeletonBannerLoader() {
                 )
             )
     ) {
-    val d = LocalDimensions.current
         Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding), verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs)) {
             Box(Modifier.fillMaxWidth(0.22f).height(d.textLg).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
             Box(Modifier.fillMaxWidth(0.7f).height(d.textHero + 4.dp).clip(RoundedCornerShape(d.spaceSm)).background(BgRaised))
@@ -875,7 +873,6 @@ fun SkeletonRowLoader() {
         Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
     ) {
-    val d = LocalDimensions.current
         repeat(4) {
             Column(Modifier.width(d.cardRowWidth), verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                 Box(Modifier.width(d.cardRowWidth).height(d.cardRowHeight).clip(RoundedCornerShape(d.radiusMd)).background(shimmerBrush))
@@ -893,7 +890,6 @@ fun SkeletonRowLoader() {
 fun FullScreenLoader() {
     val d = LocalDimensions.current
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-    val d = LocalDimensions.current
         CinematicSpinner(size = d.spinnerLg)
     }
 }
@@ -958,7 +954,6 @@ fun ErrorState(message: String, onRetry: (() -> Unit)? = null, modifier: Modifie
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-    val d = LocalDimensions.current
         Box(contentAlignment = Alignment.Center) {
             Box(Modifier.size(d.avatarLg + d.spaceLg).clip(CircleShape)
                 .background(Brush.radialGradient(listOf(Error.copy(.15f), Color.Transparent)))
@@ -1002,7 +997,6 @@ fun RatingChip(rating: Double, modifier: Modifier = Modifier) {
             .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceXs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-    val d = LocalDimensions.current
         Icon(IconStar, null, tint = Gold, modifier = Modifier.size(d.iconSm))
         Spacer(Modifier.width(d.spaceXs))
         Text("${"%.1f".format(rating)}", color = Gold, fontSize = d.textMd, fontWeight = FontWeight.Bold)
@@ -1028,7 +1022,6 @@ fun GenrePill(text: String, selected: Boolean = false, onClick: () -> Unit = {})
             .clickable(onClick = onClick)
             .padding(horizontal = d.chipHorizPad + d.spaceXs, vertical = d.chipVertPad + d.spaceXs),
     ) {
-    val d = LocalDimensions.current
         Text(
             text,
             color      = if (selected) Color.White else White60,
@@ -1045,7 +1038,6 @@ fun GenrePill(text: String, selected: Boolean = false, onClick: () -> Unit = {})
 fun DragHandle(modifier: Modifier = Modifier) {
     val d = LocalDimensions.current
     Box(modifier = modifier.fillMaxWidth().padding(top = d.spaceMd), contentAlignment = Alignment.Center) {
-    val d = LocalDimensions.current
         Box(
             Modifier
                 .width(d.shimmerBarWidth)
