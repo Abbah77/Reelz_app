@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathData
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -50,6 +51,7 @@ import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.downloads.formatSize
 import com.axio.reelz.ui.screens.downloads.formatSpeed
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -268,6 +270,8 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
 
     // Tab: 0 = Send, 1 = Receive
     var tab by remember { mutableStateOf(0) }
+    val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
 
     LaunchedEffect(Unit) { vm.ensureServiceRunning(ctx) }
 
@@ -283,68 +287,68 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
 
         // ── Header ────────────────────────────────────────────────────────────
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.heroPadding - d.spaceSm, vertical = d.spaceLg),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (nav != null) {
                 Box(
-                    Modifier.size(36.dp).clip(CircleShape)
+                    Modifier.size(d.buttonHeightSm - d.spaceMd).clip(CircleShape)
                         .background(GlassMd).border(1.dp, GlassBorderMd, CircleShape)
                         .clickable { nav.popBackStack() },
                     Alignment.Center,
-                ) { Icon(IconBack, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
-                Spacer(Modifier.width(12.dp))
+                ) { Icon(IconBack, null, tint = Color.White, modifier = Modifier.size(d.iconMd - 2.dp)) }
+                Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
             }
             Column {
                 Text("Transfer",
                     style = MaterialTheme.typography.headlineMedium.copy(
                         color = Color.White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp))
-                Text("Share downloads wirelessly", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text("Share downloads wirelessly", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.weight(1f))
-            Icon(IconSwap, null, tint = Brand.copy(.6f), modifier = Modifier.size(26.dp))
+            Icon(IconSwap, null, tint = Brand.copy(.6f), modifier = Modifier.size(d.iconLg))
         }
 
         // ── Send / Receive toggle ─────────────────────────────────────────────
         Box(
-            Modifier.padding(horizontal = 16.dp)
-                .clip(RoundedCornerShape(14.dp))
+            Modifier.padding(horizontal = d.screenHorizPad)
+                .clip(RoundedCornerShape(d.radiusMd))
                 .background(BgCard)
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
-                .padding(4.dp)
+                .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+                .padding(d.spaceXs)
         ) {
             Row {
                 listOf("Send" to IconQr, "Receive" to IconScan).forEachIndexed { i, (label, icon) ->
                     val sel = tab == i
                     Box(
                         Modifier.weight(1f)
-                            .clip(RoundedCornerShape(11.dp))
+                            .clip(RoundedCornerShape(d.spaceMd + 1.dp))
                             .background(
                                 if (sel) Brush.horizontalGradient(listOf(BrandDeep, Brand.copy(.9f)))
                                 else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
                             )
                             .clickable { tab = i }
-                            .padding(vertical = 11.dp),
+                            .padding(vertical = d.spaceMd + 1.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
                         ) {
                             Icon(icon, null,
                                 tint = if (sel) Color(0xFF1A0F00) else White60,
-                                modifier = Modifier.size(16.dp))
+                                modifier = Modifier.size(d.iconMd - 4.dp))
                             Text(label,
                                 color = if (sel) Color(0xFF1A0F00) else White60,
                                 fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 14.sp)
+                                fontSize = d.textMd)
                         }
                     }
                 }
             }
         }
 
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(d.spaceXs))
 
         // ── Live progress bar ─────────────────────────────────────────────────
         progress?.let { p ->
@@ -358,31 +362,31 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
                     tween(300), label = "tp",
                 )
                 Box(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                    Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad, vertical = d.sectionVertPad)
+                        .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
                         .background(BgCard)
-                        .border(1.dp, Brand.copy(.3f), RoundedCornerShape(16.dp))
+                        .border(1.dp, Brand.copy(.3f), RoundedCornerShape(d.radiusLg - d.spaceXxs))
                 ) {
-                    Box(Modifier.fillMaxWidth(pct).height(68.dp)
+                    Box(Modifier.fillMaxWidth(pct).height(d.avatarLg + d.spaceXs)
                         .background(Brush.horizontalGradient(listOf(BrandDim, BrandDeep))))
-                    Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    Row(Modifier.padding(horizontal = d.screenHorizPad - d.spaceXxs, vertical = d.spaceMd - d.spaceXxs),
                         verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             if (p.direction == "SEND") IconUpload else IconDownloadCloud,
-                            null, tint = Brand, modifier = Modifier.size(20.dp),
+                            null, tint = Brand, modifier = Modifier.size(d.iconMd),
                         )
-                        Spacer(Modifier.width(10.dp))
+                        Spacer(Modifier.width(d.spaceMd))
                         Column(Modifier.weight(1f)) {
-                            Text(p.fileName, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1)
-                            Text("${if (p.direction == "SEND") "↑" else "↓"} ${p.peerName}", color = White60, fontSize = 11.sp)
+                            Text(p.fileName, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = d.textMd, maxLines = 1)
+                            Text("${if (p.direction == "SEND") "↑" else "↓"} ${p.peerName}", color = White60, fontSize = d.textXs)
                         }
                         Column(horizontalAlignment = Alignment.End) {
-                            Text(formatSize(p.transferredBytes), color = Brand, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            if (p.speedBps > 0) Text(formatSpeed(p.speedBps), color = White40, fontSize = 10.sp)
+                            Text(formatSize(p.transferredBytes), color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
+                            if (p.speedBps > 0) Text(formatSpeed(p.speedBps), color = White40, fontSize = d.textXs)
                         }
                     }
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(d.spaceXs))
             }
         }
 
@@ -420,11 +424,11 @@ private fun SendTab(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = d.screenHorizPad)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
     ) {
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(d.spaceXs))
 
         when (p2p) {
 
@@ -434,24 +438,24 @@ private fun SendTab(
                     // Permission card — same style as camera permission
                     Box(
                         Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(RoundedCornerShape(d.radiusLg))
                             .background(BgCard)
-                            .border(1.dp, AmberBorder, RoundedCornerShape(20.dp))
-                            .padding(24.dp),
+                            .border(1.dp, AmberBorder, RoundedCornerShape(d.radiusLg))
+                            .padding(d.spaceXl),
                     ) {
                         Column(Modifier.fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Icon(IconWifi, null, tint = Brand, modifier = Modifier.size(36.dp))
+                            verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
+                            Icon(IconWifi, null, tint = Brand, modifier = Modifier.size(d.buttonHeightSm - d.spaceMd))
                             Text("Location permission needed", color = Color.White,
-                                fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                fontWeight = FontWeight.Bold, fontSize = d.textLg)
                             Text("Required to create a Wi-Fi hotspot for direct transfer.",
-                                color = White60, fontSize = 13.sp, textAlign = TextAlign.Center)
+                                color = White60, fontSize = d.textMd, textAlign = TextAlign.Center)
                             BrandButton(
                                 text = "Allow & Generate QR",
                                 onClick = { p2pPermLauncher.launch(p2pPermission) },
                                 modifier = Modifier.fillMaxWidth(),
-                                icon = { Icon(IconQr, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(16.dp)) },
+                                icon = { Icon(IconQr, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(d.iconMd - 4.dp)) },
                             )
                         }
                     }
@@ -460,15 +464,15 @@ private fun SendTab(
                         text    = "Generate QR",
                         onClick = { vm.initAsSender(ctx) },
                         modifier = Modifier.fillMaxWidth(),
-                        icon    = { Icon(IconQr, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(16.dp)) },
+                        icon    = { Icon(IconQr, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(d.iconMd - 4.dp)) },
                     )
                 }
             }
 
             // ── Preparing: spinner ────────────────────────────────────────────
             is TransferViewModel.P2pUiState.Preparing -> {
-                Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), Alignment.Center) {
-                    CinematicSpinner(size = 40.dp)
+                Box(Modifier.fillMaxWidth().padding(vertical = d.spaceXxl), Alignment.Center) {
+                    CinematicSpinner(size = d.spinnerMd + d.spaceXl)
                 }
             }
 
@@ -477,34 +481,34 @@ private fun SendTab(
                 // QR card
                 Box(
                     Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(RoundedCornerShape(d.radiusLg))
                         .background(BgCard)
-                        .border(1.dp, AmberBorder, RoundedCornerShape(20.dp))
-                        .padding(20.dp),
+                        .border(1.dp, AmberBorder, RoundedCornerShape(d.radiusLg))
+                        .padding(d.spaceXl - d.spaceXs),
                 ) {
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
                         // Pulsing dot to show it's live
                         Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                             val inf = rememberInfiniteTransition(label = "dot")
                             val alpha by inf.animateFloat(0.3f, 1f,
                                 infiniteRepeatable(tween(800), RepeatMode.Reverse), "da")
-                            Box(Modifier.size(7.dp).background(Success.copy(alpha), CircleShape))
-                            Text("Ready to connect", color = White60, fontSize = 12.sp)
+                            Box(Modifier.size(d.spaceSm + 1.dp).background(Success.copy(alpha), CircleShape))
+                            Text("Ready to connect", color = White60, fontSize = d.textSm)
                         }
 
                         // QR
                         Box(
-                            Modifier.size(220.dp)
-                                .clip(RoundedCornerShape(16.dp))
+                            Modifier.size(d.cardPosterWidth + d.spaceXxl * 2.5f)
+                                .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
                                 .background(Color.White)
-                                .padding(12.dp)
+                                .padding(d.spaceMd - d.spaceXxs)
                         ) {
                             if (p2p.qr != null) {
                                 Image(p2p.qr.asImageBitmap(), "QR", modifier = Modifier.fillMaxSize())
                             } else {
-                                Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = 32.dp) }
+                                Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerMd + d.spaceXs) }
                             }
                         }
 
@@ -525,7 +529,7 @@ private fun SendTab(
                     enabled = false, // waiting — receiver not yet connected
                     onClick = {},
                     modifier = Modifier.fillMaxWidth(),
-                    icon    = { Icon(IconUpload, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(16.dp)) },
+                    icon    = { Icon(IconUpload, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(d.iconMd - 4.dp)) },
                 )
             }
 
@@ -548,7 +552,7 @@ private fun SendTab(
                         vm.sendFile(ctx, file.filePath, p2p.peerIp)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    icon    = { Icon(IconUpload, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(16.dp)) },
+                    icon    = { Icon(IconUpload, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(d.iconMd - 4.dp)) },
                 )
 
                 GhostButton("Disconnect", onClick = { vm.reset() }, modifier = Modifier.fillMaxWidth())
@@ -562,7 +566,7 @@ private fun SendTab(
             else -> {}
         }
 
-        Spacer(Modifier.height(100.dp))
+        Spacer(Modifier.height(d.spaceXxl * 3.1f))
     }
 }
 
@@ -584,11 +588,11 @@ private fun ReceiveTab(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = d.screenHorizPad)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
     ) {
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(d.spaceXs))
 
         when (p2p) {
 
@@ -603,11 +607,11 @@ private fun ReceiveTab(
 
             // ── Connecting ────────────────────────────────────────────────────
             is TransferViewModel.P2pUiState.Connecting -> {
-                Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), Alignment.Center) {
+                Box(Modifier.fillMaxWidth().padding(vertical = d.spaceXxl), Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CinematicSpinner(size = 40.dp)
-                        Text("Connecting…", color = White60, fontSize = 13.sp)
+                        verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
+                        CinematicSpinner(size = d.spinnerMd + d.spaceXl)
+                        Text("Connecting…", color = White60, fontSize = d.textMd)
                     }
                 }
             }
@@ -616,7 +620,7 @@ private fun ReceiveTab(
             is TransferViewModel.P2pUiState.Connected -> {
                 ConnectedBadge(peerIp = p2p.peerIp, isHost = p2p.isHost)
                 Text("Files from the sender will arrive automatically.",
-                    color = White60, fontSize = 12.sp)
+                    color = White60, fontSize = d.textSm)
                 GhostButton("Disconnect", onClick = { vm.reset() }, modifier = Modifier.fillMaxWidth())
             }
 
@@ -632,17 +636,17 @@ private fun ReceiveTab(
 
         // Transfer history
         if (history.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
             SectionHeader("History")
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.heightIn(max = 400.dp),
+                verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
+                modifier = Modifier.heightIn(max = d.spaceXxl * 12.5f),
             ) {
                 items(history.take(30), key = { it.id }) { TransferHistoryRow(it) }
             }
         }
 
-        Spacer(Modifier.height(100.dp))
+        Spacer(Modifier.height(d.spaceXxl * 3.1f))
     }
 }
 
@@ -651,10 +655,10 @@ private fun ReceiveTab(
 @Composable
 private fun ScannerCard(onScanned: (String) -> Unit) {
     Box(
-        Modifier.fillMaxWidth().height(310.dp)
-            .clip(RoundedCornerShape(20.dp))
+        Modifier.fillMaxWidth().height(screenH * 0.40f)
+            .clip(RoundedCornerShape(d.radiusLg))
             .background(Color.Black)
-            .border(1.dp, AmberBorder, RoundedCornerShape(20.dp))
+            .border(1.dp, AmberBorder, RoundedCornerShape(d.radiusLg))
     ) {
         CameraScanner(onScanned = onScanned)
 
@@ -664,7 +668,7 @@ private fun ScannerCard(onScanned: (String) -> Unit) {
             infiniteRepeatable(tween(1800, easing = LinearEasing), RepeatMode.Reverse), "sy")
         Box(
             Modifier.fillMaxWidth().align(Alignment.TopCenter)
-                .padding(horizontal = 28.dp)
+                .padding(horizontal = d.spaceXxl - d.spaceXs)
                 .offset(y = (scanY * 270).dp)
                 .height(2.dp)
                 .background(Brush.horizontalGradient(listOf(
@@ -672,10 +676,10 @@ private fun ScannerCard(onScanned: (String) -> Unit) {
         )
 
         // Corner brackets
-        val bs = 28.dp; val bw = 3.dp
+        val bs = d.spaceXxl - d.spaceXs; val bw = d.spaceXxs + 1.dp
         listOf(Alignment.TopStart, Alignment.TopEnd,
                Alignment.BottomStart, Alignment.BottomEnd).forEach { a ->
-            Box(Modifier.padding(18.dp).size(bs).align(a)) {
+            Box(Modifier.padding(d.heroPadding).size(bs).align(a)) {
                 val top   = a == Alignment.TopStart   || a == Alignment.TopEnd
                 val start = a == Alignment.TopStart   || a == Alignment.BottomStart
                 Box(Modifier.align(if (top) Alignment.TopStart else Alignment.BottomStart)
@@ -691,17 +695,17 @@ private fun ScannerCard(onScanned: (String) -> Unit) {
 private fun CameraPermCard(onRequest: () -> Unit) {
     Box(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(d.radiusLg))
             .background(BgCard)
-            .border(1.dp, AmberBorder, RoundedCornerShape(20.dp))
-            .padding(28.dp),
+            .border(1.dp, AmberBorder, RoundedCornerShape(d.radiusLg))
+            .padding(d.spaceXxl - d.spaceXs),
     ) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(IconCamera, null, tint = Brand, modifier = Modifier.size(36.dp))
-            Text("Camera access needed", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
+            Icon(IconCamera, null, tint = Brand, modifier = Modifier.size(d.buttonHeightSm - d.spaceMd))
+            Text("Camera access needed", color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
             BrandButton("Allow Camera", onClick = onRequest, modifier = Modifier.fillMaxWidth(),
-                icon = { Icon(IconCamera, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(15.dp)) })
+                icon = { Icon(IconCamera, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(d.iconSm + 3.dp)) })
         }
     }
 }
@@ -710,21 +714,21 @@ private fun CameraPermCard(onRequest: () -> Unit) {
 private fun ConnectedBadge(peerIp: String, isHost: Boolean) {
     Row(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
             .background(Brush.linearGradient(listOf(Color(0xFF0D200D), Success.copy(.5f))))
-            .border(1.dp, Success.copy(.4f), RoundedCornerShape(16.dp))
-            .padding(14.dp),
+            .border(1.dp, Success.copy(.4f), RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .padding(d.screenHorizPad - d.spaceXxs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
     ) {
         Box(
-            Modifier.size(40.dp).clip(CircleShape)
+            Modifier.size(d.buttonHeightSm - d.spaceXxs).clip(CircleShape)
                 .background(Success.copy(.15f)).border(1.dp, Success.copy(.4f), CircleShape),
             Alignment.Center,
-        ) { Icon(IconCheck, null, tint = Success, modifier = Modifier.size(20.dp)) }
+        ) { Icon(IconCheck, null, tint = Success, modifier = Modifier.size(d.iconMd)) }
         Column {
-            Text("Connected!", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            Text(peerIp, color = White60, fontSize = 12.sp)
+            Text("Connected!", color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
+            Text(peerIp, color = White60, fontSize = d.textSm)
         }
     }
 }
@@ -733,15 +737,15 @@ private fun ConnectedBadge(peerIp: String, isHost: Boolean) {
 private fun ErrorCard(msg: String, onRetry: () -> Unit) {
     Box(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
             .background(BgCard)
-            .border(1.dp, Error.copy(.4f), RoundedCornerShape(16.dp))
-            .padding(18.dp),
+            .border(1.dp, Error.copy(.4f), RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .padding(d.heroPadding),
     ) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("✕", color = Error, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Text(msg, color = White60, fontSize = 13.sp, textAlign = TextAlign.Center)
+            verticalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+            Text("✕", color = Error, fontSize = d.textXxl, fontWeight = FontWeight.Bold)
+            Text(msg, color = White60, fontSize = d.textMd, textAlign = TextAlign.Center)
             BrandButton("Try Again", onClick = onRetry, modifier = Modifier.fillMaxWidth())
         }
     }
@@ -755,15 +759,15 @@ private fun FilePickerList(
 ) {
     if (downloads.isEmpty()) {
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
-                .padding(20.dp),
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
+                .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+                .padding(d.spaceXl - d.spaceXs),
             Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Icon(IconDownloadCloud, null, tint = White40, modifier = Modifier.size(28.dp))
-                Text("No completed downloads", color = White60, fontSize = 13.sp)
+                verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
+                Icon(IconDownloadCloud, null, tint = White40, modifier = Modifier.size(d.iconLg))
+                Text("No completed downloads", color = White60, fontSize = d.textMd)
             }
         }
         return
@@ -773,27 +777,27 @@ private fun FilePickerList(
         val sel = selectedFile?.id == dl.id
         Row(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(d.radiusMd))
                 .background(if (sel) AmberGlass else BgCard)
-                .border(1.dp, if (sel) AmberBorder else GlassBorderMd, RoundedCornerShape(14.dp))
+                .border(1.dp, if (sel) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusMd))
                 .clickable { onSelect(dl) }
-                .padding(14.dp),
+                .padding(d.screenHorizPad - d.spaceXxs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
         ) {
             Box(
-                Modifier.size(32.dp).clip(CircleShape)
+                Modifier.size(d.avatarSm).clip(CircleShape)
                     .background(if (sel) AmberGlass else GlassMd)
                     .border(1.dp, if (sel) AmberBorder else GlassBorderMd, CircleShape),
                 Alignment.Center,
             ) {
                 Icon(if (sel) IconCheck else IconMovieSlate, null,
-                    tint = if (sel) Brand else White60, modifier = Modifier.size(16.dp))
+                    tint = if (sel) Brand else White60, modifier = Modifier.size(d.iconMd - 4.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(dl.title, color = Color.White, fontSize = 13.sp,
+                Text(dl.title, color = Color.White, fontSize = d.textMd,
                     fontWeight = FontWeight.SemiBold, maxLines = 1)
-                Text("${dl.quality} · ${formatSize(dl.sizeBytes)}", color = White60, fontSize = 11.sp)
+                Text("${dl.quality} · ${formatSize(dl.sizeBytes)}", color = White60, fontSize = d.textXs)
             }
         }
     }
@@ -806,6 +810,8 @@ fun CameraScanner(onScanned: (String) -> Unit) {
     val ctx            = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val executor       = remember { Executors.newSingleThreadExecutor() }
+    val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
     var hasScanned     by remember { mutableStateOf(false) }
 
     AndroidView(
@@ -864,27 +870,29 @@ fun generateQr(content: String, sizePx: Int): Bitmap? = try {
 fun TransferHistoryRow(record: TransferRecord) {
     Row(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(d.radiusMd))
             .background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
-            .padding(14.dp),
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+            .padding(d.screenHorizPad - d.spaceXxs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
     ) {
+    val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
         Box(
-            Modifier.size(36.dp).clip(CircleShape)
+            Modifier.size(d.buttonHeightSm - d.spaceMd).clip(CircleShape)
                 .background(AmberGlass).border(1.dp, AmberBorder, CircleShape),
             Alignment.Center,
         ) {
             Icon(if (record.direction == "SEND") IconUpload else IconDownloadCloud,
-                null, tint = Brand, modifier = Modifier.size(16.dp))
+                null, tint = Brand, modifier = Modifier.size(d.iconMd - 4.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(record.fileName, color = Color.White, fontSize = 13.sp,
+            Text(record.fileName, color = Color.White, fontSize = d.textMd,
                 fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text("${if (record.direction == "SEND") "↑" else "↓"} ${record.peerName}",
-                color = White60, fontSize = 11.sp)
+                color = White60, fontSize = d.textXs)
         }
-        Text(formatSize(record.sizeBytes), color = White40, fontSize = 11.sp)
+        Text(formatSize(record.sizeBytes), color = White40, fontSize = d.textXs)
     }
 }

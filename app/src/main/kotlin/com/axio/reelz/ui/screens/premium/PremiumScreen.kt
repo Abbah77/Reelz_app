@@ -44,6 +44,7 @@ import com.axio.reelz.remoteconfig.TierConfig
 import com.axio.reelz.remoteconfig.UserState
 import com.axio.reelz.ui.components.BrandButton
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -215,14 +216,15 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
     val glow by shimmer.animateFloat(0.5f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "g")
 
     Box(Modifier.fillMaxSize().background(Bg)) {
+    val d = LocalDimensions.current
         LazyColumn(
             Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 32.dp),
+            contentPadding = PaddingValues(bottom = d.spaceXxl),
         ) {
             // ── Header ───────────────────────────────────────────────────
             item {
                 Row(
-                    Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
+                    Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = { nav.popBackStack() }) {
@@ -234,24 +236,24 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
             // ── Signature: glowing crown + state-aware headline ─────────────
             item {
                 Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = d.spaceXl, vertical = d.spaceMd - d.spaceXxs),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Box(
-                        Modifier.size(84.dp).clip(CircleShape)
+                        Modifier.size(d.avatarLg + d.spaceXl - d.spaceXxs).clip(CircleShape)
                             .background(Brush.radialGradient(listOf(Brand.copy(glow * .35f), Color.Transparent))),
                         Alignment.Center,
                     ) {
                         Box(
-                            Modifier.size(60.dp).clip(CircleShape)
+                            Modifier.size(d.avatarLg - d.spaceXs).clip(CircleShape)
                                 .background(Brush.linearGradient(listOf(BrandDeep, Brand)))
                                 .border(1.dp, Brand2.copy(.6f), CircleShape),
                             Alignment.Center,
                         ) {
-                            Text("👑", fontSize = 26.sp)
+                            Text("👑", fontSize = d.textHero)
                         }
                     }
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.height(d.spaceXl - d.spaceXs))
 
                     val (headline, sub) = when (ui.userState) {
                         UserState.PREMIUM_ACTIVE -> "You're Premium" to "Renews in ${ui.daysUntilExpiry} day${if (ui.daysUntilExpiry == 1) "" else "s"}"
@@ -260,14 +262,14 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                         else                      -> "Watch without limits" to "4K streaming, unlimited downloads, zero ads"
                     }
                     Text(headline, style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(4.dp))
-                    Text(sub, color = White60, fontSize = 13.sp, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(d.spaceXs))
+                    Text(sub, color = White60, fontSize = d.textMd, textAlign = TextAlign.Center)
                 }
             }
 
             // ── Comparison — built from the real tier config, never hardcoded ──
             item {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = d.spaceXl - d.spaceXs)) {
                     ComparisonRow("Max video quality", ui.freeTier.maxResolution, ui.premiumTier.maxResolution)
                     ComparisonRow(
                         "Downloads",
@@ -284,8 +286,8 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
             if (ui.userState != UserState.PREMIUM_ACTIVE) {
                 item {
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        Modifier.fillMaxWidth().padding(horizontal = d.spaceXl - d.spaceXs, vertical = d.spaceLg),
+                        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                     ) {
                         PriceCard("Monthly", "₦${formatNgn(ui.premiumConfig.monthlyPriceNgn)}", "/month", Modifier.weight(1f))
                         PriceCard("Yearly", "₦${formatNgn(ui.premiumConfig.yearlyPriceNgn)}", "/year", Modifier.weight(1f), best = true)
@@ -295,16 +297,16 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
 
             // ── Subscribe / manage ────────────────────────────────────────
             item {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = d.spaceXl - d.spaceXs), horizontalAlignment = Alignment.CenterHorizontally) {
                     when (ui.userState) {
                         UserState.GUEST -> {
                             Text(
                                 "Sign in from your Profile tab first, then come back here.",
-                                color = White60, fontSize = 12.sp, textAlign = TextAlign.Center,
+                                color = White60, fontSize = d.textSm, textAlign = TextAlign.Center,
                             )
                         }
                         UserState.PREMIUM_ACTIVE -> {
-                            Text("Thanks for being a Premium member.", color = White60, fontSize = 12.sp, textAlign = TextAlign.Center)
+                            Text("Thanks for being a Premium member.", color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
                         }
                         else -> {
                             val monthlyUrl = ui.premiumConfig.paystackMonthlyUrl
@@ -315,7 +317,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                             if (anyConfigured) {
                                 Row(
                                     Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
                                 ) {
                                     PaystackSubscribeButton(
                                         label      = "Monthly",
@@ -332,10 +334,10 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                                         onClick    = { vm.initCheckout("yearly") },
                                     )
                                 }
-                                Spacer(Modifier.height(12.dp))
+                                Spacer(Modifier.height(d.spaceMd - d.spaceXxs))
                                 Text(
                                     "Secured by Paystack — card, bank transfer, or USSD.",
-                                    color = White40, fontSize = 11.sp, textAlign = TextAlign.Center,
+                                    color = White40, fontSize = d.textXs, textAlign = TextAlign.Center,
                                 )
                             } else {
                                 // No payment link or backend configured yet
@@ -348,13 +350,13 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                             }
 
                             if (ui.premiumConfig.paymentNote.isNotBlank()) {
-                                Spacer(Modifier.height(10.dp))
+                                Spacer(Modifier.height(d.spaceMd))
                                 Text(
                                     ui.premiumConfig.paymentNote,
-                                    color = White60, fontSize = 12.sp, textAlign = TextAlign.Center, lineHeight = 17.sp,
+                                    color = White60, fontSize = d.textSm, textAlign = TextAlign.Center, lineHeight = 17.sp,
                                 )
                             }
-                            Spacer(Modifier.height(20.dp))
+                            Spacer(Modifier.height(d.spaceXl - d.spaceXs))
                         }
                     }
                 }
@@ -383,8 +385,8 @@ private fun PaystackSubscribeButton(
     OutlinedButton(
         onClick  = onClick,
         enabled  = enabled,
-        modifier = modifier.height(48.dp),
-        shape    = RoundedCornerShape(100.dp),
+        modifier = modifier.height(d.buttonHeightMd),
+        shape    = RoundedCornerShape(d.radiusPill),
         border   = BorderStroke(1.dp, if (enabled) Brand.copy(.5f) else GlassBorderMd),
         colors   = ButtonDefaults.outlinedButtonColors(
             contentColor         = if (enabled) Brand2 else White40,
@@ -392,9 +394,9 @@ private fun PaystackSubscribeButton(
         ),
     ) {
         if (isLoading) {
-            CircularProgressIndicator(Modifier.size(14.dp), color = Brand2, strokeWidth = 2.dp)
+            CircularProgressIndicator(Modifier.size(d.iconSm + 2.dp), color = Brand2, strokeWidth = 2.dp)
         } else {
-            Text(label, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(label, fontWeight = FontWeight.SemiBold, fontSize = d.textMd)
         }
     }
 }
@@ -408,15 +410,15 @@ private fun ComparisonRow(
     boolPremium: Boolean? = null,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().padding(vertical = d.spaceMd),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = White80, fontSize = 13.sp, modifier = Modifier.weight(1.3f))
+        Text(label, color = White80, fontSize = d.textMd, modifier = Modifier.weight(1.3f))
         Box(Modifier.weight(1f), Alignment.Center) {
-            if (boolFree != null) BoolPip(boolFree) else Text(freeValue, color = White60, fontSize = 12.sp, textAlign = TextAlign.Center)
+            if (boolFree != null) BoolPip(boolFree) else Text(freeValue, color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
         }
         Box(Modifier.weight(1f), Alignment.Center) {
-            if (boolPremium != null) BoolPip(boolPremium) else Text(premiumValue, color = Brand2, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, textAlign = TextAlign.Center)
+            if (boolPremium != null) BoolPip(boolPremium) else Text(premiumValue, color = Brand2, fontWeight = FontWeight.SemiBold, fontSize = d.textSm, textAlign = TextAlign.Center)
         }
     }
 }
@@ -424,7 +426,7 @@ private fun ComparisonRow(
 @Composable
 private fun BoolPip(value: Boolean) {
     Box(
-        Modifier.size(20.dp).clip(CircleShape)
+        Modifier.size(d.iconMd).clip(CircleShape)
             .background(if (value) Brand.copy(.18f) else GlassMd),
         Alignment.Center,
     ) {
@@ -432,7 +434,7 @@ private fun BoolPip(value: Boolean) {
             if (value) IconCheck else IconX,
             null,
             tint = if (value) Brand2 else White40,
-            modifier = Modifier.size(12.dp),
+            modifier = Modifier.size(d.iconSm),
         )
     }
 }
@@ -441,20 +443,231 @@ private fun BoolPip(value: Boolean) {
 private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
     Column(
         modifier
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
             .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
-            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(16.dp))
-            .padding(16.dp),
+            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .padding(d.spaceLg),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (best) {
-            Text("BEST VALUE", color = Brand2, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
-            Spacer(Modifier.height(4.dp))
+            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+            Spacer(Modifier.height(d.spaceXs))
         }
-        Text(label, color = White60, fontSize = 12.sp)
-        Spacer(Modifier.height(4.dp))
-        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = 22.sp)
-        Text(period, color = White40, fontSize = 11.sp)
+        Text(label, color = White60, fontSize = d.textSm)
+        Spacer(Modifier.height(d.spaceXs))
+        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
+        Text(period, color = White40, fontSize = d.textXs)
+    }
+}
+
+private fun formatNgn(amount: Long): String =
+    amount.toString().reversed().chunked(3).joinToString(",").reversed()
+
+private fun PaystackSubscribeButton(
+    label: String,
+    enabled: Boolean,
+    isLoading: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    OutlinedButton(
+        onClick  = onClick,
+        enabled  = enabled,
+        modifier = modifier.height(d.buttonHeightMd),
+        shape    = RoundedCornerShape(d.radiusPill),
+        border   = BorderStroke(1.dp, if (enabled) Brand.copy(.5f) else GlassBorderMd),
+        colors   = ButtonDefaults.outlinedButtonColors(
+            contentColor         = if (enabled) Brand2 else White40,
+            disabledContentColor = White40,
+        ),
+    ) {
+        if (isLoading) {
+            CircularProgressIndicator(Modifier.size(d.iconSm + 2.dp), color = Brand2, strokeWidth = 2.dp)
+        } else {
+            Text(label, fontWeight = FontWeight.SemiBold, fontSize = d.textMd)
+        }
+    }
+}
+
+@Composable
+private fun ComparisonRow(
+    label: String,
+    freeValue: String,
+    premiumValue: String,
+    boolFree: Boolean? = null,
+    boolPremium: Boolean? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = d.spaceMd),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = White80, fontSize = d.textMd, modifier = Modifier.weight(1.3f))
+        Box(Modifier.weight(1f), Alignment.Center) {
+            if (boolFree != null) BoolPip(boolFree) else Text(freeValue, color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
+        }
+        Box(Modifier.weight(1f), Alignment.Center) {
+            if (boolPremium != null) BoolPip(boolPremium) else Text(premiumValue, color = Brand2, fontWeight = FontWeight.SemiBold, fontSize = d.textSm, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun BoolPip(value: Boolean) {
+    Box(
+        Modifier.size(d.iconMd).clip(CircleShape)
+            .background(if (value) Brand.copy(.18f) else GlassMd),
+        Alignment.Center,
+    ) {
+        Icon(
+            if (value) IconCheck else IconX,
+            null,
+            tint = if (value) Brand2 else White40,
+            modifier = Modifier.size(d.iconSm),
+        )
+    }
+}
+
+@Composable
+private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
+            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .padding(d.spaceLg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (best) {
+            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+            Spacer(Modifier.height(d.spaceXs))
+        }
+        Text(label, color = White60, fontSize = d.textSm)
+        Spacer(Modifier.height(d.spaceXs))
+        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
+        Text(period, color = White40, fontSize = d.textXs)
+    }
+}
+
+private fun formatNgn(amount: Long): String =
+    amount.toString().reversed().chunked(3).joinToString(",").reversed()
+
+private fun ComparisonRow(
+    label: String,
+    freeValue: String,
+    premiumValue: String,
+    boolFree: Boolean? = null,
+    boolPremium: Boolean? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = d.spaceMd),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = White80, fontSize = d.textMd, modifier = Modifier.weight(1.3f))
+        Box(Modifier.weight(1f), Alignment.Center) {
+            if (boolFree != null) BoolPip(boolFree) else Text(freeValue, color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
+        }
+        Box(Modifier.weight(1f), Alignment.Center) {
+            if (boolPremium != null) BoolPip(boolPremium) else Text(premiumValue, color = Brand2, fontWeight = FontWeight.SemiBold, fontSize = d.textSm, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun BoolPip(value: Boolean) {
+    Box(
+        Modifier.size(d.iconMd).clip(CircleShape)
+            .background(if (value) Brand.copy(.18f) else GlassMd),
+        Alignment.Center,
+    ) {
+        Icon(
+            if (value) IconCheck else IconX,
+            null,
+            tint = if (value) Brand2 else White40,
+            modifier = Modifier.size(d.iconSm),
+        )
+    }
+}
+
+@Composable
+private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
+            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .padding(d.spaceLg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (best) {
+            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+            Spacer(Modifier.height(d.spaceXs))
+        }
+        Text(label, color = White60, fontSize = d.textSm)
+        Spacer(Modifier.height(d.spaceXs))
+        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
+        Text(period, color = White40, fontSize = d.textXs)
+    }
+}
+
+private fun formatNgn(amount: Long): String =
+    amount.toString().reversed().chunked(3).joinToString(",").reversed()
+
+private fun BoolPip(value: Boolean) {
+    Box(
+        Modifier.size(d.iconMd).clip(CircleShape)
+            .background(if (value) Brand.copy(.18f) else GlassMd),
+        Alignment.Center,
+    ) {
+        Icon(
+            if (value) IconCheck else IconX,
+            null,
+            tint = if (value) Brand2 else White40,
+            modifier = Modifier.size(d.iconSm),
+        )
+    }
+}
+
+@Composable
+private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
+            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .padding(d.spaceLg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (best) {
+            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+            Spacer(Modifier.height(d.spaceXs))
+        }
+        Text(label, color = White60, fontSize = d.textSm)
+        Spacer(Modifier.height(d.spaceXs))
+        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
+        Text(period, color = White40, fontSize = d.textXs)
+    }
+}
+
+private fun formatNgn(amount: Long): String =
+    amount.toString().reversed().chunked(3).joinToString(",").reversed()
+
+private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
+            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .padding(d.spaceLg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (best) {
+            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+            Spacer(Modifier.height(d.spaceXs))
+        }
+        Text(label, color = White60, fontSize = d.textSm)
+        Spacer(Modifier.height(d.spaceXs))
+        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
+        Text(period, color = White40, fontSize = d.textXs)
     }
 }
 

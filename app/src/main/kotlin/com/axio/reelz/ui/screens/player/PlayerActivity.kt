@@ -58,6 +58,7 @@ import com.axio.reelz.ads.ImaPreRollView
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -350,6 +351,7 @@ fun PlayerScreen(
     streamOrigin: String = "",
     downloadId: String? = null,
 ) {
+    val d = LocalDimensions.current
     val ctx     = LocalContext.current
     val ui      by vm.ui.collectAsState()
     val player  by vm.exoPlayerFlow.collectAsState()

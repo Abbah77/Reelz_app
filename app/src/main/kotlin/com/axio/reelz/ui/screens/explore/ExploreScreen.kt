@@ -24,6 +24,7 @@ import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.ui.Route
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -209,6 +210,7 @@ class ExploreViewModel @Inject constructor(
 fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsState()
     var showFilterSheet by remember { mutableStateOf(false) }
+    val d = LocalDimensions.current
     val currentYear = remember { Calendar.getInstance().get(Calendar.YEAR) }
 
     val activeFilterCount = with(ui.filters) {
@@ -220,7 +222,7 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
 
         // ── Header — same blue brand identity, compass mark for Explore ──────
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.heroPadding - d.spaceSm, vertical = d.spaceLg),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column {
@@ -232,52 +234,52 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
                 )
                 Text(
                     "Find your next watch",
-                    color = Brand.copy(.85f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    color = Brand.copy(.85f), fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
                 )
             }
             Spacer(Modifier.weight(1f))
-            Icon(IconCompass, null, tint = Brand.copy(.8f), modifier = Modifier.size(28.dp))
+            Icon(IconCompass, null, tint = Brand.copy(.8f), modifier = Modifier.size(d.iconLg))
         }
 
         // ── Movie / TV switch — primary axis, large and obvious ─────────────
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
         ) {
             TypeSwitchPill("Movies", ui.filters.mediaType == "MOVIE", Modifier.weight(1f)) { vm.setMediaType("MOVIE") }
             TypeSwitchPill("TV Shows", ui.filters.mediaType == "TV", Modifier.weight(1f)) { vm.setMediaType("TV") }
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(d.spaceLg - d.spaceXxs))
 
         // ── Mood presets — one-tap discovery, lowers the barrier to explore ──
         Text(
             "Quick picks",
-            color = White40, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+            color = White40, fontSize = d.textXs, fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.5.sp,
-            modifier = Modifier.padding(horizontal = 18.dp),
+            modifier = Modifier.padding(horizontal = d.heroPadding - d.spaceXs),
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = d.screenHorizPad),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
         ) {
             items(moodPresets) { mood ->
                 MoodChip(mood, ui.activeMood == mood.label) { vm.applyMood(mood) }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(d.spaceMd - d.spaceXxs))
 
         // ── Filter bar — genre chips (scrollable) + filter button ───────────
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
         ) {
             LazyRow(
                 modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
             ) {
                 items(ui.genres) { g ->
                     SmallFilterChip(g.name, g.id in ui.filters.genreIds) { vm.toggleGenre(g.id) }
@@ -285,28 +287,28 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
             }
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(d.radiusMd - d.spaceSm))
                     .background(if (activeFilterCount > 0) Brand.copy(.18f) else GlassMd)
-                    .border(1.dp, if (activeFilterCount > 0) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(10.dp))
+                    .border(1.dp, if (activeFilterCount > 0) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceSm))
                     .clickable { showFilterSheet = true }
                     .padding(horizontal = 10.dp, vertical = 8.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Icon(IconFilter, null, tint = if (activeFilterCount > 0) Brand else White60, modifier = Modifier.size(15.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceXs + 1.dp)) {
+                    Icon(IconFilter, null, tint = if (activeFilterCount > 0) Brand else White60, modifier = Modifier.size(d.iconSm + 3.dp))
                     if (activeFilterCount > 0) {
-                        Box(Modifier.size(16.dp).clip(CircleShape).background(Brand), Alignment.Center) {
-                            Text("$activeFilterCount", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Box(Modifier.size(d.iconMd - 4.dp).clip(CircleShape).background(Brand), Alignment.Center) {
+                            Text("$activeFilterCount", color = Color.White, fontSize = d.textXxs, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(d.spaceMd))
 
         // ── Results grid ───────────────────────────────────────────────────
         when {
-            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = 44.dp, color = Brand) }
+            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerLg, color = Brand) }
             ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.applyMood(moodPresets[4]) })
             ui.results.isEmpty() -> ExploreEmptyState(onClear = vm::clearFilters)
             else -> {
@@ -320,9 +322,9 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
                 LazyVerticalGrid(
                     state = gridState,
                     columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement   = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(horizontal = d.spaceMd - d.spaceXxs, vertical = d.sectionVertPad),
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
+                    verticalArrangement   = Arrangement.spacedBy(d.spaceMd),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(ui.results, key = { it.tmdbId }) { m ->
@@ -334,12 +336,12 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
                     }
                     if (ui.isLoadingMore) {
                         item(span = { GridItemSpan(3) }) {
-                            Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), Alignment.Center) {
-                                CinematicSpinner(size = 26.dp, color = Brand)
+                            Box(Modifier.fillMaxWidth().padding(vertical = d.spaceLg - d.spaceXxs), Alignment.Center) {
+                                CinematicSpinner(size = d.spinnerMd, color = Brand)
                             }
                         }
                     }
-                    item(span = { GridItemSpan(3) }) { Spacer(Modifier.height(80.dp)) }
+                    item(span = { GridItemSpan(3) }) { Spacer(Modifier.height(d.avatarLg + d.spaceLg)) }
                 }
             }
         }
@@ -362,16 +364,16 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
 @Composable
 private fun ExploreEmptyState(onClear: () -> Unit) {
     Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
             Box(contentAlignment = Alignment.Center) {
-                Box(Modifier.size(90.dp).clip(CircleShape)
+                Box(Modifier.size(d.avatarLg + d.spaceXl - d.spaceXs).clip(CircleShape)
                     .background(Brush.radialGradient(listOf(Brand.copy(.15f), Color.Transparent)))
                     .border(1.dp, Brand.copy(.3f), CircleShape))
-                Icon(IconCompass, null, tint = Brand.copy(.8f), modifier = Modifier.size(36.dp))
+                Icon(IconCompass, null, tint = Brand.copy(.8f), modifier = Modifier.size(d.buttonHeightSm - d.spaceMd))
             }
-            Text("Nothing matches yet", color = White60, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Text("Try widening your filters", color = White40, fontSize = 13.sp)
-            Spacer(Modifier.height(4.dp))
+            Text("Nothing matches yet", color = White60, fontSize = d.textXl - 1.sp, fontWeight = FontWeight.SemiBold)
+            Text("Try widening your filters", color = White40, fontSize = d.textMd)
+            Spacer(Modifier.height(d.spaceXs))
             TextButton(onClick = onClear) { Text("Clear filters", color = Brand, fontWeight = FontWeight.SemiBold) }
         }
     }
@@ -382,17 +384,18 @@ private fun ExploreEmptyState(onClear: () -> Unit) {
 fun TypeSwitchPill(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
         modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
             .background(
                 if (selected) Brush.horizontalGradient(listOf(Brand.copy(.85f), Brand2.copy(.85f)))
                 else Brush.horizontalGradient(listOf(BgRaised, BgSurface))
             )
-            .border(1.dp, if (selected) Brand.copy(.6f) else GlassBorderMd, RoundedCornerShape(12.dp))
+            .border(1.dp, if (selected) Brand.copy(.6f) else GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
             .clickable(onClick = onClick)
-            .padding(vertical = 11.dp),
+            .padding(vertical = d.spaceMd + 1.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = if (selected) Color.White else White60, fontSize = 13.sp,
+    val d = LocalDimensions.current
+        Text(label, color = if (selected) Color.White else White60, fontSize = d.textMd,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
     }
 }
@@ -402,19 +405,20 @@ fun TypeSwitchPill(label: String, selected: Boolean, modifier: Modifier = Modifi
 fun MoodChip(mood: MoodPreset, selected: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
-            .clip(RoundedCornerShape(100.dp))
+            .clip(RoundedCornerShape(d.radiusPill))
             .background(
                 if (selected) Brush.horizontalGradient(listOf(Brand.copy(.3f), Brand2.copy(.3f)))
                 else Brush.horizontalGradient(listOf(BgRaised, BgSurface))
             )
-            .border(1.dp, if (selected) Brand.copy(.6f) else GlassBorderMd, RoundedCornerShape(100.dp))
+            .border(1.dp, if (selected) Brand.copy(.6f) else GlassBorderMd, RoundedCornerShape(d.radiusPill))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
+            .padding(horizontal = d.screenHorizPad - d.spaceXxs, vertical = d.spaceMd - d.spaceXxs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
     ) {
-        Text(mood.emoji, fontSize = 13.sp)
-        Text(mood.label, color = if (selected) White else White60, fontSize = 12.sp,
+    val d = LocalDimensions.current
+        Text(mood.emoji, fontSize = d.textMd)
+        Text(mood.label, color = if (selected) White else White60, fontSize = d.textSm,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
     }
 }
@@ -432,6 +436,7 @@ fun ExploreFilterSheet(
     onClear: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     var yearRange by remember(filters.yearFrom, filters.yearTo) {
         mutableStateOf((filters.yearFrom ?: 1970).toFloat()..(filters.yearTo ?: currentYear).toFloat())
     }
@@ -440,24 +445,24 @@ fun ExploreFilterSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = BgCard,
-        dragHandle = { Box(Modifier.padding(top = 10.dp).width(36.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(GlassBorderHv)) },
+        dragHandle = { Box(Modifier.padding(top = d.spaceMd).width(d.shimmerBarWidth).height(d.shimmerBarHeight).clip(RoundedCornerShape(2.dp)).background(GlassBorderHv)) },
     ) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp).navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.heroPadding - d.spaceSm, vertical = d.spaceMd - d.spaceXxs).navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(d.spaceXl - d.spaceXs),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Icon(IconFilter, null, tint = Brand, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Refine results", color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Icon(IconFilter, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp))
+                Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
+                Text("Refine results", color = White, fontWeight = FontWeight.Bold, fontSize = d.textXl - 1.sp)
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onClear) { Text("Reset", color = White60, fontSize = 13.sp) }
+                TextButton(onClick = onClear) { Text("Reset", color = White60, fontSize = d.textMd) }
             }
 
             // Sort
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Sort by", color = White60, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
+                Text("Sort by", color = White60, fontSize = d.textXs, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp)) {
                     items(sortOptions) { (label, value) ->
                         SmallFilterChip(label, filters.sortBy == value, accent = Brand) { onSort(value) }
                     }
@@ -465,10 +470,10 @@ fun ExploreFilterSheet(
             }
 
             // Year range
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Release year", color = White60, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
-                    Text("${yearRange.start.toInt()} – ${yearRange.endInclusive.toInt()}", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Release year", color = White60, fontSize = d.textXs, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+                    Text("${yearRange.start.toInt()} – ${yearRange.endInclusive.toInt()}", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
                 }
                 RangeSlider(
                     value = yearRange,
@@ -482,12 +487,12 @@ fun ExploreFilterSheet(
             }
 
             // Rating floor
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Minimum rating", color = White60, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Icon(IconStar, null, tint = Gold, modifier = Modifier.size(12.dp))
-                        Text(if (ratingFloor > 0f) "%.1f+".format(ratingFloor) else "Any", color = Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Minimum rating", color = White60, fontSize = d.textXs, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp)) {
+                        Icon(IconStar, null, tint = Gold, modifier = Modifier.size(d.iconSm))
+                        Text(if (ratingFloor > 0f) "%.1f+".format(ratingFloor) else "Any", color = Gold, fontSize = d.textSm, fontWeight = FontWeight.Bold)
                     }
                 }
                 Slider(
@@ -504,9 +509,9 @@ fun ExploreFilterSheet(
 
             // Runtime (movies only — visually de-emphasized for TV but harmless if shown)
             if (filters.mediaType == "MOVIE") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Runtime", color = White60, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
+                    Text("Runtime", color = White60, fontSize = d.textXs, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp)) {
                         items(runtimeOptions) { option ->
                             val isSelected = filters.runtimeFrom == option.from && filters.runtimeTo == option.to
                             SmallFilterChip(option.label, isSelected, accent = Brand) { onRuntime(option.from, option.to) }
@@ -515,7 +520,7 @@ fun ExploreFilterSheet(
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
         }
     }
 }
@@ -525,14 +530,15 @@ fun ExploreFilterSheet(
 fun SmallFilterChip(label: String, selected: Boolean, accent: Color = Brand, onClick: () -> Unit) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
             .background(if (selected) Brush.horizontalGradient(listOf(accent.copy(.5f), accent.copy(.8f)))
                         else Brush.horizontalGradient(listOf(BgSurface, BgOverlay)))
-            .border(1.dp, if (selected) accent.copy(.6f) else GlassBorder, RoundedCornerShape(8.dp))
+            .border(1.dp, if (selected) accent.copy(.6f) else GlassBorder, RoundedCornerShape(d.radiusSm + d.spaceXxs))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp),
     ) {
-        Text(label, color = if (selected) Color.White else White60, fontSize = 12.sp,
+    val d = LocalDimensions.current
+        Text(label, color = if (selected) Color.White else White60, fontSize = d.textSm,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
     }
 }

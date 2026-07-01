@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 
 @Composable
 fun UpdateScreen(
@@ -29,6 +30,7 @@ fun UpdateScreen(
     changelog     : String  = "",
     forceUpdate   : Boolean = false,
     onSkip        : () -> Unit = {},
+    val d = LocalDimensions.current
 ) {
     val context = LocalContext.current
 
@@ -62,45 +64,45 @@ fun UpdateScreen(
     ) {
         Box(
             Modifier
-                .size(280.dp)
+                .size(d.cardPosterWidth + d.spaceXxl * 5f)
                 .background(Brush.radialGradient(listOf(Brand.copy(0.12f), Color.Transparent)))
         )
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
-            modifier            = Modifier.padding(24.dp),
+            modifier            = Modifier.padding(d.spaceXl),
         ) {
 
             // ── Icon ─────────────────────────────────────────────────────────
             Box(
                 Modifier
-                    .size(88.dp)
+                    .size(d.avatarLg + d.spaceXxl)
                     .scale(pulseScale)
                     .alpha(iconAlpha.value)
                     .clip(CircleShape)
                     .background(Brush.radialGradient(listOf(Brand.copy(0.25f), BrandDeep.copy(0.4f))))
-                    .border(1.5.dp, Brush.linearGradient(listOf(Brand, Brand2)), CircleShape),
+                    .border(d.borderMed, Brush.linearGradient(listOf(Brand, Brand2)), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("↑", color = Brand, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                Text("↑", color = Brand, fontSize = d.textHero + 6.sp, fontWeight = FontWeight.Bold)
             }
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(d.spaceXxl - d.spaceXs))
 
             // ── Card ─────────────────────────────────────────────────────────
             Box(
                 Modifier
                     .offset(y = cardSlide.value.dp)
                     .alpha(cardAlpha.value)
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(d.radiusLg))
                     .background(Brush.verticalGradient(listOf(BgCard, BgRaised)))
                     .border(
                         1.dp,
                         Brush.linearGradient(listOf(Brand.copy(0.35f), Brand2.copy(0.1f))),
-                        RoundedCornerShape(20.dp),
+                        RoundedCornerShape(d.radiusLg),
                     )
-                    .padding(28.dp),
+                    .padding(d.spaceXxl - d.spaceXs),
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
 
@@ -108,52 +110,52 @@ fun UpdateScreen(
                         Text(
                             "UPDATE REQUIRED",
                             color         = Brand2,
-                            fontSize      = 11.sp,
+                            fontSize = d.textXs,
                             fontWeight    = FontWeight.Bold,
                             letterSpacing = 2.sp,
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
                     }
 
                     Text(
                         "New Version Available",
                         color      = White,
-                        fontSize   = 22.sp,
+                        fontSize = d.textXxl,
                         fontWeight = FontWeight.Bold,
                         textAlign  = TextAlign.Center,
                     )
 
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(d.spaceSm))
 
                     Text(
                         "Version $latestVersion is ready to install",
                         color     = White.copy(0.55f),
-                        fontSize  = 14.sp,
+                        fontSize = d.textMd,
                         textAlign = TextAlign.Center,
                     )
 
                     if (changelog.isNotBlank()) {
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(d.spaceXl - d.spaceXs))
                         HorizontalDivider(color = White.copy(0.06f))
-                        Spacer(Modifier.height(16.dp))
+                        Spacer(Modifier.height(d.spaceLg))
                         Text(
                             "WHAT'S NEW",
                             color         = White.copy(0.4f),
-                            fontSize      = 10.sp,
+                            fontSize = d.textXs,
                             fontWeight    = FontWeight.Bold,
                             letterSpacing = 1.5.sp,
                             modifier      = Modifier.fillMaxWidth(),
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
                         Text(
                             changelog,
                             color      = White.copy(0.75f),
-                            fontSize   = 13.sp,
-                            lineHeight  = 20.sp,
+                            fontSize = d.textMd,
+                            lineHeight = (d.textMd.value * 1.5f).sp,
                         )
                     }
 
-                    Spacer(Modifier.height(28.dp))
+                    Spacer(Modifier.height(d.spaceXxl - d.spaceXs))
 
                     // ── Download button — opens browser, user installs normally ──
                     Button(
@@ -168,8 +170,8 @@ fun UpdateScreen(
                                 context.startActivity(intent)
                             }
                         },
-                        modifier        = Modifier.fillMaxWidth().height(52.dp),
-                        shape           = RoundedCornerShape(14.dp),
+                        modifier        = Modifier.fillMaxWidth().height(d.buttonHeightMd + d.spaceSm),
+                        shape           = RoundedCornerShape(d.radiusMd),
                         colors          = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
                         contentPadding  = PaddingValues(0.dp),
                     ) {
@@ -178,26 +180,26 @@ fun UpdateScreen(
                                 .fillMaxSize()
                                 .background(
                                     Brush.horizontalGradient(listOf(Brand, Brand2)),
-                                    RoundedCornerShape(14.dp),
+                                    RoundedCornerShape(d.radiusMd),
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
                                 "Download Update",
                                 color      = Color.White,
-                                fontSize   = 15.sp,
+                                fontSize = d.textLg,
                                 fontWeight = FontWeight.Bold,
                             )
                         }
                     }
 
                     if (!forceUpdate) {
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(d.spaceMd - d.spaceXxs))
                         TextButton(
                             onClick  = onSkip,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Later", color = White.copy(0.4f), fontSize = 14.sp)
+                            Text("Later", color = White.copy(0.4f), fontSize = d.textMd)
                         }
                     }
                 }

@@ -330,6 +330,7 @@ fun BrowseScreen(
     vm: BrowseViewModel = hiltViewModel(),
     listState: LazyListState = rememberLazyListState(),
 ) {
+    val d = LocalDimensions.current
     val ui by vm.ui.collectAsState()
     val density = LocalDensity.current
 
@@ -968,6 +969,7 @@ fun StickyGenreChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = d.chipHorizPad, vertical = d.chipVertPad),
     ) {
+    val d = LocalDimensions.current
         Text(
             text       = label,
             color      = if (selected) Color.White else White60,
@@ -1038,6 +1040,7 @@ fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = d.chipHorizPad + d.spaceXs, vertical = d.chipVertPad + d.spaceXs),
     ) {
+    val d = LocalDimensions.current
         Text(
             text,
             color      = if (selected) Color.White else White60,
@@ -1052,6 +1055,7 @@ fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
 fun LoadMoreSkeleton() {
     val d = LocalDimensions.current
     Box(Modifier.fillMaxWidth().padding(vertical = d.spaceMd - d.spaceXxs)) { SkeletonRowLoader() }
+    val d = LocalDimensions.current
 }
 
 // ── Hero banner pager ──────────────────────────────────────────────────────────
@@ -1060,6 +1064,7 @@ fun HeroBannerPager(
     items: List<Media>,
     watchlistedIds: Set<Int> = emptySet(),
     onWatchlist: (Media) -> Unit = {},
+    val d = LocalDimensions.current
     onClick: (Media) -> Unit,
 ) {
     val pagerState = rememberPagerState { items.size }
@@ -1218,6 +1223,7 @@ fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
     val progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
 
     Column(Modifier.width(d.continueCardWidth).clickable(onClick = onClick)) {
+    val d = LocalDimensions.current
         Box(
             Modifier.fillMaxWidth().height(d.continueCardThumbHeight)
                 .clip(RoundedCornerShape(d.radiusMd))

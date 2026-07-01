@@ -84,6 +84,7 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
     val currentRoute = backStack?.destination?.route
 
     val topLevelRoutes = navTabs.map { it.route }
+    val d = LocalDimensions.current
     val showBottomBar = currentRoute in topLevelRoutes
 
     LaunchedEffect(Unit) {

@@ -17,12 +17,16 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.platform.LocalConfiguration
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 
 @Composable
 fun MaintenanceScreen(
     message: String = "We're making things better. Check back soon!",
     onRetry: () -> Unit = {},
+    val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
 ) {
     // Slow rotate on the wrench icon ring
     val rotation = rememberInfiniteTransition(label = "spin")
@@ -49,7 +53,7 @@ fun MaintenanceScreen(
         // Ambient glow
         Box(
             Modifier
-                .size(300.dp)
+                .size(screenH * 0.38f)
                 .background(
                     Brush.radialGradient(listOf(Violet.copy(0.10f), Color.Transparent))
                 )
@@ -57,13 +61,13 @@ fun MaintenanceScreen(
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(32.dp),
+            modifier = Modifier.padding(d.spaceXxl),
         ) {
             // Rotating ring + gear icon
             Box(contentAlignment = Alignment.Center) {
                 Box(
                     Modifier
-                        .size(100.dp)
+                        .size(d.avatarLg + d.spaceXxl + d.spaceXs)
                         .rotate(angle)
                         .border(
                             2.dp,
@@ -80,53 +84,53 @@ fun MaintenanceScreen(
                 )
                 Box(
                     Modifier
-                        .size(80.dp)
+                        .size(d.avatarLg + d.spaceLg)
                         .clip(CircleShape)
                         .background(
                             Brush.radialGradient(listOf(Violet.copy(0.18f), BgCard))
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("⚙️", fontSize = 32.sp)
+                    Text("⚙️", fontSize = d.textHero + 6.sp)
                 }
             }
 
-            Spacer(Modifier.height(36.dp))
+            Spacer(Modifier.height(d.buttonHeightSm - d.spaceXxs))
 
             Text(
                 "Under Maintenance",
                 color      = White,
-                fontSize   = 24.sp,
+                fontSize = d.textXxl,
                 fontWeight = FontWeight.Bold,
                 textAlign  = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(d.spaceMd - d.spaceXxs))
 
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(d.radiusMd))
                     .background(BgCard)
-                    .border(1.dp, Violet.copy(0.2f), RoundedCornerShape(14.dp))
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                    .border(1.dp, Violet.copy(0.2f), RoundedCornerShape(d.radiusMd))
+                    .padding(horizontal = d.spaceXl - d.spaceXs, vertical = d.spaceLg),
             ) {
                 Text(
                     message.ifBlank { "We're making things better. Check back soon!" },
                     color     = White.copy(0.7f),
-                    fontSize  = 14.sp,
-                    lineHeight = 22.sp,
+                    fontSize = d.textMd,
+                    lineHeight = (d.textXl.value * 1.3f).sp,
                     textAlign  = TextAlign.Center,
                 )
             }
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(d.spaceXxl))
 
             OutlinedButton(
                 onClick = onRetry,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp),
-                shape  = RoundedCornerShape(14.dp),
+                    .height(d.avatarMd + d.spaceSm),
+                shape  = RoundedCornerShape(d.radiusMd),
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
                     Brush.horizontalGradient(listOf(Violet, Brand))

@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import androidx.navigation.NavController
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 
 // ── Icon vectors ──────────────────────────────────────────────────────────────
 
@@ -104,6 +105,7 @@ private val White30 = Color(0x4DF8F4EE)
 @Composable
 fun SettingsScreen(nav: NavController) {
     var showStorageDialog       by remember { mutableStateOf(false) }
+    val d = LocalDimensions.current
     var showPrivacyDialog       by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
     var showAboutDialog         by remember { mutableStateOf(false) }
@@ -122,7 +124,7 @@ fun SettingsScreen(nav: NavController) {
                 "• Thumbnails & posters are fetched on demand and cached briefly by the system. They auto-clear when storage is low.\n\n" +
                 "• Downloaded videos — stored in your app's private folder. Delete from the Downloads tab.\n\n" +
                 "History is capped at 500 entries. Oldest are trimmed automatically.",
-                color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                color = White60, fontSize = d.textMd, lineHeight = (d.textMd.value * 1.5f).sp,
             )
         }
     }
@@ -138,7 +140,7 @@ fun SettingsScreen(nav: NavController) {
                 "• Watchlist, Saved & History live only on your device. Nothing is uploaded.\n\n" +
                 "• Premium status is verified server-side via Paystack webhooks.\n\n" +
                 "• No personal data is sold or shared with third parties.",
-                color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                color = White60, fontSize = d.textMd, lineHeight = (d.textMd.value * 1.5f).sp,
             )
         }
     }
@@ -153,7 +155,7 @@ fun SettingsScreen(nav: NavController) {
                 "• Download completions — when your video is ready to watch offline.\n\n" +
                 "• Premium renewal reminders — a few days before your plan renews.\n\n" +
                 "Manage permissions in: Settings → Apps → Reelz → Notifications.",
-                color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                color = White60, fontSize = d.textMd, lineHeight = (d.textMd.value * 1.5f).sp,
             )
         }
     }
@@ -163,11 +165,11 @@ fun SettingsScreen(nav: NavController) {
             title = "About Reelz",
             onDismiss = { showAboutDialog = false },
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Reelz", color = Brand, fontWeight = FontWeight.Black, fontSize = 18.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
+                Text("Reelz", color = Brand, fontWeight = FontWeight.Black, fontSize = d.textXxl - 4.sp)
                 Text(
                     "Your personal cinema — stream movies and TV shows, download for offline viewing, and discover what to watch next.\n\nBuilt with ❤️ using Kotlin & Jetpack Compose.",
-                    color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                    color = White60, fontSize = d.textMd, lineHeight = (d.textMd.value * 1.5f).sp,
                 )
             }
         }
@@ -184,7 +186,7 @@ fun SettingsScreen(nav: NavController) {
                 "• When you've watched 90% or more, it automatically disappears from the list. The last 10% is often just credits or trailers anyway.\n\n" +
                 "• For TV shows, each episode is tracked — finish an episode and it removes that title from your watchlist.\n\n" +
                 "Your watch history always keeps a record separately.",
-                color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                color = White60, fontSize = d.textMd, lineHeight = (d.textMd.value * 1.5f).sp,
             )
         }
     }
@@ -200,7 +202,7 @@ fun SettingsScreen(nav: NavController) {
                 "• Only tiny IDs are stored — not images or metadata. 500 history entries take less than 1 MB.\n\n" +
                 "• Thumbnails and details are fetched fresh when you scroll, with smooth skeleton loading.\n\n" +
                 "• You can clear your entire history at any time from the History tab.",
-                color = White60, fontSize = 13.sp, lineHeight = 20.sp,
+                color = White60, fontSize = d.textMd, lineHeight = (d.textMd.value * 1.5f).sp,
             )
         }
     }
@@ -215,14 +217,14 @@ fun SettingsScreen(nav: NavController) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 14.dp),
+                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceLg),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
         ) {
             IconButton(onClick = { nav.popBackStack() }) {
-                Icon(IconBack, "Back", tint = White, modifier = Modifier.size(22.dp))
+                Icon(IconBack, "Back", tint = White, modifier = Modifier.size(d.iconMd))
             }
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(d.spaceXs))
             Column {
                 Text(
                     "Settings",
@@ -230,16 +232,16 @@ fun SettingsScreen(nav: NavController) {
                         color = White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp
                     )
                 )
-                Text("App preferences", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text("App preferences", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
             }
         }
 
         Column(
             Modifier
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 40.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = d.screenHorizPad)
+                .padding(bottom = d.spaceXxl * 1.25f),
+            verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
         ) {
 
             // ── How your lists work ────────────────────────────────────────
@@ -260,7 +262,7 @@ fun SettingsScreen(nav: NavController) {
                 onClick = { showHistoryInfoDialog = true },
             )
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(d.spaceXs))
 
             // ── App ────────────────────────────────────────────────────────
             SettingsSectionLabel("App")
@@ -284,7 +286,7 @@ fun SettingsScreen(nav: NavController) {
                 onClick = { showNotificationsDialog = true },
             )
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(d.spaceXs))
 
             // ── About ──────────────────────────────────────────────────────
             SettingsSectionLabel("About")
@@ -306,10 +308,10 @@ private fun SettingsSectionLabel(text: String) {
     Text(
         text,
         color = White40,
-        fontSize = 11.sp,
+        fontSize = d.textXs,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = 0.8.sp,
-        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
+        modifier = Modifier.padding(start = d.spaceXs, top = d.spaceSm, bottom = d.spaceXxs),
     )
 }
 
@@ -324,27 +326,27 @@ private fun SettingsCard(
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(d.radiusMd))
             .background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
             .clickable(onClick = onClick)
-            .padding(16.dp),
+            .padding(d.spaceLg),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXxs),
     ) {
         Box(
             Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .size(d.buttonHeightSm - d.spaceXxs)
+                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                 .background(GlassMd)
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(12.dp)),
+                .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs)),
             Alignment.Center,
-        ) { Icon(icon, null, tint = iconTint, modifier = Modifier.size(18.dp)) }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, color = White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, color = White40, fontSize = 11.sp)
+        ) { Icon(icon, null, tint = iconTint, modifier = Modifier.size(d.iconMd - 2.dp)) }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(d.spaceXxs)) {
+            Text(title, color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, color = White40, fontSize = d.textXs)
         }
-        Icon(IconChevronRight, null, tint = White30, modifier = Modifier.size(16.dp))
+        Icon(IconChevronRight, null, tint = White30, modifier = Modifier.size(d.iconMd - 4.dp))
     }
 }
 
@@ -357,9 +359,142 @@ private fun ReelzDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = BgCard,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(d.radiusLg),
         title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { content() } },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }
+        },
+    )
+}
+
+private fun SettingsSectionLabel(text: String) {
+    Text(
+        text,
+        color = White40,
+        fontSize = d.textXs,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 0.8.sp,
+        modifier = Modifier.padding(start = d.spaceXs, top = d.spaceSm, bottom = d.spaceXxs),
+    )
+}
+
+@Composable
+private fun SettingsCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    iconTint: Color = White60,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(d.radiusMd))
+            .background(BgCard)
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+            .clickable(onClick = onClick)
+            .padding(d.spaceLg),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXxs),
+    ) {
+        Box(
+            Modifier
+                .size(d.buttonHeightSm - d.spaceXxs)
+                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
+                .background(GlassMd)
+                .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs)),
+            Alignment.Center,
+        ) { Icon(icon, null, tint = iconTint, modifier = Modifier.size(d.iconMd - 2.dp)) }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(d.spaceXxs)) {
+            Text(title, color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, color = White40, fontSize = d.textXs)
+        }
+        Icon(IconChevronRight, null, tint = White30, modifier = Modifier.size(d.iconMd - 4.dp))
+    }
+}
+
+@Composable
+private fun ReelzDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BgCard,
+        shape = RoundedCornerShape(d.radiusLg),
+        title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }
+        },
+    )
+}
+
+private fun SettingsCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    iconTint: Color = White60,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(d.radiusMd))
+            .background(BgCard)
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+            .clickable(onClick = onClick)
+            .padding(d.spaceLg),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXxs),
+    ) {
+        Box(
+            Modifier
+                .size(d.buttonHeightSm - d.spaceXxs)
+                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
+                .background(GlassMd)
+                .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs)),
+            Alignment.Center,
+        ) { Icon(icon, null, tint = iconTint, modifier = Modifier.size(d.iconMd - 2.dp)) }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(d.spaceXxs)) {
+            Text(title, color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, color = White40, fontSize = d.textXs)
+        }
+        Icon(IconChevronRight, null, tint = White30, modifier = Modifier.size(d.iconMd - 4.dp))
+    }
+}
+
+@Composable
+private fun ReelzDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BgCard,
+        shape = RoundedCornerShape(d.radiusLg),
+        title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }
+        },
+    )
+}
+
+private fun ReelzDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BgCard,
+        shape = RoundedCornerShape(d.radiusLg),
+        title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }
         },

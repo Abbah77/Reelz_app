@@ -31,9 +31,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import javax.inject.Inject
 
-// ── Filter state ─────────────────────────────────────────────────────────────
 data class SearchFilters(
-    val mediaType: String? = null,    // "MOVIE", "TV", or null for both
+    val mediaType: String? = null,
     val yearFrom: Int? = null,
     val yearTo: Int? = null,
     val minRating: Float? = null,
@@ -59,10 +58,7 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
 
     init {
         viewModelScope.launch {
-            try {
-                val genres = repo.getMovieGenres()
-                _ui.update { it.copy(genres = genres) }
-            } catch (_: Exception) {}
+            try { _ui.update { it.copy(genres = repo.getMovieGenres()) } } catch (_: Exception) {}
         }
     }
 
@@ -74,8 +70,7 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
             delay(320)
             _ui.update { it.copy(isLoading = true, error = null) }
             try {
-                val results = repo.search(q)
-                _ui.update { it.copy(results = applyFilters(results), isLoading = false, hasSearched = true) }
+                _ui.update { it.copy(results = applyFilters(repo.search(q)), isLoading = false, hasSearched = true) }
             } catch (e: Exception) {
                 _ui.update { it.copy(isLoading = false, error = friendlySearchError(e), hasSearched = true) }
             }
@@ -83,55 +78,24 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
     }
 
     fun toggleFilters() = _ui.update { it.copy(showFilters = !it.showFilters) }
-
-    fun setMediaType(type: String?) {
-        _ui.update { it.copy(filters = it.filters.copy(mediaType = type)) }
-        reFilter()
-    }
-
-    fun setGenre(id: Int?) {
-        _ui.update { it.copy(selectedGenreId = id) }
-        if (id == null) reFilter() else reFilter()
-    }
-
-    fun setMinRating(rating: Float?) {
-        _ui.update { it.copy(filters = it.filters.copy(minRating = rating)) }
-        reFilter()
-    }
-
-    fun setSortBy(sort: String) {
-        _ui.update { it.copy(filters = it.filters.copy(sortBy = sort)) }
-        reFilter()
-    }
-
-    fun clearFilters() {
-        _ui.update { it.copy(filters = SearchFilters(), selectedGenreId = null) }
-        reFilter()
-    }
-
-    private fun reFilter() {
-        val q = _ui.value.query
-        if (q.isNotBlank()) onQuery(q)
-    }
-
+    fun setMediaType(type: String?) { _ui.update { it.copy(filters = it.filters.copy(mediaType = type)) }; reFilter() }
+    fun setGenre(id: Int?) { _ui.update { it.copy(selectedGenreId = id) }; reFilter() }
+    fun setMinRating(rating: Float?) { _ui.update { it.copy(filters = it.filters.copy(minRating = rating)) }; reFilter() }
+    fun setSortBy(sort: String) { _ui.update { it.copy(filters = it.filters.copy(sortBy = sort)) }; reFilter() }
+    fun clearFilters() { _ui.update { it.copy(filters = SearchFilters(), selectedGenreId = null) }; reFilter() }
+    private fun reFilter() { val q = _ui.value.query; if (q.isNotBlank()) onQuery(q) }
     fun clear() { searchJob?.cancel(); _ui.update { UiState() } }
 
     private fun applyFilters(raw: List<Media>): List<Media> {
         val f = _ui.value.filters
-        val gId = _ui.value.selectedGenreId
         var list = raw
-        if (f.mediaType != null) {
-            list = list.filter { it.mediaType.name == f.mediaType }
-        }
-        if (f.minRating != null) {
-            list = list.filter { it.voteAverage >= f.minRating }
-        }
-        // Sort
+        if (f.mediaType != null) list = list.filter { it.mediaType.name == f.mediaType }
+        if (f.minRating != null) list = list.filter { it.voteAverage >= f.minRating }
         list = when (f.sortBy) {
-            "rating"   -> list.sortedByDescending { it.voteAverage }
-            "newest"   -> list.sortedByDescending { it.releaseDate }
-            "title"    -> list.sortedBy { it.title }
-            else       -> list // popularity (API order)
+            "rating" -> list.sortedByDescending { it.voteAverage }
+            "newest" -> list.sortedByDescending { it.releaseDate }
+            "title"  -> list.sortedBy { it.title }
+            else     -> list
         }
         return list
     }
@@ -141,6 +105,7 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
 @Composable
 fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsState()
+    val d = LocalDimensions.current
     val focusReq = remember { FocusRequester() }
     val hasActiveFilters = ui.filters.mediaType != null || ui.selectedGenreId != null ||
                            ui.filters.minRating != null || ui.filters.sortBy != "popularity"
@@ -151,62 +116,45 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
 
         // ── Search bar row ──────────────────────────────────────────────────
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad, vertical = d.spaceLg),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
         ) {
-            // Horizontal search box
             Box(
                 Modifier.weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        Brush.linearGradient(listOf(Color(0x18FFFFFF), Color(0x0AFFFFFF)))
-                    )
-                    .border(
-                        1.dp,
-                        if (ui.query.isNotBlank()) Brand.copy(.6f) else GlassBorderMd,
-                        RoundedCornerShape(14.dp)
-                    ),
+                    .clip(RoundedCornerShape(d.radiusMd))
+                    .background(Brush.linearGradient(listOf(Color(0x18FFFFFF), Color(0x0AFFFFFF))))
+                    .border(d.borderThin, if (ui.query.isNotBlank()) Brand.copy(.6f) else GlassBorderMd, RoundedCornerShape(d.radiusMd)),
             ) {
                 TextField(
                     value = ui.query,
                     onValueChange = vm::onQuery,
                     modifier = Modifier.fillMaxWidth().focusRequester(focusReq),
-                    placeholder = {
-                        Text("Search movies, series…", color = White40, fontSize = 14.sp)
-                    },
+                    placeholder = { Text("Search movies, series…", color = White40, fontSize = d.textMd) },
                     leadingIcon = {
-                        Icon(IconSearch, null, tint = if (ui.query.isNotBlank()) Brand else White40, modifier = Modifier.size(20.dp))
+                        Icon(IconSearch, null, tint = if (ui.query.isNotBlank()) Brand else White40, modifier = Modifier.size(d.iconMd))
                     },
                     trailingIcon = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Filter button inside search bar
                             Box(
                                 Modifier
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(d.radiusSm))
                                     .background(if (hasActiveFilters) BlueGlass else Color.Transparent)
-                                    .border(
-                                        1.dp,
-                                        if (hasActiveFilters) BlueBorder else Color.Transparent,
-                                        RoundedCornerShape(8.dp)
-                                    )
+                                    .border(d.borderThin, if (hasActiveFilters) BlueBorder else Color.Transparent, RoundedCornerShape(d.radiusSm))
                                     .clickable { vm.toggleFilters() }
-                                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                                    .padding(horizontal = d.spaceSm + d.spaceXxs, vertical = d.spaceXs),
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Icon(IconFilter, null, tint = if (hasActiveFilters) Brand else White40, modifier = Modifier.size(16.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceXs)) {
+                                    Icon(IconFilter, null, tint = if (hasActiveFilters) Brand else White40, modifier = Modifier.size(d.iconMd - 4.dp))
                                     if (hasActiveFilters) {
-                                        Box(
-                                            Modifier.size(6.dp).clip(CircleShape).background(Brand)
-                                        )
+                                        Box(Modifier.size(d.spaceXs).clip(CircleShape).background(Brand))
                                     }
                                 }
                             }
-                            // Clear button
                             AnimatedVisibility(ui.query.isNotBlank(), enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
                                 IconButton(onClick = vm::clear) {
-                                    Box(Modifier.size(22.dp).clip(CircleShape).background(GlassMd), Alignment.Center) {
-                                        Text("✕", color = White60, fontSize = 11.sp)
+                                    Box(Modifier.size(d.avatarSm - d.spaceSm).clip(CircleShape).background(GlassMd), Alignment.Center) {
+                                        Text("✕", color = White60, fontSize = d.textXs)
                                     }
                                 }
                             }
@@ -227,33 +175,33 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                 )
             }
             TextButton(onClick = { nav.popBackStack() }) {
-                Text("Cancel", color = Brand, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("Cancel", color = Brand, fontWeight = FontWeight.SemiBold, fontSize = d.textMd)
             }
         }
 
-        // ── Filter panel — slides in ─────────────────────────────────────────
+        // ── Filter panel ─────────────────────────────────────────────────────
         AnimatedVisibility(
             visible = ui.showFilters,
             enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
             exit  = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
         ) {
             FilterPanel(
-                filters        = ui.filters,
-                genres         = ui.genres,
-                selectedGenre  = ui.selectedGenreId,
-                hasActive      = hasActiveFilters,
-                onMediaType    = vm::setMediaType,
-                onGenre        = vm::setGenre,
-                onRating       = vm::setMinRating,
-                onSort         = vm::setSortBy,
-                onClear        = vm::clearFilters,
+                filters       = ui.filters,
+                genres        = ui.genres,
+                selectedGenre = ui.selectedGenreId,
+                hasActive     = hasActiveFilters,
+                onMediaType   = vm::setMediaType,
+                onGenre       = vm::setGenre,
+                onRating      = vm::setMinRating,
+                onSort        = vm::setSortBy,
+                onClear       = vm::clearFilters,
             )
         }
 
-        // ── Results ─────────────────────────────────────────────────────────
+        // ── Results ──────────────────────────────────────────────────────────
         when {
             ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CinematicSpinner(size = 48.dp)
+                CinematicSpinner(size = d.spinnerLg)
             }
 
             ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.onQuery(ui.query) })
@@ -262,17 +210,17 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Box(contentAlignment = Alignment.Center) {
-                            Box(Modifier.size(80.dp).clip(CircleShape)
+                            Box(Modifier.size(d.avatarLg + d.spaceXl).clip(CircleShape)
                                 .background(Brush.radialGradient(listOf(GlassMd, Color.Transparent))))
-                            Icon(IconMovieSlate, null, tint = White40, modifier = Modifier.size(34.dp))
+                            Icon(IconMovieSlate, null, tint = White40, modifier = Modifier.size(d.iconXl - 2.dp))
                         }
-                        Spacer(Modifier.height(16.dp))
-                        Text("No results for", color = White40, fontSize = 14.sp)
-                        Text("\"${ui.query}\"", color = White60, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(d.spaceLg))
+                        Text("No results for", color = White40, fontSize = d.textMd)
+                        Text("\"${ui.query}\"", color = White60, fontSize = d.textXxl, fontWeight = FontWeight.Bold)
                         if (hasActiveFilters) {
-                            Spacer(Modifier.height(12.dp))
+                            Spacer(Modifier.height(d.spaceMd))
                             TextButton(onClick = vm::clearFilters) {
-                                Text("Clear filters", color = Brand, fontSize = 13.sp)
+                                Text("Clear filters", color = Brand, fontSize = d.textMd)
                             }
                         }
                     }
@@ -280,18 +228,17 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
 
             ui.results.isNotEmpty() ->
                 Column {
-                    // Results count
                     Text(
                         "${ui.results.size} results",
                         color = White40,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        fontSize = d.textSm,
+                        modifier = Modifier.padding(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
                     )
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement   = Arrangement.spacedBy(10.dp),
+                        columns = GridCells.Fixed(if (d.isTablet) 4 else 3),
+                        contentPadding = PaddingValues(horizontal = d.screenHorizPad - d.spaceXxs, vertical = d.sectionVertPad),
+                        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
+                        verticalArrangement   = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         items(ui.results, key = { it.tmdbId }) { m ->
@@ -305,45 +252,40 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                 }
 
             else ->
-                // Empty state — discovery prompt
-                Column(
-                    Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Spacer(Modifier.height(24.dp))
-                    // Quick genre chips for discovery
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Spacer(Modifier.height(d.spaceXl))
                     if (ui.genres.isNotEmpty()) {
-                        Text("Browse by Genre", color = White40, fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp))
-                        Spacer(Modifier.height(10.dp))
+                        Text("Browse by Genre", color = White40, fontSize = d.textSm,
+                            fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = d.screenHorizPad))
+                        Spacer(Modifier.height(d.spaceMd - d.spaceXxs))
                         LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(horizontal = d.screenHorizPad),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
                         ) {
                             items(ui.genres.take(10)) { g ->
                                 Box(
                                     Modifier
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                         .background(BgSurface)
-                                        .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp))
+                                        .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                         .clickable { vm.onQuery(g.name) }
-                                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                                        .padding(horizontal = d.chipHorizPad + d.spaceXs, vertical = d.chipVertPad + d.spaceXs),
                                 ) {
-                                    Text(g.name, color = White60, fontSize = 13.sp)
+                                    Text(g.name, color = White60, fontSize = d.textMd)
                                 }
                             }
                         }
                     }
-                    Spacer(Modifier.height(40.dp))
+                    Spacer(Modifier.height(d.spaceXxl + d.spaceXl))
                     Box(contentAlignment = Alignment.Center) {
-                        Box(Modifier.size(88.dp).clip(CircleShape)
+                        Box(Modifier.size(d.avatarLg + d.spaceXxl).clip(CircleShape)
                             .background(Brush.radialGradient(listOf(BlueGlass, Color.Transparent)))
-                            .border(1.dp, BlueBorder, CircleShape))
-                        Icon(IconSearch, null, tint = Brand.copy(.7f), modifier = Modifier.size(36.dp))
+                            .border(d.borderThin, BlueBorder, CircleShape))
+                        Icon(IconSearch, null, tint = Brand.copy(.7f), modifier = Modifier.size(d.iconXl))
                     }
-                    Spacer(Modifier.height(16.dp))
-                    Text("Discover anything", color = White60, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                    Text("Movies, TV shows, actors…", color = White40, fontSize = 13.sp)
+                    Spacer(Modifier.height(d.spaceLg))
+                    Text("Discover anything", color = White60, fontSize = d.textXl, fontWeight = FontWeight.Medium)
+                    Text("Movies, TV shows, actors…", color = White40, fontSize = d.textMd)
                 }
         }
     }
@@ -362,66 +304,38 @@ fun FilterPanel(
     onSort: (String) -> Unit,
     onClear: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     Column(
         Modifier
             .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(listOf(BgCard, BgRaised))
-            )
-            .border(BorderStroke(1.dp, GlassBorderMd))
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .background(Brush.verticalGradient(listOf(BgCard, BgRaised)))
+            .border(BorderStroke(d.borderThin, GlassBorderMd))
+            .padding(horizontal = d.screenHorizPad, vertical = d.spaceLg - d.spaceXxs),
+        verticalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXxs),
     ) {
-        // Header
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Icon(IconFilter, null, tint = Brand, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("Filters", color = White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Icon(IconFilter, null, tint = Brand, modifier = Modifier.size(d.iconMd - 4.dp))
+            Spacer(Modifier.width(d.spaceSm))
+            Text("Filters", color = White, fontWeight = FontWeight.Bold, fontSize = d.textMd)
             Spacer(Modifier.weight(1f))
             if (hasActive) {
-                TextButton(onClick = onClear) {
-                    Text("Clear all", color = Brand, fontSize = 12.sp)
-                }
+                TextButton(onClick = onClear) { Text("Clear all", color = Brand, fontSize = d.textSm) }
             }
         }
-
-        // Type filter
         FilterRow("Type") {
-            FilterChipRow(
-                options = listOf("All" to null, "Movies" to "MOVIE", "TV Shows" to "TV"),
-                selected = filters.mediaType,
-                onSelect = onMediaType,
-            )
+            FilterChipRow(listOf("All" to null, "Movies" to "MOVIE", "TV Shows" to "TV"), filters.mediaType, onMediaType)
         }
-
-        // Sort by
         FilterRow("Sort by") {
-            FilterChipRow(
-                options = listOf("Popular" to "popularity", "Top Rated" to "rating", "Newest" to "newest", "A-Z" to "title"),
-                selected = filters.sortBy,
-                onSelect = { onSort(it ?: "popularity") },
-            )
+            FilterChipRow(listOf("Popular" to "popularity", "Top Rated" to "rating", "Newest" to "newest", "A-Z" to "title"), filters.sortBy) { onSort(it ?: "popularity") }
         }
-
-        // Min rating
         FilterRow("Min. Rating") {
-            FilterChipRow(
-                options = listOf("Any" to null, "6+" to 6f, "7+" to 7f, "8+" to 8f, "9+" to 9f),
-                selected = filters.minRating,
-                onSelect = onRating,
-            )
+            FilterChipRow(listOf("Any" to null, "6+" to 6f, "7+" to 7f, "8+" to 8f, "9+" to 9f), filters.minRating, onRating)
         }
-
-        // Genre (scrollable)
         if (genres.isNotEmpty()) {
             FilterRow("Genre") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    item {
-                        SmallFilterChip("All", selectedGenre == null) { onGenre(null) }
-                    }
-                    items(genres) { g ->
-                        SmallFilterChip(g.name, selectedGenre == g.id) { onGenre(g.id) }
-                    }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp)) {
+                    item { SmallFilterChip("All", selectedGenre == null) { onGenre(null) } }
+                    items(genres) { g -> SmallFilterChip(g.name, selectedGenre == g.id) { onGenre(g.id) } }
                 }
             }
         }
@@ -430,37 +344,34 @@ fun FilterPanel(
 
 @Composable
 fun FilterRow(label: String, content: @Composable () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(label, color = White60, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+    val d = LocalDimensions.current
+    Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
+        Text(label, color = White60, fontSize = d.textXs, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
         content()
     }
 }
 
 @Composable
-fun <T> FilterChipRow(
-    options: List<Pair<String, T>>,
-    selected: T,
-    onSelect: (T) -> Unit,
-) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-        items(options) { (label, value) ->
-            SmallFilterChip(label, selected == value) { onSelect(value) }
-        }
+fun <T> FilterChipRow(options: List<Pair<String, T>>, selected: T, onSelect: (T) -> Unit) {
+    val d = LocalDimensions.current
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp)) {
+        items(options) { (label, value) -> SmallFilterChip(label, selected == value) { onSelect(value) } }
     }
 }
 
 @Composable
 fun SmallFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     Box(
         Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
             .background(if (selected) Brush.horizontalGradient(listOf(BrandDeep, Brand.copy(.8f)))
                         else Brush.horizontalGradient(listOf(BgSurface, BgOverlay)))
-            .border(1.dp, if (selected) Brand.copy(.5f) else GlassBorder, RoundedCornerShape(8.dp))
+            .border(d.borderThin, if (selected) Brand.copy(.5f) else GlassBorder, RoundedCornerShape(d.radiusSm + d.spaceXxs))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm),
     ) {
-        Text(label, color = if (selected) Color.White else White60, fontSize = 12.sp,
+        Text(label, color = if (selected) Color.White else White60, fontSize = d.textSm,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
     }
 }
@@ -468,10 +379,9 @@ fun SmallFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
 private fun friendlySearchError(e: Exception): String {
     val msg = e.message?.lowercase() ?: ""
     return when {
-        msg.contains("unable to resolve host") ||
-        msg.contains("network") ||
-        msg.contains("timeout") ||
-        msg.contains("connect") -> "No internet connection. Check your connection and try again."
+        msg.contains("unable to resolve host") || msg.contains("network") ||
+        msg.contains("timeout") || msg.contains("connect") ->
+            "No internet connection. Check your connection and try again."
         else -> "Search failed. Please try again."
     }
 }

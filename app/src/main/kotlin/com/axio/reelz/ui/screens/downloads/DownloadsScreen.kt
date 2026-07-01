@@ -33,6 +33,7 @@ import com.axio.reelz.ui.Route
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.player.PlayerActivity
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -133,6 +134,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
     val seriesGroups   by vm.seriesGroups.collectAsState()
     val readyCount    by vm.readyCount.collectAsState()
     var tab by remember { mutableStateOf(0) }
+    val d = LocalDimensions.current
 
     // Which series / season keys are expanded. Collapsed by default — progressive disclosure.
     val expandedSeries = remember { mutableStateOf(setOf<Int>()) }
@@ -142,7 +144,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
 
         // ── Header ─────────────────────────────────────────────────────────
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.heroPadding - d.spaceSm, vertical = d.spaceLg),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column {
@@ -155,7 +157,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                 if (readyCount > 0) {
                     Text(
                         "$readyCount file${if (readyCount > 1) "s" else ""} ready to watch",
-                        color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
@@ -165,29 +167,29 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
             // files onto the device.
             Row(
                 Modifier
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                     .background(Brush.horizontalGradient(listOf(BrandDeep, Brand.copy(.85f))))
-                    .border(1.dp, Brand.copy(.5f), RoundedCornerShape(12.dp))
+                    .border(1.dp, Brand.copy(.5f), RoundedCornerShape(d.radiusMd - d.spaceXxs))
                     .clickable { nav.navigate(Route.Transfer.path) }
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                    .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceMd - d.spaceXxs),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
             ) {
-                Icon(IconSwap, null, tint = Color.White, modifier = Modifier.size(15.dp))
-                Text("Transfer", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Icon(IconSwap, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 3.dp))
+                Text("Transfer", color = Color.White, fontSize = d.textSm, fontWeight = FontWeight.Bold)
             }
         }
 
         // ── Tab filter ─────────────────────────────────────────────────────
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
         ) {
             listOf("All", "Movies", "TV Shows").forEachIndexed { i, label ->
                 GenrePill(label, tab == i) { tab = i }
             }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(d.spaceMd))
 
         val showMovies = tab == 0 || tab == 1
         val showSeries = tab == 0 || tab == 2
@@ -197,8 +199,8 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
             EmptyDownloadsState()
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
+                verticalArrangement = Arrangement.spacedBy(d.spaceMd),
             ) {
                 if (showSeries) {
                     items(seriesGroups, key = { "series-${it.tmdbId}" }) { group ->
@@ -232,7 +234,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                         )
                     }
                 }
-                item { Spacer(Modifier.height(90.dp)) }
+                item { Spacer(Modifier.height(d.spaceXxl * 2.8f)) }
             }
         }
     }
@@ -247,15 +249,15 @@ private fun toggle(set: Set<String>, key: String): Set<String> =
 @Composable
 private fun EmptyDownloadsState() {
     Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
             Box(contentAlignment = Alignment.Center) {
-                Box(Modifier.size(90.dp).clip(CircleShape)
+                Box(Modifier.size(d.avatarLg + d.spaceXl - d.spaceXs).clip(CircleShape)
                     .background(Brush.radialGradient(listOf(AmberGlass, Color.Transparent)))
                     .border(1.dp, AmberBorder, CircleShape))
-                Icon(IconDownloadCloud, null, tint = Brand.copy(.7f), modifier = Modifier.size(38.dp))
+                Icon(IconDownloadCloud, null, tint = Brand.copy(.7f), modifier = Modifier.size(d.avatarSm + d.spaceSm))
             }
-            Text("No downloads yet", color = White60, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Text("Save movies & shows to watch offline", color = White40, fontSize = 13.sp)
+            Text("No downloads yet", color = White60, fontSize = d.textXl, fontWeight = FontWeight.SemiBold)
+            Text("Save movies & shows to watch offline", color = White40, fontSize = d.textMd)
         }
     }
 }
@@ -304,47 +306,48 @@ fun SeriesCard(
     onDeleteSeries: () -> Unit,
     onDeleteSeason: (SeasonGroup) -> Unit,
 ) {
+    val d = LocalDimensions.current
     var showDeleteDialog by remember { mutableStateOf(false) }
     val chevronRotation by animateFloatAsState(if (expanded) 180f else 0f, label = "chevron")
 
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
             .background(BgCard)
-            .border(1.dp, if (expanded) Brand.copy(.35f) else GlassBorderMd, RoundedCornerShape(16.dp))
+            .border(1.dp, if (expanded) Brand.copy(.35f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
     ) {
         // ── Series header row — tap to expand/collapse ───────────────────
         Row(
             Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onToggle)
-                .padding(10.dp),
+                .padding(d.spaceMd),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AsyncImage(
                 model = group.posterPath?.let { "${BuildConfig.TMDB_IMG_W342}$it" },
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.size(width = 46.dp, height = 64.dp).clip(RoundedCornerShape(8.dp)).background(BgRaised),
+                modifier = Modifier.size(width = d.avatarMd + d.spaceXxs, height = d.avatarLg).clip(RoundedCornerShape(d.radiusSm + d.spaceXxs)).background(BgRaised),
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
 
             Column(Modifier.weight(1f)) {
                 Text(
                     group.title,
-                    color = White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    color = White, fontSize = d.textMd, fontWeight = FontWeight.Bold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Spacer(Modifier.height(d.spaceXs))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                     SeriesStatusDot(group)
                     Text(
                         "${group.seasons.size} season${if (group.seasons.size > 1) "s" else ""} · ${group.doneEpisodes}/${group.totalEpisodes} episodes",
-                        color = White40, fontSize = 11.sp,
+                        color = White40, fontSize = d.textXs,
                     )
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(d.spaceSm))
                 // Slim aggregate progress bar — Zeigarnik nudge for incomplete sets
                 val pct = if (group.totalEpisodes > 0) group.doneEpisodes.toFloat() / group.totalEpisodes else 0f
                 Box(Modifier.fillMaxWidth(0.85f).height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
@@ -356,22 +359,22 @@ fun SeriesCard(
                 }
             }
 
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
             Icon(
                 IconChevronDown, null, tint = White40,
-                modifier = Modifier.size(20.dp).rotate(chevronRotation),
+                modifier = Modifier.size(d.iconMd).rotate(chevronRotation),
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(d.spaceXs))
             Box(
-                Modifier.size(28.dp).clip(CircleShape).background(GlassMd)
+                Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd)
                     .clickable { showDeleteDialog = true },
                 Alignment.Center,
-            ) { Text("✕", color = White40, fontSize = 12.sp) }
+            ) { Text("✕", color = White40, fontSize = d.textSm) }
         }
 
         // ── Seasons (collapsible) ─────────────────────────────────────────
         AnimatedVisibility(visible = expanded) {
-            Column(Modifier.padding(start = 14.dp, end = 10.dp, bottom = 8.dp)) {
+            Column(Modifier.padding(start = d.screenHorizPad - d.spaceXxs, end = d.spaceMd, bottom = d.spaceSm + d.spaceXxs)) {
                 group.seasons.forEach { season ->
                     val seasonKey = "${group.tmdbId}:${season.season}"
                     SeasonRow(
@@ -393,7 +396,7 @@ fun SeriesCard(
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             containerColor = BgCard,
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(d.radiusLg),
             title = { Text("Delete Series", color = White, fontWeight = FontWeight.Bold) },
             text  = { Text("Remove all downloaded episodes of \"${group.title}\"?", color = White60) },
             confirmButton = {
@@ -413,7 +416,7 @@ private fun SeriesStatusDot(group: SeriesGroup) {
         group.isAnyActive       -> Brand
         else                    -> White40
     }
-    Box(Modifier.size(6.dp).clip(CircleShape).background(color))
+    Box(Modifier.size(d.spaceXs + d.spaceXxs).clip(CircleShape).background(color))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -431,6 +434,7 @@ fun SeasonRow(
     onPause: (DownloadItem) -> Unit,
     onDeleteSeason: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     var showDeleteDialog by remember { mutableStateOf(false) }
     val chevronRotation by animateFloatAsState(if (expanded) 180f else 0f, label = "season-chevron")
     val allDone = season.doneCount == season.episodes.size
@@ -438,42 +442,42 @@ fun SeasonRow(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .padding(vertical = d.spaceXxs + 1.dp)
+            .clip(RoundedCornerShape(d.radiusMd - d.spaceSm))
             .background(BgRaised)
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onToggle)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceMd),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 "Season ${season.season}",
-                color = White80, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                color = White80, fontSize = d.textMd, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
             Text(
                 "${season.doneCount}/${season.episodes.size}",
-                color = if (allDone) Success else White40, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                color = if (allDone) Success else White40, fontSize = d.textXs, fontWeight = FontWeight.SemiBold,
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
             Icon(
                 IconChevronDown, null, tint = White40,
-                modifier = Modifier.size(16.dp).rotate(chevronRotation),
+                modifier = Modifier.size(d.iconMd - 4.dp).rotate(chevronRotation),
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(d.spaceXs))
             Box(
-                Modifier.size(22.dp).clip(CircleShape).background(GlassSm)
+                Modifier.size(d.iconMd).clip(CircleShape).background(GlassSm)
                     .clickable { showDeleteDialog = true },
                 Alignment.Center,
-            ) { Text("✕", color = White40, fontSize = 10.sp) }
+            ) { Text("✕", color = White40, fontSize = d.textXs) }
         }
 
         // ── Episodes (collapsible inside season) ─────────────────────────
         AnimatedVisibility(visible = expanded) {
-            Column(Modifier.padding(bottom = 6.dp)) {
+            Column(Modifier.padding(bottom = d.spaceSm)) {
                 season.episodes.forEach { ep ->
                     EpisodeRow(
                         item     = ep,
@@ -491,7 +495,7 @@ fun SeasonRow(
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             containerColor = BgCard,
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(d.radiusLg),
             title = { Text("Delete Season ${season.season}", color = White, fontWeight = FontWeight.Bold) },
             text  = { Text("Remove all ${season.episodes.size} downloaded episodes in this season?", color = White60) },
             confirmButton = {
@@ -516,6 +520,7 @@ fun EpisodeRow(
     onResume: () -> Unit,
     onPause: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val isDownloading = item.status == DownloadStatus.DOWNLOADING.name
@@ -533,28 +538,28 @@ fun EpisodeRow(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 7.dp),
+                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Episode number badge — quick scan target
             Box(
-                Modifier.size(22.dp).clip(RoundedCornerShape(6.dp))
+                Modifier.size(d.iconMd).clip(RoundedCornerShape(d.radiusSm))
                     .background(if (isDone) Success.copy(.15f) else GlassMd),
                 Alignment.Center,
             ) {
-                Text("${item.episode}", color = if (isDone) Success else White40, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("${item.episode}", color = if (isDone) Success else White40, fontSize = d.textXs, fontWeight = FontWeight.Bold)
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(d.spaceMd))
 
             Column(Modifier.weight(1f)) {
                 Text(
                     item.episodeName.ifBlank { "Episode ${item.episode}" },
-                    color = White80, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    color = White80, fontSize = d.textSm, fontWeight = FontWeight.Medium,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 if (isDownloading || isQueued || isPaused || isError) {
-                    Spacer(Modifier.height(3.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Spacer(Modifier.height(d.spaceXxs + 1.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceXs + 1.dp)) {
                         Box(Modifier.weight(1f).height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
                             Box(Modifier.fillMaxWidth(animPct).fillMaxHeight().background(
                                 if (isError) Error else Brand
@@ -562,43 +567,43 @@ fun EpisodeRow(
                         }
                         Text(
                             "${(pct * 100).toInt()}%",
-                            color = White40, fontSize = 9.sp,
+                            color = White40, fontSize = d.textXxs,
                         )
                     }
                 } else {
                     Spacer(Modifier.height(2.dp))
                     Text(
                         "${item.quality} · ${formatSize(item.sizeBytes)}",
-                        color = White40, fontSize = 10.sp,
+                        color = White40, fontSize = d.textXs,
                     )
                 }
             }
 
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(d.spaceSm))
 
             // ── Compact action button — one primary action per state ─────
             when {
                 isDone -> CompactIconAction(IconPlay, Brand) { onPlay() }
                 isDownloading -> CompactTextAction("⏸", White60) { onPause() }
                 isPaused || isError -> CompactTextAction("▶", Brand) { onResume() }
-                else -> Spacer(Modifier.width(28.dp))
+                else -> Spacer(Modifier.width(d.spaceXxl - d.spaceXs))
             }
 
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(d.spaceXs))
             Box(
                 Modifier.size(24.dp).clip(CircleShape)
                     .clickable { showDeleteDialog = true },
                 Alignment.Center,
-            ) { Text("✕", color = White40.copy(.7f), fontSize = 10.sp) }
+            ) { Text("✕", color = White40.copy(.7f), fontSize = d.textXs) }
         }
-        Divider(color = GlassBorder, thickness = 0.5.dp, modifier = Modifier.padding(start = 44.dp))
+        Divider(color = GlassBorder, thickness = 0.5.dp, modifier = Modifier.padding(start = d.spinnerLg))
     }
 
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             containerColor = BgCard,
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(d.radiusLg),
             title = { Text("Delete Episode", color = White, fontWeight = FontWeight.Bold) },
             text  = { Text("Remove \"${item.episodeName.ifBlank { "Episode ${item.episode}" }}\" from downloads?", color = White60) },
             confirmButton = {
@@ -614,19 +619,19 @@ fun EpisodeRow(
 @Composable
 private fun CompactIconAction(icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, onClick: () -> Unit) {
     Box(
-        Modifier.size(28.dp).clip(CircleShape).background(tint.copy(.15f))
+        Modifier.size(d.iconLg).clip(CircleShape).background(tint.copy(.15f))
             .clickable(onClick = onClick),
         Alignment.Center,
-    ) { Icon(icon, null, tint = tint, modifier = Modifier.size(14.dp)) }
+    ) { Icon(icon, null, tint = tint, modifier = Modifier.size(d.iconSm + 2.dp)) }
 }
 
 @Composable
 private fun CompactTextAction(symbol: String, color: Color, onClick: () -> Unit) {
     Box(
-        Modifier.size(28.dp).clip(CircleShape).background(color.copy(alpha = .15f))
+        Modifier.size(d.iconLg).clip(CircleShape).background(color.copy(alpha = .15f))
             .clickable(onClick = onClick),
         Alignment.Center,
-    ) { Text(symbol, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+    ) { Text(symbol, color = color, fontSize = d.textSm, fontWeight = FontWeight.Bold) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -641,6 +646,7 @@ fun MovieRow(
     onResume: () -> Unit,
     onPause: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val isDownloading = item.status == DownloadStatus.DOWNLOADING.name
@@ -659,50 +665,50 @@ fun MovieRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(d.radiusMd))
             .background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
-            .padding(10.dp),
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+            .padding(d.spaceMd),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AsyncImage(
             model = item.posterPath?.let { "${BuildConfig.TMDB_IMG_W342}$it" },
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.size(width = 46.dp, height = 64.dp).clip(RoundedCornerShape(8.dp)).background(BgRaised),
+            modifier = Modifier.size(width = d.avatarMd + d.spaceXxs, height = d.avatarLg).clip(RoundedCornerShape(d.radiusSm + d.spaceXxs)).background(BgRaised),
         )
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
 
         Column(Modifier.weight(1f)) {
             Text(
-                item.title, color = White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                item.title, color = White, fontSize = d.textMd, fontWeight = FontWeight.Bold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.height(d.spaceXs))
+            Row(horizontalArrangement = Arrangement.spacedBy(d.spaceSm), verticalAlignment = Alignment.CenterVertically) {
                 StatusBadge(item.status)
                 QualityBadge(item.quality)
-                if (item.sizeBytes > 0) Text(formatSize(item.sizeBytes), color = White40, fontSize = 10.sp)
+                if (item.sizeBytes > 0) Text(formatSize(item.sizeBytes), color = White40, fontSize = d.textXs)
             }
 
             if (isDownloading || isQueued) {
-                Spacer(Modifier.height(7.dp))
+                Spacer(Modifier.height(d.spaceSm + 1.dp))
                 Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
                     Box(Modifier.fillMaxWidth(animPct).fillMaxHeight().background(Brush.horizontalGradient(listOf(Brand, Brand2))))
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(d.spaceXs))
                 Text(
                     if (item.totalSegments > 0) "${item.segmentsDone}/${item.totalSegments} · $pctInt%" else "$pctInt%",
-                    color = White40, fontSize = 10.sp,
+                    color = White40, fontSize = d.textXs,
                 )
             }
             if (isPaused || isError) {
-                Spacer(Modifier.height(4.dp))
-                Text("$pctInt% downloaded", color = White40, fontSize = 10.sp)
+                Spacer(Modifier.height(d.spaceXs))
+                Text("$pctInt% downloaded", color = White40, fontSize = d.textXs)
             }
         }
 
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
 
         when {
             isDone -> CompactIconAction(IconPlay, Brand) { onPlay() }
@@ -711,20 +717,20 @@ fun MovieRow(
             canPlayPartial && pct >= 0.05f -> CompactTextAction("▶", Brand) { onPlay() }
         }
 
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(d.spaceSm))
         Box(
-            Modifier.size(28.dp).clip(CircleShape).background(GlassMd)
+            Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd)
                 .border(1.dp, GlassBorderMd, CircleShape)
                 .clickable { showDeleteDialog = true },
             Alignment.Center,
-        ) { Text("✕", color = White40, fontSize = 12.sp) }
+        ) { Text("✕", color = White40, fontSize = d.textSm) }
     }
 
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             containerColor = BgCard,
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(d.radiusLg),
             title = { Text("Delete Download", color = White, fontWeight = FontWeight.Bold) },
             text  = { Text("Remove \"${item.title}\" from your downloads?", color = White60) },
             confirmButton = {
@@ -740,6 +746,7 @@ fun MovieRow(
 @Composable
 fun StatusBadge(status: String) {
     val (color, label) = when (status) {
+    val d = LocalDimensions.current
         DownloadStatus.DONE.name        -> Success to "Ready"
         DownloadStatus.DOWNLOADING.name -> Brand to "Downloading"
         DownloadStatus.QUEUED.name      -> White60 to "Queued"
@@ -748,16 +755,16 @@ fun StatusBadge(status: String) {
         else                            -> White40 to status
     }
     Row(
-        Modifier.clip(RoundedCornerShape(5.dp)).background(color.copy(.13f))
-            .border(1.dp, color.copy(.35f), RoundedCornerShape(5.dp))
-            .padding(horizontal = 7.dp, vertical = 3.dp),
+        Modifier.clip(RoundedCornerShape(d.spaceXs + 1.dp)).background(color.copy(.13f))
+            .border(1.dp, color.copy(.35f), RoundedCornerShape(d.spaceXs + 1.dp))
+            .padding(horizontal = d.spaceSm + 1.dp, vertical = d.spaceXxs + 1.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
     ) {
         if (status == DownloadStatus.DONE.name) {
-            Box(Modifier.size(5.dp).clip(CircleShape).background(color))
+            Box(Modifier.size(d.spaceXs + 1.dp).clip(CircleShape).background(color))
         }
-        Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Text(label, color = color, fontSize = d.textXs, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -765,10 +772,11 @@ fun StatusBadge(status: String) {
 fun QualityBadge(quality: String) {
     if (quality.isBlank()) return
     Box(
-        Modifier.clip(RoundedCornerShape(5.dp)).background(GlassSm)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(5.dp))
-            .padding(horizontal = 6.dp, vertical = 3.dp)
-    ) { Text(quality, color = White60, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+        Modifier.clip(RoundedCornerShape(d.spaceXs + 1.dp)).background(GlassSm)
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.spaceXs + 1.dp))
+            .padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)
+    ) { Text(quality, color = White60, fontSize = d.textXs, fontWeight = FontWeight.Bold) }
+    val d = LocalDimensions.current
 }
 
 fun formatSize(bytes: Long): String = when {

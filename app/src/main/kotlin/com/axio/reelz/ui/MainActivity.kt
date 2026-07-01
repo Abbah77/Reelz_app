@@ -35,6 +35,7 @@ import com.axio.reelz.remoteconfig.SyncState
 import com.axio.reelz.ui.screens.update.MaintenanceScreen
 import com.axio.reelz.ui.screens.update.UpdateScreen
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -196,6 +197,7 @@ fun NoConfigScreen(
     errorMsg: String?,
     onRetry: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -206,62 +208,62 @@ fun NoConfigScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier
-                .padding(horizontal = 40.dp)
+                .padding(horizontal = d.spaceXxl + d.spaceLg)
                 .fillMaxWidth(),
         ) {
-            Text(text = "📡", fontSize = 56.sp, textAlign = TextAlign.Center)
+            Text(text = "📡", fontSize = d.textHero + 30.sp, textAlign = TextAlign.Center)
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(d.spaceXl))
 
             Text(
                 text       = "Connect to get started",
                 color      = Color.White,
-                fontSize   = 22.sp,
+                fontSize = d.textXxl,
                 fontWeight = FontWeight.Bold,
                 textAlign  = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(d.spaceMd - d.spaceXxs))
 
             Text(
                 text       = "Reelz needs a one-time internet connection to set up. After that, it works great even offline.",
                 color      = Color.White.copy(alpha = 0.6f),
-                fontSize   = 14.sp,
+                fontSize = d.textMd,
                 textAlign  = TextAlign.Center,
-                lineHeight = 21.sp,
+                lineHeight = (d.textMd.value * 1.6f).sp,
             )
 
             // Error message
             if (errorMsg != null) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(d.spaceLg))
                 Text(
                     text      = errorMsg,
                     color     = Color(0xFFFF6B6B),
-                    fontSize  = 13.sp,
+                    fontSize = d.textMd,
                     textAlign = TextAlign.Center,
                 )
             }
 
-            Spacer(Modifier.height(36.dp))
+            Spacer(Modifier.height(d.buttonHeightSm - d.spaceXxs))
 
             Button(
                 onClick  = { if (!isSyncing) onRetry() },
-                shape    = RoundedCornerShape(12.dp),
+                shape    = RoundedCornerShape(d.radiusMd - d.spaceXxs),
                 colors   = ButtonDefaults.buttonColors(containerColor = Brand),
-                modifier = Modifier.fillMaxWidth().height(50.dp),
+                modifier = Modifier.fillMaxWidth().height(d.avatarMd + d.spaceSm),
             ) {
                 if (isSyncing) {
                     CircularProgressIndicator(
                         color            = Color.White,
                         strokeWidth      = 2.dp,
-                        modifier         = Modifier.size(20.dp),
+                        modifier         = Modifier.size(d.iconMd),
                     )
                 } else {
                     Text(
                         "Try again",
                         color      = Color.White,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize   = 15.sp,
+                        fontSize = d.textLg,
                     )
                 }
             }
@@ -274,6 +276,7 @@ fun NoConfigScreen(
 @Composable
 fun PoweredByScreen(onFinished: () -> Unit) {
     val logoAlpha   = remember { Animatable(0f) }
+    val d = LocalDimensions.current
     val logoScale   = remember { Animatable(0.72f) }
     val textAlpha   = remember { Animatable(0f) }
     val screenAlpha = remember { Animatable(1f) }
@@ -303,11 +306,11 @@ fun PoweredByScreen(onFinished: () -> Unit) {
                 painter            = painterResource(R.drawable.ic_company_logo),
                 contentDescription = "Company logo",
                 modifier           = Modifier
-                    .size(72.dp)
+                    .size(d.avatarLg + d.spaceMd + d.spaceXxs)
                     .alpha(logoAlpha.value)
                     .scale(logoScale.value),
             )
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(d.spaceXl - d.spaceXs))
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier            = Modifier.alpha(textAlpha.value),
@@ -315,11 +318,11 @@ fun PoweredByScreen(onFinished: () -> Unit) {
                 Text(
                     "from",
                     color         = Color.White.copy(alpha = 0.45f),
-                    fontSize      = 11.sp,
+                    fontSize = d.textXs,
                     fontWeight    = FontWeight.Normal,
                     letterSpacing = 1.5.sp,
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(d.spaceXs))
                 val inf   = rememberInfiniteTransition(label = "shimmer")
                 val shimX by inf.animateFloat(
                     0f, 1f,
@@ -336,7 +339,7 @@ fun PoweredByScreen(onFinished: () -> Unit) {
                                 1f    to Brand,
                             )
                         ),
-                        fontSize      = 15.sp,
+                        fontSize = d.textLg,
                         fontWeight    = FontWeight.Bold,
                         letterSpacing = 3.sp,
                         textAlign     = TextAlign.Center,
