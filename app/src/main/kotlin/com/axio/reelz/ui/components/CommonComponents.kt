@@ -439,21 +439,13 @@ val IconChevronDown: ImageVector get() = ImageVector.Builder("ChevDown", 24.dp, 
         fill = SolidColor(Color.Transparent))
 }.build()
 
-// ── Close / X (Lucide) ───────────────────────────────────────────────────────
-val IconClose: ImageVector get() = ImageVector.Builder("Close", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData { moveTo(18f, 6f); lineTo(6f, 18f); moveTo(6f, 6f); lineTo(18f, 18f) },
-        stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round,
-        fill = SolidColor(Color.Transparent))
-}.build()
-
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Glass card container
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun GlassCard(
     modifier: Modifier = Modifier,
-    radius: Dp = 20.dp,
+    radius: Dp = LocalDimensions.current.radiusLg,
     borderColor: Color = GlassBorderMd,
     content: @Composable () -> Unit,
 ) {
@@ -479,16 +471,17 @@ fun BrandButton(
     enabled: Boolean = true,
     color: Color = Brand,
 ) {
+    val d = LocalDimensions.current
     val shimmer = rememberInfiniteTransition(label = "btnShimmer")
     val shimmerX by shimmer.animateFloat(
         0f, 1f, infiniteRepeatable(tween(2200, easing = LinearEasing)), label = "sx"
     )
-    val colorDeep = color.copy(alpha = color.alpha * 0.5f)
+    val colorDeep   = color.copy(alpha = color.alpha * 0.5f)
     val colorBright = color.copy(alpha = minOf(color.alpha * 1.15f, 1f))
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(100.dp))
+            .clip(RoundedCornerShape(d.radiusPill))
             .background(
                 if (enabled) {
                     Brush.linearGradient(
@@ -503,23 +496,23 @@ fun BrandButton(
                     Brush.linearGradient(listOf(GlassMd, GlassMd))
                 }
             )
-            .border(1.dp, if (enabled) colorBright.copy(.4f) else GlassBorderMd, RoundedCornerShape(100.dp))
+            .border(d.borderThin, if (enabled) colorBright.copy(.4f) else GlassBorderMd, RoundedCornerShape(d.radiusPill))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(
-                horizontal = if (small) 16.dp else 24.dp,
-                vertical   = if (small) 10.dp else 14.dp,
+                horizontal = if (small) d.buttonHorizPadSm else d.buttonHorizPadMd,
+                vertical   = if (small) d.buttonVertPadSm  else d.buttonVertPadMd,
             ),
         contentAlignment = Alignment.Center,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             icon?.invoke()
-            if (icon != null) Spacer(Modifier.width(7.dp))
+            if (icon != null) Spacer(Modifier.width(d.spaceSm))
             Text(
                 text,
                 style = MaterialTheme.typography.labelLarge.copy(
-                    color      = if (enabled) Color.White else White40,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize   = if (small) 12.sp else 14.sp,
+                    color         = if (enabled) Color.White else White40,
+                    fontWeight    = FontWeight.ExtraBold,
+                    fontSize      = if (small) d.textSm else d.textMd,
                     letterSpacing = 0.3.sp,
                 ),
             )
@@ -538,26 +531,27 @@ fun GhostButton(
     small: Boolean = false,
     icon: @Composable (() -> Unit)? = null,
 ) {
+    val d = LocalDimensions.current
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(100.dp))
+            .clip(RoundedCornerShape(d.radiusPill))
             .background(GlassMd)
-            .border(1.dp, GlassBorderHv, RoundedCornerShape(100.dp))
+            .border(d.borderThin, GlassBorderHv, RoundedCornerShape(d.radiusPill))
             .clickable(onClick = onClick)
             .padding(
-                horizontal = if (small) 14.dp else 20.dp,
-                vertical   = if (small) 9.dp else 13.dp,
+                horizontal = if (small) d.buttonHorizPadSm else d.buttonHorizPadMd,
+                vertical   = if (small) d.buttonVertPadSm  else d.buttonVertPadMd,
             ),
         contentAlignment = Alignment.Center,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             icon?.invoke()
-            if (icon != null) Spacer(Modifier.width(7.dp))
+            if (icon != null) Spacer(Modifier.width(d.spaceSm))
             Text(
                 text,
                 color      = White80,
                 fontWeight = FontWeight.SemiBold,
-                fontSize   = if (small) 12.sp else 14.sp,
+                fontSize   = if (small) d.textSm else d.textMd,
             )
         }
     }
@@ -572,6 +566,7 @@ fun MediaPosterCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val d = LocalDimensions.current
     var pressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.93f else 1f,
@@ -595,13 +590,10 @@ fun MediaPosterCard(
                 scaleX = scale; scaleY = scale
                 rotationX = rotateX
                 shadowElevation = elevation
-                shape = RoundedCornerShape(14.dp)
-                // clip = false so shadow shape is respected but title text below image is NOT clipped
+                shape = RoundedCornerShape(d.radiusMd)
                 clip = false
                 cameraDistance = 8f * density
             }
-            // No outer Column clip — image Box below carries its own RoundedCornerShape clip,
-            // and title text must not be cut by the column's bottom corners.
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -617,8 +609,8 @@ fun MediaPosterCard(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .clip(RoundedCornerShape(14.dp))          // image clipped here — correct
-                .border(1.dp, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(d.radiusMd))
+                .border(d.borderThin, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(d.radiusMd))
                 .background(BgRaised)
         ) {
             AsyncImage(
@@ -627,11 +619,9 @@ fun MediaPosterCard(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            // Bottom fade
             Box(Modifier.fillMaxSize().background(
                 Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color(0xCC05050A))
             ))
-            // Blue glow on press
             if (pressed) {
                 Box(Modifier.fillMaxSize().background(
                     Brush.radialGradient(listOf(Brand.copy(0.15f), Color.Transparent))
@@ -641,39 +631,39 @@ fun MediaPosterCard(
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(5.dp)
-                        .clip(RoundedCornerShape(5.dp))
+                        .padding(d.ratingBadgePad)
+                        .clip(RoundedCornerShape(d.radiusSm))
                         .background(Color(0xCC000000))
-                        .border(1.dp, BlueBorder, RoundedCornerShape(5.dp))
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                        .border(d.borderThin, BlueBorder, RoundedCornerShape(d.radiusSm))
+                        .padding(horizontal = d.spaceXs, vertical = d.spaceXxs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(IconStar, null, tint = Gold, modifier = Modifier.size(9.dp))
-                    Spacer(Modifier.width(2.dp))
-                    Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Icon(IconStar, null, tint = Gold, modifier = Modifier.size(d.ratingIconSize))
+                    Spacer(Modifier.width(d.spaceXxs))
+                    Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = d.ratingFontSize, fontWeight = FontWeight.Bold)
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(d.spaceSm))
         Text(
             media.title,
-            color = White80,
-            fontSize = 11.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            lineHeight = 15.sp,
+            color      = White80,
+            fontSize   = d.textXs,
+            maxLines   = 2,
+            overflow   = TextOverflow.Ellipsis,
+            lineHeight = (d.textXs.value * 1.4f).sp,
             fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 2.dp),
+            modifier   = Modifier.padding(horizontal = d.spaceXxs),
         )
         if (media.mediaType == MediaType.TV) {
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(d.spaceXxs))
             Text(
                 "TV Series",
-                color = Brand,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.SemiBold,
+                color         = Brand,
+                fontSize      = d.textXxs,
+                fontWeight    = FontWeight.SemiBold,
                 letterSpacing = 0.4.sp,
-                modifier = Modifier.padding(horizontal = 2.dp),
+                modifier      = Modifier.padding(horizontal = d.spaceXxs),
             )
         }
     }
@@ -684,6 +674,7 @@ fun MediaPosterCard(
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val d = LocalDimensions.current
     var pressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.95f else 1f,
@@ -693,14 +684,11 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
 
     Column(
         modifier = modifier
-            .width(130.dp)
+            .width(d.cardRowWidth)
             .graphicsLayer {
                 scaleX = scale; scaleY = scale
                 cameraDistance = 8f * density
             }
-            // No Column-level clip: the image Box below has its own RoundedCornerShape clip.
-            // Clipping the whole Column rounded the bottom corners of the Column, visually
-            // cutting into the first letter of the title text that sits below the image.
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -715,9 +703,9 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(190.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .border(1.dp, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(12.dp))
+                .height(d.cardRowHeight)
+                .clip(RoundedCornerShape(d.radiusMd))
+                .border(d.borderThin, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(d.radiusMd))
                 .background(BgRaised)
         ) {
             AsyncImage(
@@ -736,34 +724,45 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(5.dp))
+                        .padding(d.spaceSm)
+                        .clip(RoundedCornerShape(d.radiusSm))
                         .background(Color(0xBB000000))
-                        .padding(horizontal = 5.dp, vertical = 3.dp),
+                        .padding(horizontal = d.spaceXs, vertical = d.spaceXxs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(IconStar, null, tint = Gold, modifier = Modifier.size(9.dp))
-                    Spacer(Modifier.width(3.dp))
-                    Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Icon(IconStar, null, tint = Gold, modifier = Modifier.size(d.ratingIconSize))
+                    Spacer(Modifier.width(d.spaceXxs))
+                    Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = d.ratingFontSize, fontWeight = FontWeight.Bold)
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(d.spaceSm))
         Text(
             media.title,
-            color = White80,
-            fontSize = 12.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            lineHeight = 16.sp,
+            color      = White80,
+            fontSize   = d.textSm,
+            maxLines   = 2,
+            overflow   = TextOverflow.Ellipsis,
+            lineHeight = (d.textSm.value * 1.35f).sp,
             fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 2.dp),
+            modifier   = Modifier.padding(horizontal = d.spaceXxs),
         )
+        if (media.mediaType == MediaType.TV) {
+            Spacer(Modifier.height(d.spaceXxs))
+            Text(
+                "TV Series",
+                color         = Brand,
+                fontSize      = d.textXxs,
+                fontWeight    = FontWeight.SemiBold,
+                letterSpacing = 0.4.sp,
+                modifier      = Modifier.padding(horizontal = d.spaceXxs),
+            )
+        }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Section header with optional "See All" action
+// Section header row — accent bar + title + optional "See All"
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun SectionHeader(
@@ -772,30 +771,42 @@ fun SectionHeader(
     onAction: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val d = LocalDimensions.current
     Row(
-        modifier = modifier.fillMaxWidth().padding(start = 16.dp, top = 28.dp, bottom = 12.dp, end = 16.dp),
+        modifier = modifier.fillMaxWidth().padding(
+            start  = d.screenHorizPad,
+            top    = d.spaceXl,
+            bottom = d.spaceMd,
+            end    = d.screenHorizPad,
+        ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Blue accent bar
         Box(
             Modifier
-                .width(3.dp).height(18.dp)
-                .clip(RoundedCornerShape(2.dp))
+                .width(d.sectionAccentWidth)
+                .height(d.sectionAccentHeight)
+                .clip(RoundedCornerShape(d.spaceXxs))
                 .background(Brush.verticalGradient(listOf(Brand2, Brand)))
         )
-        Spacer(Modifier.width(9.dp))
-        Text(title, color = White, fontWeight = FontWeight.Bold, fontSize = 17.sp, letterSpacing = (-0.2).sp)
+        Spacer(Modifier.width(d.spaceMd - d.spaceXs))
+        Text(
+            title,
+            color         = White,
+            fontWeight    = FontWeight.Bold,
+            fontSize      = d.textXl,
+            letterSpacing = (-0.2).sp,
+        )
         Spacer(Modifier.weight(1f))
         if (action != null && onAction != null) {
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(d.radiusSm))
                     .clickable(onClick = onAction)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceXs),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
             ) {
-                Text(action, color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(action, color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -806,6 +817,8 @@ fun SectionHeader(
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun SkeletonBannerLoader() {
+    val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
     val inf = rememberInfiniteTransition(label = "skBanner")
     val offset by inf.animateFloat(
         -1.5f, 2.5f, infiniteRepeatable(tween(1000, easing = FastOutSlowInEasing)), "skOff"
@@ -813,7 +826,7 @@ fun SkeletonBannerLoader() {
     Box(
         Modifier
             .fillMaxWidth()
-            .height(400.dp)
+            .height(screenH * d.heroImageRatio)
             .background(
                 Brush.linearGradient(
                     colorStops = arrayOf(
@@ -826,14 +839,13 @@ fun SkeletonBannerLoader() {
                 )
             )
     ) {
-        // Skeleton content overlay
-        Column(Modifier.align(Alignment.BottomStart).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.width(80.dp).height(18.dp).clip(RoundedCornerShape(4.dp)).background(BgRaised))
-            Box(Modifier.width(240.dp).height(28.dp).clip(RoundedCornerShape(6.dp)).background(BgRaised))
-            Box(Modifier.width(160.dp).height(14.dp).clip(RoundedCornerShape(4.dp)).background(BgRaised))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.width(110.dp).height(40.dp).clip(RoundedCornerShape(100.dp)).background(BgSurface))
-                Box(Modifier.width(90.dp).height(40.dp).clip(RoundedCornerShape(100.dp)).background(BgRaised))
+        Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding), verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs)) {
+            Box(Modifier.fillMaxWidth(0.22f).height(d.textLg).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
+            Box(Modifier.fillMaxWidth(0.7f).height(d.textHero + 4.dp).clip(RoundedCornerShape(d.spaceSm)).background(BgRaised))
+            Box(Modifier.fillMaxWidth(0.45f).height(d.textMd).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
+            Row(horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+                Box(Modifier.fillMaxWidth(0.38f).height(d.buttonHeightMd).clip(RoundedCornerShape(d.radiusPill)).background(BgSurface))
+                Box(Modifier.fillMaxWidth(0.30f).height(d.buttonHeightMd).clip(RoundedCornerShape(d.radiusPill)).background(BgRaised))
             }
         }
     }
@@ -841,6 +853,7 @@ fun SkeletonBannerLoader() {
 
 @Composable
 fun SkeletonRowLoader() {
+    val d = LocalDimensions.current
     val inf = rememberInfiniteTransition(label = "skRow")
     val offset by inf.animateFloat(
         -1.5f, 2.5f, infiniteRepeatable(tween(900, easing = LinearEasing)), "off"
@@ -855,14 +868,14 @@ fun SkeletonRowLoader() {
         end   = Offset(Float.POSITIVE_INFINITY, 0f),
     )
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
     ) {
         repeat(4) {
-            Column(Modifier.width(130.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(Modifier.width(130.dp).height(190.dp).clip(RoundedCornerShape(12.dp)).background(shimmerBrush))
-                Box(Modifier.width(110.dp).height(12.dp).clip(RoundedCornerShape(4.dp)).background(shimmerBrush))
-                Box(Modifier.width(80.dp).height(10.dp).clip(RoundedCornerShape(4.dp)).background(shimmerBrush))
+            Column(Modifier.width(d.cardRowWidth), verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
+                Box(Modifier.width(d.cardRowWidth).height(d.cardRowHeight).clip(RoundedCornerShape(d.radiusMd)).background(shimmerBrush))
+                Box(Modifier.fillMaxWidth(0.88f).height(d.textSm).clip(RoundedCornerShape(d.spaceXs)).background(shimmerBrush))
+                Box(Modifier.fillMaxWidth(0.65f).height(d.textXs).clip(RoundedCornerShape(d.spaceXs)).background(shimmerBrush))
             }
         }
     }
@@ -873,8 +886,9 @@ fun SkeletonRowLoader() {
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun FullScreenLoader() {
+    val d = LocalDimensions.current
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CinematicSpinner(size = 56.dp)
+        CinematicSpinner(size = d.spinnerLg)
     }
 }
 
@@ -909,16 +923,20 @@ fun CinematicSpinner(size: Dp = 44.dp, modifier: Modifier = Modifier, color: Col
 }
 
 @Composable
-fun SmallSpinner(modifier: Modifier = Modifier) { CinematicSpinner(size = 26.dp, modifier = modifier) }
+fun SmallSpinner(modifier: Modifier = Modifier) {
+    val d = LocalDimensions.current
+    CinematicSpinner(size = d.spinnerMd, modifier = modifier)
+}
 
 @Composable
 fun PulsingDot(modifier: Modifier = Modifier) {
+    val d = LocalDimensions.current
     val inf = rememberInfiniteTransition(label = "dot")
     val scale by inf.animateFloat(0.5f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), "sc")
     val glow  by inf.animateFloat(0.4f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), "gl")
-    Box(modifier = modifier.size(10.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = modifier.size(d.spaceXs + d.spaceXxs), contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxSize().scale(scale + 0.4f).clip(CircleShape).background(Brand.copy(glow * 0.3f)))
-        Box(Modifier.size(7.dp).scale(scale).clip(CircleShape).background(Brand))
+        Box(Modifier.fillMaxSize(0.7f).scale(scale).clip(CircleShape).background(Brand))
     }
 }
 
@@ -927,22 +945,23 @@ fun PulsingDot(modifier: Modifier = Modifier) {
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun ErrorState(message: String, onRetry: (() -> Unit)? = null, modifier: Modifier = Modifier) {
+    val d = LocalDimensions.current
     Column(
-        modifier = modifier.fillMaxSize().padding(32.dp),
+        modifier = modifier.fillMaxSize().padding(d.spaceXxl),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Box(Modifier.size(72.dp).clip(CircleShape)
+            Box(Modifier.size(d.avatarLg + d.spaceLg).clip(CircleShape)
                 .background(Brush.radialGradient(listOf(Error.copy(.15f), Color.Transparent)))
-                .border(1.dp, Error.copy(.35f), CircleShape))
-            Icon(IconWifiOff, null, tint = Error.copy(.8f), modifier = Modifier.size(30.dp))
+                .border(d.borderThin, Error.copy(.35f), CircleShape))
+            Icon(IconWifiOff, null, tint = Error.copy(.8f), modifier = Modifier.size(d.iconLg))
         }
-        Spacer(Modifier.height(20.dp))
-        Text(friendlyError(message), color = White60, fontSize = 15.sp,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 23.sp)
+        Spacer(Modifier.height(d.spaceXl))
+        Text(friendlyError(message), color = White60, fontSize = d.textLg,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = (d.textLg.value * 1.55f).sp)
         if (onRetry != null) {
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(d.spaceXxl))
             BrandButton("Try Again", onRetry)
         }
     }
@@ -966,17 +985,18 @@ fun friendlyError(raw: String): String = when {
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun RatingChip(rating: Double, modifier: Modifier = Modifier) {
+    val d = LocalDimensions.current
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(d.radiusSm))
             .background(Color(0x22FFD700))
-            .border(1.dp, Gold.copy(.3f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .border(d.borderThin, Gold.copy(.3f), RoundedCornerShape(d.radiusSm))
+            .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceXs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(IconStar, null, tint = Gold, modifier = Modifier.size(12.dp))
-        Spacer(Modifier.width(4.dp))
-        Text("${"%.1f".format(rating)}", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Icon(IconStar, null, tint = Gold, modifier = Modifier.size(d.iconSm))
+        Spacer(Modifier.width(d.spaceXs))
+        Text("${"%.1f".format(rating)}", color = Gold, fontSize = d.textMd, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -985,6 +1005,7 @@ fun RatingChip(rating: Double, modifier: Modifier = Modifier) {
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun GenrePill(text: String, selected: Boolean = false, onClick: () -> Unit = {}) {
+    val d = LocalDimensions.current
     val bgBrush = if (selected)
         Brush.horizontalGradient(listOf(BrandDeep, Brand.copy(.9f)))
     else
@@ -992,16 +1013,16 @@ fun GenrePill(text: String, selected: Boolean = false, onClick: () -> Unit = {})
 
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(100.dp))
+            .clip(RoundedCornerShape(d.radiusPill))
             .background(bgBrush)
-            .border(1.dp, if (selected) Brand.copy(.6f) else GlassBorderMd, RoundedCornerShape(100.dp))
+            .border(d.borderThin, if (selected) Brand.copy(.6f) else GlassBorderMd, RoundedCornerShape(d.radiusPill))
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .padding(horizontal = d.chipHorizPad + d.spaceXs, vertical = d.chipVertPad + d.spaceXs),
     ) {
         Text(
             text,
             color      = if (selected) Color.White else White60,
-            fontSize   = 12.sp,
+            fontSize   = d.textSm,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
         )
     }
@@ -1012,9 +1033,13 @@ fun GenrePill(text: String, selected: Boolean = false, onClick: () -> Unit = {})
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun DragHandle(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.Center) {
+    val d = LocalDimensions.current
+    Box(modifier = modifier.fillMaxWidth().padding(top = d.spaceMd), contentAlignment = Alignment.Center) {
         Box(
-            Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp))
+            Modifier
+                .width(d.shimmerBarWidth)
+                .height(d.shimmerBarHeight)
+                .clip(RoundedCornerShape(d.spaceXxs))
                 .background(Brush.horizontalGradient(listOf(Brand.copy(.4f), Brand2.copy(.4f), Brand.copy(.4f))))
         )
     }
@@ -1025,13 +1050,14 @@ fun DragHandle(modifier: Modifier = Modifier) {
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun ShimmerCard(modifier: Modifier = Modifier) {
+    val d = LocalDimensions.current
     val inf = rememberInfiniteTransition(label = "shimmer")
     val offset by inf.animateFloat(
         -1f, 2f, infiniteRepeatable(tween(1200, easing = LinearEasing)), "off"
     )
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(d.radiusMd))
             .background(
                 Brush.linearGradient(
                     colorStops = arrayOf(
@@ -1051,28 +1077,21 @@ fun ShimmerCard(modifier: Modifier = Modifier) {
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun AdBannerPlaceholder(modifier: Modifier = Modifier) {
+    val d = LocalDimensions.current
     Box(
-        modifier = modifier.fillMaxWidth().height(52.dp)
+        modifier = modifier
+            .fillMaxWidth()
+            .height(d.buttonHeightMd + d.spaceMd)
             .background(BgCard)
-            .border(BorderStroke(1.dp, GlassBorderMd)),
+            .border(BorderStroke(d.borderThin, GlassBorderMd)),
         contentAlignment = Alignment.Center,
     ) {
-        Text("Advertisement", color = White20, fontSize = 10.sp, letterSpacing = 2.sp)
+        Text("Advertisement", color = White20, fontSize = d.textXxs, letterSpacing = 2.sp)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // "Remove ads — go Premium" feed banner
-//
-// A real, visible entry point to the ad-free upsell on the feeds people spend
-// the most time in (Browse, Shorts) — previously the only path to Premium was
-// the Profile tab card or stumbling onto a download/resolution lock. Dismissed
-// per-session (not persisted) so it isn't a permanent nag on every app open,
-// but also never disappears forever after one tap of the X.
-//
-// Callers are expected to gate this with AdEngine.shouldShowRemoveAdsBanner()
-// before placing it in a feed — never shown to premium users or when ads are
-// globally off in config, since the pitch would be pointless either way.
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun RemoveAdsBanner(
@@ -1080,6 +1099,7 @@ fun RemoveAdsBanner(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val d = LocalDimensions.current
     val shimmer = rememberInfiniteTransition(label = "removeAdsShimmer")
     val shimmerX by shimmer.animateFloat(
         0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "rax"
@@ -1088,52 +1108,49 @@ fun RemoveAdsBanner(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .padding(horizontal = d.screenHorizPad, vertical = d.spaceSm)
+            .clip(RoundedCornerShape(d.radiusLg))
             .background(
                 Brush.linearGradient(
                     colorStops = arrayOf(
-                        0f            to BrandDeep,
-                        0.45f         to Brand.copy(alpha = 0.9f),
-                        shimmerX      to Brand2.copy(alpha = 0.55f),
-                        1f            to BrandDeep,
+                        0f       to BrandDeep,
+                        0.45f    to Brand.copy(alpha = 0.9f),
+                        shimmerX to Brand2.copy(alpha = 0.55f),
+                        1f       to BrandDeep,
                     )
                 )
             )
-            .border(1.dp, Brand2.copy(.35f), RoundedCornerShape(16.dp))
-            .padding(vertical = 14.dp),
+            .border(d.borderThin, Brand2.copy(.35f), RoundedCornerShape(d.radiusLg))
+            .padding(vertical = d.spaceMd + d.spaceXs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Upgrade tap target — sparkle + copy, its own explicit clickable area
-        // rather than an ambient click on the whole row, so the dismiss button
-        // below is an unambiguous sibling target, never a "carve-out" inside it.
         Row(
             modifier = Modifier
                 .weight(1f)
                 .clickable { onUpgrade() }
-                .padding(start = 16.dp, end = 8.dp),
+                .padding(start = d.screenHorizPad, end = d.spaceMd),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("✦", fontSize = 18.sp)
-            Spacer(Modifier.width(10.dp))
+            Text("✦", fontSize = d.textXl)
+            Spacer(Modifier.width(d.spaceMd))
             Column {
                 Text(
                     "Remove ads",
                     color      = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize   = 14.sp,
+                    fontSize   = d.textMd + 1.sp,
                 )
                 Text(
                     "Go Premium for an uninterrupted, ad-free experience",
                     color    = Color.White.copy(alpha = 0.8f),
-                    fontSize = 11.sp,
+                    fontSize = d.textXs,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        IconButton(onClick = onDismiss, modifier = Modifier.padding(end = 8.dp).size(28.dp)) {
-            Icon(IconClose, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+        IconButton(onClick = onDismiss, modifier = Modifier.padding(end = d.spaceMd).size(d.buttonHeightSm - d.spaceSm)) {
+            Icon(IconClose, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(d.iconSm + 2.dp))
         }
     }
 }

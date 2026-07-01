@@ -43,6 +43,7 @@ import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.ui.Route
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -348,7 +349,7 @@ fun BrowseScreen(
 
     // ── Pull-to-refresh state (managed in NestedScrollConnection) ────────────
     var pullOverscrollPx by remember { mutableStateOf(0f) }
-    val pullThresholdPx = with(density) { 72.dp.toPx() }
+    val pullThresholdPx = with(density) { (d.avatarMd + d.spaceLg).toPx() }
 
     // ── NestedScrollConnection ────────────────────────────────────────────────
     //  KEY BEHAVIOUR:
@@ -454,7 +455,7 @@ fun BrowseScreen(
             // Top padding = full appbar height so first item clears the bar when expanded
             contentPadding = PaddingValues(
                 top    = with(density) { appBarHeightPx.toDp() } + 4.dp,
-                bottom = 100.dp,
+                bottom = d.spaceXxl * 3.1f,
             ),
         ) {
             when {
@@ -463,9 +464,9 @@ fun BrowseScreen(
                     item(key = "skeletonRow1") {
                         Column {
                             Box(
-                                Modifier.width(180.dp).height(20.dp)
-                                    .padding(start = 16.dp, top = 28.dp, bottom = 12.dp)
-                                    .clip(RoundedCornerShape(4.dp)).background(BgSurface)
+                                Modifier.fillMaxWidth(0.45f).height(d.textLg)
+                                    .padding(start = d.screenHorizPad, top = d.spaceXl, bottom = d.spaceMd)
+                                    .clip(RoundedCornerShape(d.spaceSm)).background(BgSurface)
                             )
                             SkeletonRowLoader()
                         }
@@ -473,9 +474,9 @@ fun BrowseScreen(
                     item(key = "skeletonRow2") {
                         Column {
                             Box(
-                                Modifier.width(140.dp).height(20.dp)
-                                    .padding(start = 16.dp, top = 28.dp, bottom = 12.dp)
-                                    .clip(RoundedCornerShape(4.dp)).background(BgSurface)
+                                Modifier.fillMaxWidth(0.35f).height(d.textLg)
+                                    .padding(start = d.screenHorizPad, top = d.spaceXl, bottom = d.spaceMd)
+                                    .clip(RoundedCornerShape(d.spaceSm)).background(BgSurface)
                             )
                             SkeletonRowLoader()
                         }
@@ -531,11 +532,11 @@ fun BrowseScreen(
                             chunks.forEachIndexed { idx, chunk ->
                                 item(key = "genre_chunk_$idx") {
                                     LazyVerticalGrid(
-                                        columns = GridCells.Fixed(3),
-                                        modifier = Modifier.fillMaxWidth().heightIn(max = 1200.dp),
-                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        verticalArrangement   = Arrangement.spacedBy(10.dp),
+                                        columns = GridCells.Fixed(if (d.isTablet) 4 else 3),
+                                        modifier = Modifier.fillMaxWidth().heightIn(max = (d.cardPosterHeight + d.spaceXxl) * 7),
+                                        contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
+                                        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
+                                        verticalArrangement   = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                                         userScrollEnabled = false,
                                     ) {
                                         items(chunk) { m ->
@@ -558,8 +559,8 @@ fun BrowseScreen(
                             item(key = "cwHeader") { SectionHeader("Continue Watching", "See All") }
                             item(key = "cwRow") {
                                 LazyRow(
-                                    contentPadding = PaddingValues(horizontal = 16.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    contentPadding = PaddingValues(horizontal = d.screenHorizPad),
+                                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                                 ) {
                                     items(ui.continueWatching, key = { it.key }) { h ->
                                         ContinueCard(h) {
@@ -579,8 +580,8 @@ fun BrowseScreen(
                                     }
                                     item(key = "row_${row.section.title}") {
                                         LazyRow(
-                                            contentPadding = PaddingValues(horizontal = 16.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            contentPadding = PaddingValues(horizontal = d.screenHorizPad),
+                                            horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                                         ) {
                                             items(row.section.items, key = { it.tmdbId }) { m ->
                                                 MediaRowCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
@@ -598,8 +599,8 @@ fun BrowseScreen(
                                     item(key = "inf_hdr_${row.page}") { SectionHeader(label, "") }
                                     item(key = "inf_row_${row.page}") {
                                         LazyRow(
-                                            contentPadding = PaddingValues(horizontal = 16.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            contentPadding = PaddingValues(horizontal = d.screenHorizPad),
+                                            horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                                         ) {
                                             items(row.items, key = { "${row.page}_${it.tmdbId}" }) { m ->
                                                 MediaRowCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
@@ -615,7 +616,7 @@ fun BrowseScreen(
                         }
                     }
 
-                    item(key = "adBanner") { AdBannerPlaceholder(Modifier.padding(vertical = 10.dp)) }
+                    item(key = "adBanner") { AdBannerPlaceholder(Modifier.padding(vertical = d.spaceMd - d.spaceXxs)) }
                 }
             }
         }
@@ -693,7 +694,7 @@ fun BrowseScreen(
         // While refreshing: spring the pill to a fixed resting spot just below header.
         // While pulling:    follow the finger exactly (no interpolation = zero lag).
         val pillRestingY = with(density) {
-            (appBarHeightPx - collapseOffsetPx) + 14.dp.toPx()
+            (appBarHeightPx - collapseOffsetPx) + d.spaceMd.toPx()
         }
         val pillFollowY = with(density) {
             (appBarHeightPx - collapseOffsetPx) + (pullOverscrollPx * 0.45f)
@@ -724,9 +725,9 @@ fun BrowseScreen(
             ) {
                 Row(
                     verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                     modifier              = Modifier
-                        .clip(RoundedCornerShape(100.dp))
+                        .clip(RoundedCornerShape(d.radiusPill))
                         .background(
                             Brush.linearGradient(
                                 if (aboveThreshold || ui.isRefreshing)
@@ -736,24 +737,24 @@ fun BrowseScreen(
                             )
                         )
                         .border(
-                            width = 1.dp,
+                            width = d.borderThin,
                             brush = Brush.linearGradient(
                                 if (aboveThreshold || ui.isRefreshing)
                                     listOf(Brand.copy(.85f), Brand2.copy(.6f))
                                 else
                                     listOf(GlassBorder, GlassBorder)
                             ),
-                            shape = RoundedCornerShape(100.dp),
+                            shape = RoundedCornerShape(d.radiusPill),
                         )
-                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                        .padding(horizontal = d.heroPadding - d.spaceXs, vertical = d.spaceMd - d.spaceXxs),
                 ) {
                     when {
                         ui.isRefreshing -> {
-                            CinematicSpinner(size = 13.dp, color = Brand)
+                            CinematicSpinner(size = d.spinnerSm, color = Brand)
                             Text(
                                 "Updating…",
                                 color      = Brand,
-                                fontSize   = 12.sp,
+                                fontSize   = d.textSm,
                                 fontWeight = FontWeight.SemiBold,
                             )
                         }
@@ -761,7 +762,7 @@ fun BrowseScreen(
                             Text(
                                 if (aboveThreshold) "Release to refresh" else "Pull to refresh",
                                 color      = if (aboveThreshold) Brand else White40,
-                                fontSize   = 12.sp,
+                                fontSize   = d.textSm,
                                 fontWeight = if (aboveThreshold) FontWeight.SemiBold else FontWeight.Normal,
                             )
                             Icon(
@@ -769,7 +770,7 @@ fun BrowseScreen(
                                 contentDescription   = null,
                                 tint                 = if (aboveThreshold) Brand else White40,
                                 modifier             = Modifier
-                                    .size(15.dp)
+                                    .size(d.iconMd - 5.dp)
                                     .graphicsLayer { rotationZ = arrowAngle },
                             )
                         }
@@ -791,7 +792,7 @@ fun CollapsingGlassAppBar(
     onSearchClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Elements fade / scale based on collapse
+    val d = LocalDimensions.current
     val contentAlpha    = (1f - collapseProgress * 1.8f).coerceIn(0f, 1f)
     val barAlpha        = (0.82f + 0.18f * (1f - collapseProgress)).coerceIn(0f, 1f)
 
@@ -799,7 +800,6 @@ fun CollapsingGlassAppBar(
         modifier = modifier
             .fillMaxWidth()
             .drawBehind {
-                // Bottom separator line fades as bar collapses
                 drawLine(
                     brush = Brush.horizontalGradient(
                         listOf(
@@ -815,7 +815,6 @@ fun CollapsingGlassAppBar(
             }
             .graphicsLayer { alpha = barAlpha }
     ) {
-        // Layered glass background
         Box(
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(
@@ -825,7 +824,6 @@ fun CollapsingGlassAppBar(
         )
         Box(Modifier.matchParentSize().background(Color(0x09FFFFFF)))
 
-        // Bar content
         Column(
             Modifier
                 .fillMaxWidth()
@@ -835,11 +833,10 @@ fun CollapsingGlassAppBar(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = d.appBarHorizPad, vertical = d.appBarVertPad),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
             ) {
-                // Shimmer logo
                 val inf   = rememberInfiniteTransition(label = "logoShimmer")
                 val shimX by inf.animateFloat(
                     0f, 1f,
@@ -856,41 +853,40 @@ fun CollapsingGlassAppBar(
                                 1f    to Brand,
                             )
                         ),
-                        fontWeight   = FontWeight.Black,
-                        fontSize     = 24.sp,
+                        fontWeight    = FontWeight.Black,
+                        fontSize      = d.textXxl,
                         letterSpacing = 4.sp,
                     ),
                 )
 
-                // Search bar
                 Box(
                     Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(d.radiusMd))
                         .background(Brush.linearGradient(listOf(Color(0x18FFFFFF), Color(0x0AFFFFFF))))
                         .border(
                             1.dp,
                             Brush.horizontalGradient(
                                 listOf(Brand.copy(.4f), GlassBorderMd, Brand.copy(.2f))
                             ),
-                            RoundedCornerShape(12.dp),
+                            RoundedCornerShape(d.radiusMd),
                         )
                         .clickable { onSearchClick() }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .padding(horizontal = d.searchBarHorizPad, vertical = d.searchBarVertPad),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(IconSearch, null, tint = Brand.copy(.7f), modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Search movies, series…", color = White40, fontSize = 13.sp)
+                        Icon(IconSearch, null, tint = Brand.copy(.7f), modifier = Modifier.size(d.iconMd - 4.dp))
+                        Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
+                        Text("Search movies, series…", color = White40, fontSize = d.textMd)
                         Spacer(Modifier.weight(1f))
                         Box(
                             Modifier
-                                .clip(RoundedCornerShape(6.dp))
+                                .clip(RoundedCornerShape(d.radiusSm))
                                 .background(BlueGlass)
-                                .border(1.dp, BlueBorder, RoundedCornerShape(6.dp))
-                                .padding(horizontal = 7.dp, vertical = 3.dp),
+                                .border(1.dp, BlueBorder, RoundedCornerShape(d.radiusSm))
+                                .padding(horizontal = d.spaceSm + 1.dp, vertical = d.spaceXxs + 1.dp),
                         ) {
-                            Text("Filter", color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Filter", color = Brand, fontSize = d.textXxs, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -911,17 +907,16 @@ fun StickyGlassGenreBar(
     selectedId : Int?,
     onSelect   : (Int?) -> Unit,
 ) {
+    val d = LocalDimensions.current
     Box(
         Modifier
             .fillMaxWidth()
-            // Frosted glass: dark translucent layer + subtle gradient
             .background(
                 Brush.verticalGradient(
                     listOf(Color(0xCC050510), Color(0xAA05050E))
                 )
             )
             .drawBehind {
-                // Bottom hairline separator
                 drawLine(
                     brush       = Brush.horizontalGradient(
                         listOf(Color.Transparent, Color(0x33FFFFFF), Color.Transparent)
@@ -933,8 +928,8 @@ fun StickyGlassGenreBar(
             }
     ) {
         LazyRow(
-            contentPadding        = PaddingValues(horizontal = 14.dp, vertical = 9.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            contentPadding        = PaddingValues(horizontal = d.screenHorizPad, vertical = d.chipVertPad + d.spaceXs),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
             modifier              = Modifier.fillMaxWidth(),
         ) {
             item {
@@ -949,6 +944,7 @@ fun StickyGlassGenreBar(
 
 @Composable
 fun StickyGenreChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     val borderColor by animateColorAsState(
         if (selected) Brand else Color(0x28FFFFFF),
         tween(180), label = "chipBorder",
@@ -961,21 +957,21 @@ fun StickyGenreChip(label: String, selected: Boolean, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
         modifier         = Modifier
             .scale(scale)
-            .clip(RoundedCornerShape(100.dp))
+            .clip(RoundedCornerShape(d.radiusPill))
             .background(
                 if (selected)
                     Brush.linearGradient(listOf(BrandDeep, Brand.copy(.82f)))
                 else
-                    SolidColor(Color(0x14FFFFFF))   // SolidColor is a Brush → both branches match
+                    SolidColor(Color(0x14FFFFFF))
             )
-            .border(1.dp, borderColor, RoundedCornerShape(100.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(d.radiusPill))
             .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 5.dp),
+            .padding(horizontal = d.chipHorizPad, vertical = d.chipVertPad),
     ) {
         Text(
             text       = label,
             color      = if (selected) Color.White else White60,
-            fontSize   = 11.5.sp,
+            fontSize   = d.textXs,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
             maxLines   = 1,
         )
@@ -989,28 +985,29 @@ fun PremiumGenreBar(
     selectedId: Int?,
     onSelect: (Int?) -> Unit,
 ) {
+    val d = LocalDimensions.current
     Column {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.width(3.dp).height(14.dp)
-                    .clip(RoundedCornerShape(2.dp))
+                Modifier.width(d.sectionAccentWidth).height(d.sectionAccentHeight)
+                    .clip(RoundedCornerShape(d.spaceXxs))
                     .background(Brush.verticalGradient(listOf(Brand2, Brand)))
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
             Text(
                 "Browse by Genre",
-                color      = White60,
-                fontSize   = 12.sp,
-                fontWeight = FontWeight.SemiBold,
+                color         = White60,
+                fontSize      = d.textSm,
+                fontWeight    = FontWeight.SemiBold,
                 letterSpacing = 0.5.sp,
             )
         }
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
         ) {
             item { PremiumGenrePill("✦ All", selectedId == null) { onSelect(null) } }
             items(genres) { g -> PremiumGenrePill(g.name, selectedId == g.id) { onSelect(g.id) } }
@@ -1020,6 +1017,7 @@ fun PremiumGenreBar(
 
 @Composable
 fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     val animBorder by animateColorAsState(
         if (selected) Brand else GlassBorder, tween(200), label = "pillBorder"
     )
@@ -1029,21 +1027,21 @@ fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .scale(scale)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
             .background(
                 if (selected)
                     Brush.linearGradient(listOf(BrandDeep, Brand.copy(.85f)))
                 else
                     Brush.linearGradient(listOf(BgSurface, BgRaised))
             )
-            .border(1.dp, animBorder, RoundedCornerShape(10.dp))
+            .border(d.borderThin, animBorder, RoundedCornerShape(d.radiusMd - d.spaceXxs))
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .padding(horizontal = d.chipHorizPad + d.spaceXs, vertical = d.chipVertPad + d.spaceXs),
     ) {
         Text(
             text,
             color      = if (selected) Color.White else White60,
-            fontSize   = 12.sp,
+            fontSize   = d.textSm,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
         )
     }
@@ -1052,7 +1050,8 @@ fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
 // ── Load more skeleton ─────────────────────────────────────────────────────────
 @Composable
 fun LoadMoreSkeleton() {
-    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp)) { SkeletonRowLoader() }
+    val d = LocalDimensions.current
+    Box(Modifier.fillMaxWidth().padding(vertical = d.spaceMd - d.spaceXxs)) { SkeletonRowLoader() }
 }
 
 // ── Hero banner pager ──────────────────────────────────────────────────────────
@@ -1077,6 +1076,7 @@ fun HeroBannerPager(
         }
     }
 
+    val d = LocalDimensions.current
     val screenH = LocalConfiguration.current.screenHeightDp.dp
 
     Box(Modifier.fillMaxWidth()) {
@@ -1089,7 +1089,7 @@ fun HeroBannerPager(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(screenH * 0.48f)
+                    .height(screenH * d.heroImageRatio)
                     .clickable { onClick(media) }
                     .graphicsLayer {
                         alpha  = 1f - 0.12f * abs(pageOffset)
@@ -1120,54 +1120,54 @@ fun HeroBannerPager(
                     Brush.radialGradient(listOf(Color.Transparent, Brand.copy(0.04f)), radius = 900f)
                 ))
 
-                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
+                Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding)) {
                     Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(d.radiusSm))
                             .background(BlueGlass)
-                            .border(1.dp, BlueBorder, RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                            .border(1.dp, BlueBorder, RoundedCornerShape(d.radiusSm))
+                            .padding(horizontal = d.spaceMd, vertical = d.spaceXs),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
                     ) {
-                        PulsingDot(Modifier.size(5.dp))
-                        Text("FEATURED", color = Brand, fontSize = 9.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                        PulsingDot(Modifier.size(d.spaceXs + 1.dp))
+                        Text("FEATURED", color = Brand, fontSize = d.textXxs, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
                     }
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(d.spaceMd))
                     Text(
                         media.title,
-                        color      = White,
-                        fontWeight = FontWeight.Black,
-                        fontSize   = 28.sp,
-                        maxLines   = 2,
-                        overflow   = TextOverflow.Ellipsis,
+                        color         = White,
+                        fontWeight    = FontWeight.Black,
+                        fontSize      = d.textHero,
+                        maxLines      = 2,
+                        overflow      = TextOverflow.Ellipsis,
                         letterSpacing = (-0.5).sp,
-                        lineHeight = 34.sp,
+                        lineHeight    = (d.textHero.value * 1.25f).sp,
                     )
-                    Spacer(Modifier.height(7.dp))
+                    Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                     ) {
                         RatingChip(media.voteAverage)
-                        Box(Modifier.size(3.dp).clip(CircleShape).background(White40))
-                        Text(media.releaseDate?.take(4) ?: "", color = White60, fontSize = 13.sp)
-                        Box(Modifier.size(3.dp).clip(CircleShape).background(White40))
+                        Box(Modifier.size(d.spaceXxs + 1.dp).clip(CircleShape).background(White40))
+                        Text(media.releaseDate?.take(4) ?: "", color = White60, fontSize = d.textMd)
+                        Box(Modifier.size(d.spaceXxs + 1.dp).clip(CircleShape).background(White40))
                         Text(
                             if (media.mediaType == MediaType.TV) "TV Series" else "Movie",
-                            color = White60, fontSize = 13.sp,
+                            color = White60, fontSize = d.textMd,
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(d.spaceSm))
                     Text(
                         media.overview,
-                        color    = White60,
-                        fontSize = 13.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        lineHeight = 20.sp,
+                        color      = White60,
+                        fontSize   = d.textMd,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis,
+                        lineHeight = (d.textMd.value * 1.55f).sp,
                     )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(d.spaceLg))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1176,7 +1176,7 @@ fun HeroBannerPager(
                         BrandButton(
                             text  = "Watch Now",
                             onClick = { onClick(media) },
-                            icon  = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(16.dp)) },
+                            icon  = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconMd - 4.dp)) },
                         )
                         GhostButton(
                             text    = if (isWatchlisted) "✓ Saved" else "+ Watchlist",
@@ -1188,17 +1188,17 @@ fun HeroBannerPager(
         }
 
         Row(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            Modifier.align(Alignment.BottomCenter).padding(bottom = d.screenHorizPad),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             repeat(items.size) { i ->
                 val selected = pagerState.currentPage == i
-                val width by animateDpAsState(if (selected) 22.dp else 5.dp, spring(0.6f, 400f), label = "iw")
+                val width by animateDpAsState(if (selected) d.pageIndicatorWidthSelected else d.pageIndicatorWidth, spring(0.6f, 400f), label = "iw")
                 Box(
                     Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .width(width).height(5.dp)
+                        .clip(RoundedCornerShape(d.spaceXxs))
+                        .width(width).height(d.pageIndicatorHeight)
                         .background(
                             if (selected)
                                 Brush.horizontalGradient(listOf(Brand2, Brand))
@@ -1214,13 +1214,14 @@ fun HeroBannerPager(
 // ── Continue watching card ─────────────────────────────────────────────────────
 @Composable
 fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     val progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
 
-    Column(Modifier.width(168.dp).clickable(onClick = onClick)) {
+    Column(Modifier.width(d.continueCardWidth).clickable(onClick = onClick)) {
         Box(
-            Modifier.fillMaxWidth().height(96.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(12.dp))
+            Modifier.fillMaxWidth().height(d.continueCardThumbHeight)
+                .clip(RoundedCornerShape(d.radiusMd))
+                .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
                 .background(BgRaised)
         ) {
             AsyncImage(
@@ -1231,24 +1232,24 @@ fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
             )
             Box(Modifier.fillMaxSize().background(Color(0x55000000)), Alignment.Center) {
                 Box(
-                    Modifier.size(40.dp).clip(CircleShape)
+                    Modifier.size(d.buttonHeightMd - d.spaceXs).clip(CircleShape)
                         .background(Color(0x99000000))
                         .border(1.dp, White.copy(.3f), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(IconPlay, null, tint = White, modifier = Modifier.size(18.dp))
+                    Icon(IconPlay, null, tint = White, modifier = Modifier.size(d.iconMd - 2.dp))
                 }
             }
-            Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(White20))
+            Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(d.progressBarHeight).background(White20))
             Box(
                 Modifier.align(Alignment.BottomStart)
-                    .fillMaxWidth(progress).height(3.dp)
+                    .fillMaxWidth(progress).height(d.progressBarHeight)
                     .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
             )
         }
-        Spacer(Modifier.height(6.dp))
-        Text(h.title, color = White80, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-        if (h.season > 0) Text("S${h.season} · E${h.episode}", color = Brand.copy(.8f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(d.spaceSm))
+        Text(h.title, color = White80, fontSize = d.textSm, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+        if (h.season > 0) Text("S${h.season} · E${h.episode}", color = Brand.copy(.8f), fontSize = d.textXxs, fontWeight = FontWeight.SemiBold)
     }
 }
 

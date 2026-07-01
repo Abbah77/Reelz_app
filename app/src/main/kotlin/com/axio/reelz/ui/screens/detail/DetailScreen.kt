@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.vector.PathData
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -652,6 +653,7 @@ fun DownloadQualitySheet(
     maxResolutionHeight: Int = Int.MAX_VALUE,
     onLockedQualityTap: () -> Unit = {},
 ) {
+    val d = LocalDimensions.current
     // Scrim
     Box(
         Modifier
@@ -665,80 +667,80 @@ fun DownloadQualitySheet(
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .clip(RoundedCornerShape(topStart = d.radiusLg + d.spaceXs, topEnd = d.radiusLg + d.spaceXs))
                 .background(BgCard)
-                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .padding(horizontal = d.spaceXl - d.spaceXs, vertical = d.spaceXl - d.spaceXs)
                 .clickable(enabled = false) {},
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // Handle
-            Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(White40))
-            Spacer(Modifier.height(18.dp))
+            Box(Modifier.width(d.shimmerBarWidth + d.spaceXs).height(d.spaceXs).clip(RoundedCornerShape(d.spaceXxs)).background(White40))
+            Spacer(Modifier.height(d.spaceXl - d.spaceXxs))
 
             // Header row
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
             ) {
-                Icon(IconDownloadCloud, null, tint = Brand, modifier = Modifier.size(22.dp))
+                Icon(IconDownloadCloud, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         "Download",
                         color = White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
+                        fontSize = d.textXl,
                     )
                     Text(
                         title,
                         color = White60,
-                        fontSize = 12.sp,
+                        fontSize = d.textSm,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
                 IconButton(onClick = onDismiss) {
-                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(20.dp))
+                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconMd))
                 }
             }
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(d.spaceXl))
 
             when {
                 // ── Success state ──────────────────────────────────────────────
                 enqueued -> {
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(d.spaceSm + 1.dp))
                     Box(
-                        Modifier.size(56.dp).clip(CircleShape)
+                        Modifier.size(d.avatarMd + d.spaceLg - d.spaceXs).clip(CircleShape)
                             .background(Brand.copy(.12f))
-                            .border(1.dp, Brand.copy(.3f), CircleShape),
+                            .border(d.borderThin, Brand.copy(.3f), CircleShape),
                         Alignment.Center,
                     ) {
-                        Icon(IconCheckCircle, null, tint = Brand, modifier = Modifier.size(30.dp))
+                        Icon(IconCheckCircle, null, tint = Brand, modifier = Modifier.size(d.iconLg + 4.dp))
                     }
-                    Spacer(Modifier.height(12.dp))
-                    Text("Added to Downloads", color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text("You can watch it while it downloads.", color = White60, fontSize = 13.sp)
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(d.spaceMd + d.spaceXs))
+                    Text("Added to Downloads", color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
+                    Spacer(Modifier.height(d.spaceXs))
+                    Text("You can watch it while it downloads.", color = White60, fontSize = d.textMd)
+                    Spacer(Modifier.height(d.spaceXl))
                     BrandButton("Done", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
                 }
 
                 // ── Loading state ──────────────────────────────────────────────
                 isLoading -> {
-                    Spacer(Modifier.height(8.dp))
-                    CinematicSpinner(size = 32.dp)
-                    Spacer(Modifier.height(12.dp))
-                    Text("Fetching available qualities…", color = White60, fontSize = 13.sp)
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(d.spaceSm + 1.dp))
+                    CinematicSpinner(size = d.spinnerMd + 6.dp)
+                    Spacer(Modifier.height(d.spaceMd + d.spaceXs))
+                    Text("Fetching available qualities…", color = White60, fontSize = d.textMd)
+                    Spacer(Modifier.height(d.spaceLg))
                 }
 
                 // ── No streams ─────────────────────────────────────────────────
                 qualities.isEmpty() -> {
-                    Spacer(Modifier.height(8.dp))
-                    Icon(IconError, null, tint = White40, modifier = Modifier.size(32.dp))
-                    Spacer(Modifier.height(10.dp))
-                    Text("No downloadable streams found", color = White60, fontSize = 13.sp)
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(d.spaceSm + 1.dp))
+                    Icon(IconError, null, tint = White40, modifier = Modifier.size(d.spinnerMd + 6.dp))
+                    Spacer(Modifier.height(d.spaceMd))
+                    Text("No downloadable streams found", color = White60, fontSize = d.textMd)
+                    Spacer(Modifier.height(d.spaceLg))
                 }
 
                 // ── Quality list ───────────────────────────────────────────────
@@ -746,10 +748,10 @@ fun DownloadQualitySheet(
                     Text(
                         "Choose quality",
                         color = White60,
-                        fontSize = 12.sp,
+                        fontSize = d.textSm,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(d.spaceMd + d.spaceXs))
 
                     qualities.forEachIndexed { index, track ->
                         // Human-readable label from resolution code
@@ -776,39 +778,39 @@ fun DownloadQualitySheet(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
+                                .clip(RoundedCornerShape(d.radiusLg - d.spaceXs))
                                 .background(if (isLocked) GlassSm else if (isBest) Brand.copy(.07f) else BgRaised)
                                 .border(
-                                    width = if (!isLocked && isBest) 1.5.dp else 1.dp,
+                                    width = if (!isLocked && isBest) d.borderMed else d.borderThin,
                                     color = if (isLocked) GlassBorderMd else if (isBest) Brand.copy(.35f) else GlassBorderMd,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = RoundedCornerShape(d.radiusLg - d.spaceXs),
                                 )
                                 .clickable {
                                     if (isLocked) onLockedQualityTap() else onSelectQuality(track)
                                 }
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                                .padding(horizontal = d.spaceLg, vertical = d.spaceLg - d.spaceXs),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXs),
                         ) {
                             // Resolution badge
                             Box(
                                 Modifier
-                                    .width(60.dp)
-                                    .clip(RoundedCornerShape(10.dp))
+                                    .width(d.avatarMd + d.spaceMd - d.spaceXxs)
+                                    .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                     .background(if (isLocked) GlassSm else if (isBest) Brand.copy(.18f) else GlassSm)
                                     .border(
-                                        1.dp,
+                                        d.borderThin,
                                         if (isLocked) GlassBorderMd else if (isBest) Brand.copy(.4f) else GlassBorderMd,
-                                        RoundedCornerShape(10.dp),
+                                        RoundedCornerShape(d.radiusMd - d.spaceXxs),
                                     )
-                                    .padding(vertical = 8.dp),
+                                    .padding(vertical = d.spaceSm + d.spaceXxs),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     track.label,
                                     color = if (isLocked) White40 else if (isBest) Brand else White,
                                     fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 14.sp,
+                                    fontSize = d.textMd + 1.sp,
                                 )
                             }
 
@@ -816,30 +818,30 @@ fun DownloadQualitySheet(
                             Column(Modifier.weight(1f)) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                                 ) {
                                     Text(
                                         descLabel,
                                         color = if (isLocked) White40 else White,
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = 14.sp,
+                                        fontSize = d.textMd + 1.sp,
                                     )
                                     when {
                                         isLocked -> {
                                             Row(
                                                 Modifier
-                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .clip(RoundedCornerShape(d.spaceXs))
                                                     .background(Brand.copy(.15f))
-                                                    .border(1.dp, Brand.copy(.35f), RoundedCornerShape(4.dp))
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    .border(d.borderThin, Brand.copy(.35f), RoundedCornerShape(d.spaceXs))
+                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
                                             ) {
-                                                Icon(IconLock, null, tint = Brand, modifier = Modifier.size(8.dp))
+                                                Icon(IconLock, null, tint = Brand, modifier = Modifier.size(d.iconXs - 1.dp))
                                                 Text(
                                                     "PREMIUM",
                                                     color = Brand,
-                                                    fontSize = 9.sp,
+                                                    fontSize = d.textXxs,
                                                     fontWeight = FontWeight.ExtraBold,
                                                     letterSpacing = 0.5.sp,
                                                 )
@@ -848,15 +850,15 @@ fun DownloadQualitySheet(
                                         isBest -> {
                                             Box(
                                                 Modifier
-                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .clip(RoundedCornerShape(d.spaceXs))
                                                     .background(Brand.copy(.15f))
-                                                    .border(1.dp, Brand.copy(.3f), RoundedCornerShape(4.dp))
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    .border(d.borderThin, Brand.copy(.3f), RoundedCornerShape(d.spaceXs))
+                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
                                             ) {
                                                 Text(
                                                     "BEST",
                                                     color = Brand,
-                                                    fontSize = 9.sp,
+                                                    fontSize = d.textXxs,
                                                     fontWeight = FontWeight.ExtraBold,
                                                     letterSpacing = 0.5.sp,
                                                 )
@@ -865,15 +867,15 @@ fun DownloadQualitySheet(
                                         isSmall -> {
                                             Box(
                                                 Modifier
-                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .clip(RoundedCornerShape(d.spaceXs))
                                                     .background(GlassSm)
-                                                    .border(1.dp, GlassBorderMd, RoundedCornerShape(4.dp))
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.spaceXs))
+                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
                                             ) {
                                                 Text(
                                                     "SMALLEST",
                                                     color = White40,
-                                                    fontSize = 9.sp,
+                                                    fontSize = d.textXxs,
                                                     fontWeight = FontWeight.Bold,
                                                     letterSpacing = 0.5.sp,
                                                 )
@@ -881,26 +883,26 @@ fun DownloadQualitySheet(
                                         }
                                     }
                                 }
-                                Spacer(Modifier.height(3.dp))
+                                Spacer(Modifier.height(d.spaceXxs + 1.dp))
                                 when {
                                     isLocked ->
                                         Text(
                                             "Upgrade to download in this quality",
                                             color = White40,
-                                            fontSize = 12.sp,
+                                            fontSize = d.textSm,
                                         )
                                     track.estimatedSizeBytes > 0 ->
                                         Text(
                                             "~${formatSize(track.estimatedSizeBytes)}",
                                             color = if (isBest) Brand.copy(.8f) else White60,
-                                            fontSize = 13.sp,
+                                            fontSize = d.textMd,
                                             fontWeight = if (isBest) FontWeight.SemiBold else FontWeight.Normal,
                                         )
                                     track.bandwidth > 0 ->
                                         Text(
                                             "${"%.1f".format(track.bandwidth / 1_000_000.0)} Mbps",
                                             color = White40,
-                                            fontSize = 12.sp,
+                                            fontSize = d.textSm,
                                         )
                                 }
                             }
@@ -910,16 +912,16 @@ fun DownloadQualitySheet(
                                 if (isLocked) IconLock else IconDownloadCloud,
                                 null,
                                 tint = if (isLocked) White40 else if (isBest) Brand else White40,
-                                modifier = Modifier.size(if (isLocked) 18.dp else 22.dp),
+                                modifier = Modifier.size(if (isLocked) d.iconMd - 2.dp else d.iconMd + 2.dp),
                             )
                         }
 
-                        if (index < qualities.lastIndex) Spacer(Modifier.height(8.dp))
+                        if (index < qualities.lastIndex) Spacer(Modifier.height(d.spaceMd))
                     }
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(d.spaceMd + d.spaceXs))
             Spacer(Modifier.navigationBarsPadding())
         }
     }
@@ -931,6 +933,7 @@ fun DownloadCapSheet(
     onDismiss: () -> Unit,
     onUpgrade: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     Box(
         Modifier
             .fillMaxSize()
@@ -942,44 +945,44 @@ fun DownloadCapSheet(
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .clip(RoundedCornerShape(topStart = d.radiusLg + d.spaceXs, topEnd = d.radiusLg + d.spaceXs))
                 .background(BgCard)
-                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .padding(horizontal = d.spaceXl - d.spaceXs, vertical = d.spaceXl - d.spaceXs)
                 .clickable(enabled = false) {},
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(White40))
-            Spacer(Modifier.height(18.dp))
+            Box(Modifier.width(d.shimmerBarWidth + d.spaceXs).height(d.spaceXs).clip(RoundedCornerShape(d.spaceXxs)).background(White40))
+            Spacer(Modifier.height(d.spaceXl - d.spaceXxs))
 
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
             ) {
-                Icon(IconDownloadCloud, null, tint = Brand, modifier = Modifier.size(22.dp))
+                Icon(IconDownloadCloud, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Download limit reached", color = White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text("Free plan", color = White60, fontSize = 12.sp)
+                    Text("Download limit reached", color = White, fontWeight = FontWeight.Bold, fontSize = d.textXl)
+                    Text("Free plan", color = White60, fontSize = d.textSm)
                 }
                 IconButton(onClick = onDismiss) {
-                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(20.dp))
+                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconMd))
                 }
             }
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(d.spaceXl))
 
             Text(
                 "You've reached your download limit for the free plan. Delete an existing download to free up space, or go Premium for unlimited downloads in up to 4K.",
                 color      = White60,
-                fontSize   = 13.sp,
+                fontSize   = d.textMd,
                 textAlign  = TextAlign.Center,
-                lineHeight = 19.sp,
+                lineHeight = (d.textMd.value * 1.45f).sp,
             )
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(d.spaceXl))
 
             BrandButton("Upgrade to Premium", onClick = onUpgrade, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(d.spaceMd))
             TextButton(onClick = onDismiss) {
-                Text("Manage downloads instead", color = White60, fontSize = 13.sp)
+                Text("Manage downloads instead", color = White60, fontSize = d.textMd)
             }
             Spacer(Modifier.navigationBarsPadding())
         }
@@ -993,6 +996,7 @@ fun ResolutionLockSheet(
     onDismiss: () -> Unit,
     onUpgrade: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     Box(
         Modifier
             .fillMaxSize()
@@ -1004,47 +1008,47 @@ fun ResolutionLockSheet(
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .clip(RoundedCornerShape(topStart = d.radiusLg + d.spaceXs, topEnd = d.radiusLg + d.spaceXs))
                 .background(BgCard)
-                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .padding(horizontal = d.spaceXl - d.spaceXs, vertical = d.spaceXl - d.spaceXs)
                 .clickable(enabled = false) {},
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(White40))
-            Spacer(Modifier.height(18.dp))
+            Box(Modifier.width(d.shimmerBarWidth + d.spaceXs).height(d.spaceXs).clip(RoundedCornerShape(d.spaceXxs)).background(White40))
+            Spacer(Modifier.height(d.spaceXl - d.spaceXxs))
 
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
             ) {
                 Box(
-                    Modifier.size(40.dp).clip(CircleShape).background(Brand.copy(.15f)),
+                    Modifier.size(d.buttonHeightMd - d.spaceXxs).clip(CircleShape).background(Brand.copy(.15f)),
                     Alignment.Center,
-                ) { Icon(IconLock, null, tint = Brand, modifier = Modifier.size(18.dp)) }
+                ) { Icon(IconLock, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp)) }
                 Column(Modifier.weight(1f)) {
-                    Text("Higher quality is Premium", color = White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text("Free plan downloads up to $allowedLabel", color = White60, fontSize = 12.sp)
+                    Text("Higher quality is Premium", color = White, fontWeight = FontWeight.Bold, fontSize = d.textXl)
+                    Text("Free plan downloads up to $allowedLabel", color = White60, fontSize = d.textSm)
                 }
                 IconButton(onClick = onDismiss) {
-                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(20.dp))
+                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconMd))
                 }
             }
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(d.spaceXl))
 
             Text(
                 "Upgrade to Premium to download in up to 4K, with no resolution limits and no ads.",
                 color      = White60,
-                fontSize   = 13.sp,
+                fontSize   = d.textMd,
                 textAlign  = TextAlign.Center,
-                lineHeight = 19.sp,
+                lineHeight = (d.textMd.value * 1.45f).sp,
             )
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(d.spaceXl))
 
             BrandButton("Upgrade to Premium", onClick = onUpgrade, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(d.spaceMd))
             TextButton(onClick = onDismiss) {
-                Text("Continue with $allowedLabel", color = White60, fontSize = 13.sp)
+                Text("Continue with $allowedLabel", color = White60, fontSize = d.textMd)
             }
             Spacer(Modifier.navigationBarsPadding())
         }
@@ -1067,12 +1071,14 @@ private fun DetailContent(
 ) {
     val detail  = ui.detail!!
     val isMovie = detail.mediaType == MediaType.MOVIE
+    val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 90.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = d.spaceXxl * 2.8f)) {
 
         // ── Backdrop hero ──────────────────────────────────────────────────
         item {
-            Box(Modifier.fillMaxWidth().height(420.dp)) {
+            Box(Modifier.fillMaxWidth().height(screenH * 0.46f)) {
                 AsyncImage(
                     model = BuildConfig.TMDB_IMG_ORIGINAL + detail.backdropPath,
                     contentDescription = null,
@@ -1085,38 +1091,38 @@ private fun DetailContent(
                 // Back button
                 IconButton(
                     onClick = onBack,
-                    modifier = Modifier.statusBarsPadding().padding(8.dp)
+                    modifier = Modifier.statusBarsPadding().padding(d.spaceSm)
                         .clip(CircleShape).background(Color.Black.copy(.5f))
                 ) { Icon(IconArrowLeft, null, tint = White) }
 
                 // Poster + meta
-                Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding - d.spaceXs)) {
+                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs)) {
                         AsyncImage(
                             model = BuildConfig.TMDB_IMG_W342 + detail.posterPath,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.width(90.dp).height(134.dp)
-                                .clip(RoundedCornerShape(12.dp)).background(BgRaised),
+                            modifier = Modifier.width(d.cardPosterWidth - d.spaceXs).height(d.cardPosterHeight - d.spaceXxl)
+                                .clip(RoundedCornerShape(d.radiusMd)).background(BgRaised),
                         )
-                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text(detail.title, color = White, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Column(verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
+                            Text(detail.title, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             if (!detail.tagline.isNullOrBlank())
-                                Text(detail.tagline, color = White60, fontSize = 12.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(detail.tagline, color = White60, fontSize = d.textSm, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Row(horizontalArrangement = Arrangement.spacedBy(d.spaceSm), verticalAlignment = Alignment.CenterVertically) {
                                 RatingChip(detail.voteAverage)
                                 Text("•", color = White40)
-                                Text(detail.releaseDate?.take(4) ?: "", color = White60, fontSize = 13.sp)
-                                if (detail.runtime != null) { Text("•", color = White40); Text(formatRuntime(detail.runtime), color = White60, fontSize = 13.sp) }
-                                if (!isMovie) { Text("•", color = White40); Text("${detail.numberOfSeasons}S", color = White60, fontSize = 13.sp) }
+                                Text(detail.releaseDate?.take(4) ?: "", color = White60, fontSize = d.textMd)
+                                if (detail.runtime != null) { Text("•", color = White40); Text(formatRuntime(detail.runtime), color = White60, fontSize = d.textMd) }
+                                if (!isMovie) { Text("•", color = White40); Text("${detail.numberOfSeasons}S", color = White60, fontSize = d.textMd) }
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                                 detail.genres.take(3).forEach { g ->
                                     Box(
-                                        Modifier.clip(RoundedCornerShape(5.dp)).background(BgSurface)
-                                            .border(1.dp, GlassBorderMd, RoundedCornerShape(5.dp))
-                                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                                    ) { Text(g.name, color = White60, fontSize = 11.sp) }
+                                        Modifier.clip(RoundedCornerShape(d.radiusSm)).background(BgSurface)
+                                            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusSm))
+                                            .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceXxs + 1.dp)
+                                    ) { Text(g.name, color = White60, fontSize = d.textXs) }
                                 }
                             }
                         }
@@ -1127,38 +1133,38 @@ private fun DetailContent(
 
         // ── Action row ─────────────────────────────────────────────────────
         item {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceMd + d.spaceXs), horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs)) {
                 if (isMovie) {
                     BrandButton(
                         text     = "Watch Now",
                         onClick  = onPlayMovie,
                         modifier = Modifier.weight(1f),
-                        icon     = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(20.dp)) },
+                        icon     = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconMd)) },
                     )
                     // ── Download button (movies only, like MovieBox) ────────
                     OutlinedButton(
                         onClick  = onDownloadMovie,
-                        shape    = RoundedCornerShape(100.dp),
-                        border   = BorderStroke(1.dp, GlassBorderMd),
-                        modifier = Modifier.height(48.dp),
+                        shape    = RoundedCornerShape(d.radiusPill),
+                        border   = BorderStroke(d.borderThin, GlassBorderMd),
+                        modifier = Modifier.height(d.buttonHeightMd),
                     ) {
-                        Icon(IconDownloadCloud, null, tint = White80, modifier = Modifier.size(18.dp))
+                        Icon(IconDownloadCloud, null, tint = White80, modifier = Modifier.size(d.iconMd - 2.dp))
                     }
                 }
                 // Watchlist button
                 OutlinedButton(
                     onClick  = onWatchlist,
-                    shape    = RoundedCornerShape(100.dp),
-                    border   = BorderStroke(1.dp, if (ui.isInWatchlist) Brand else GlassBorderMd),
-                    modifier = Modifier.height(48.dp).let { if (isMovie) it else it.weight(1f) },
+                    shape    = RoundedCornerShape(d.radiusPill),
+                    border   = BorderStroke(d.borderThin, if (ui.isInWatchlist) Brand else GlassBorderMd),
+                    modifier = Modifier.height(d.buttonHeightMd).let { if (isMovie) it else it.weight(1f) },
                 ) {
                     Icon(
                         if (ui.isInWatchlist) IconBookmarkFill else IconBookmarkOutline,
                         null,
                         tint = if (ui.isInWatchlist) Brand else White60,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(d.iconMd - 2.dp),
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(d.spaceXs + 1.dp))
                     Text(if (ui.isInWatchlist) "Saved" else "Save", color = if (ui.isInWatchlist) Brand else White60)
                 }
             }
@@ -1167,14 +1173,14 @@ private fun DetailContent(
         // ── Overview ───────────────────────────────────────────────────────
         item {
             var expanded by remember { mutableStateOf(false) }
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                Text("Overview", color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Spacer(Modifier.height(8.dp))
+            Column(Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceXs)) {
+                Text("Overview", color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
+                Spacer(Modifier.height(d.spaceSm))
                 Text(
                     detail.overview,
                     color = White60,
-                    fontSize = 13.sp,
-                    lineHeight = 20.sp,
+                    fontSize = d.textMd,
+                    lineHeight = (d.textMd.value * 1.55f).sp,
                     maxLines = if (expanded) Int.MAX_VALUE else 3,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1182,8 +1188,8 @@ private fun DetailContent(
                     Text(
                         if (expanded) "Show less" else "Show more",
                         color = Brand,
-                        fontSize = 12.sp,
-                        modifier = Modifier.clickable { expanded = !expanded }.padding(top = 4.dp),
+                        fontSize = d.textSm,
+                        modifier = Modifier.clickable { expanded = !expanded }.padding(top = d.spaceXs),
                     )
                 }
             }
@@ -1193,8 +1199,8 @@ private fun DetailContent(
         if (isMovie && (detail.runtime != null || detail.status != null)) {
             item {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceSm + d.spaceXxs),
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceLg),
                 ) {
                     detail.runtime?.let { MetaChip("Runtime", formatRuntime(it)) }
                     detail.status?.let   { MetaChip("Status", it) }
@@ -1208,24 +1214,24 @@ private fun DetailContent(
             item {
                 SectionHeader("Episodes")
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = d.screenHorizPad + d.spaceXs),
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
                 ) {
                     items(detail.seasons) { s ->
                         val sel = ui.selectedSeason == s.seasonNumber
                         Box(
                             Modifier
-                                .clip(RoundedCornerShape(100.dp))
+                                .clip(RoundedCornerShape(d.radiusPill))
                                 .background(if (sel) Brand else GlassMd)
-                                .border(1.dp, if (sel) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(100.dp))
+                                .border(d.borderThin, if (sel) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusPill))
                                 .clickable { onSeasonSelect(s.seasonNumber) }
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                .padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
                         ) {
                             Text(
                                 "S${s.seasonNumber}",
                                 color = if (sel) Color.White else White60,
                                 fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 13.sp,
+                                fontSize = d.textMd,
                             )
                         }
                     }
@@ -1233,7 +1239,7 @@ private fun DetailContent(
             }
 
             if (ui.isEpisodesLoading) {
-                item { Box(Modifier.fillMaxWidth().height(120.dp), Alignment.Center) { CinematicSpinner() } }
+                item { Box(Modifier.fillMaxWidth().height(d.spaceXxl * 3.75f), Alignment.Center) { CinematicSpinner() } }
             } else {
                 items(ui.episodes, key = { it.id }) { ep ->
                     EpisodeRow(
@@ -1253,8 +1259,8 @@ private fun DetailContent(
             item { SectionHeader("Cast") }
             item {
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(horizontal = d.screenHorizPad + d.spaceXs),
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
                 ) {
                     items(detail.cast, key = { it.id }) { c ->
                         CastCard(c)
@@ -1271,8 +1277,8 @@ private fun DetailContent(
             item { SectionHeader("More Like This") }
             item {
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(horizontal = d.screenHorizPad + d.spaceXs),
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs),
                 ) {
                     items(detail.similar, key = { it.tmdbId }) { m ->
                         com.axio.reelz.ui.components.MediaRowCard(m, onClick = { onSimilarClick(m.tmdbId, m.mediaType) })
@@ -1290,16 +1296,17 @@ fun EpisodeRow(
     onClick: () -> Unit,
     onDownload: () -> Unit = {},
 ) {
+    val d = LocalDimensions.current
     Row(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceSm + d.spaceXxs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
         Box(
-            Modifier.width(110.dp).height(64.dp).clip(RoundedCornerShape(12.dp)).background(BgRaised),
+            Modifier.width(d.avatarLg + d.spaceXxl - d.spaceXs).height(d.continueCardThumbHeight - d.spaceMd + d.spaceXxs).clip(RoundedCornerShape(d.radiusMd)).background(BgRaised),
         ) {
             if (episode.stillPath != null) {
                 AsyncImage(
@@ -1310,32 +1317,33 @@ fun EpisodeRow(
                 )
             }
             Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
-                Icon(IconPlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(26.dp))
+                Icon(IconPlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(d.iconLg))
             }
         }
         Column(Modifier.weight(1f)) {
-            Text("E${episode.episodeNumber} · ${episode.name}", color = White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(3.dp))
-            Text(episode.overview.ifBlank { "No description." }, color = White60, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
+            Text("E${episode.episodeNumber} · ${episode.name}", color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(d.spaceXxs + 1.dp))
+            Text(episode.overview.ifBlank { "No description." }, color = White60, fontSize = d.textXs, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = (d.textXs.value * 1.45f).sp)
             episode.runtime?.let {
-                Spacer(Modifier.height(3.dp))
-                Text("${it}m", color = White40, fontSize = 10.sp)
+                Spacer(Modifier.height(d.spaceXxs + 1.dp))
+                Text("${it}m", color = White40, fontSize = d.textXxs)
             }
         }
         // Download icon for each episode
-        IconButton(onClick = onDownload, modifier = Modifier.size(36.dp)) {
-            Icon(IconDownloadCloud, null, tint = White60, modifier = Modifier.size(18.dp))
+        IconButton(onClick = onDownload, modifier = Modifier.size(d.buttonHeightSm)) {
+            Icon(IconDownloadCloud, null, tint = White60, modifier = Modifier.size(d.iconMd - 2.dp))
         }
-        Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(20.dp))
+        Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconMd))
     }
-    Divider(color = GlassBorder, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 16.dp))
+    Divider(color = GlassBorder, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs))
 }
 
 // ── Cast card ─────────────────────────────────────────────────────────────────
 @Composable
 fun CastCard(cast: CastMember) {
-    Column(Modifier.width(72.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(64.dp).clip(CircleShape).background(BgRaised)) {
+    val d = LocalDimensions.current
+    Column(Modifier.width(d.avatarLg + d.spaceLg - d.spaceXxs), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(d.avatarLg).clip(CircleShape).background(BgRaised)) {
             if (cast.profilePath != null) {
                 AsyncImage(
                     model = BuildConfig.TMDB_IMG_W342 + cast.profilePath,
@@ -1344,21 +1352,22 @@ fun CastCard(cast: CastMember) {
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                Icon(IconUser, null, tint = White40, modifier = Modifier.fillMaxSize().padding(12.dp))
+                Icon(IconUser, null, tint = White40, modifier = Modifier.fillMaxSize().padding(d.spaceMd))
             }
         }
-        Spacer(Modifier.height(5.dp))
-        Text(cast.name, color = White80, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = 13.sp)
-        Text(cast.character, color = White40, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(d.spaceXs + 1.dp))
+        Text(cast.name, color = White80, fontSize = d.textXxs + 1.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = ((d.textXxs.value + 1) * 1.3f).sp)
+        Text(cast.character, color = White40, fontSize = d.textXxs, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
     }
 }
 
 // ── Meta chip ─────────────────────────────────────────────────────────────────
 @Composable
 fun MetaChip(label: String, value: String) {
+    val d = LocalDimensions.current
     Column {
-        Text(label, color = White40, fontSize = 10.sp)
-        Text(value, color = White80, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(label, color = White40, fontSize = d.textXxs)
+        Text(value, color = White80, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -1450,33 +1459,35 @@ private fun ShimmerBox(modifier: Modifier, radius: androidx.compose.ui.unit.Dp =
 /** Full-screen skeleton shown while Stage 1 (fast detail) is loading. */
 @Composable
 fun DetailSkeleton() {
+    val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
     Column(Modifier.fillMaxSize().background(Bg)) {
         // Backdrop placeholder
         ShimmerBox(
-            Modifier.fillMaxWidth().height(420.dp),
+            Modifier.fillMaxWidth().height(screenH * 0.46f),
             radius = 0.dp,
         )
-        Spacer(Modifier.height(16.dp))
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Spacer(Modifier.height(d.spaceMd + d.spaceXs))
+        Column(Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs), verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs)) {
             // Title
-            ShimmerBox(Modifier.fillMaxWidth(0.7f).height(26.dp))
+            ShimmerBox(Modifier.fillMaxWidth(0.7f).height(d.textXxl + 4.dp), radius = d.radiusSm)
             // Subtitle line
-            ShimmerBox(Modifier.fillMaxWidth(0.45f).height(14.dp))
-            Spacer(Modifier.height(4.dp))
+            ShimmerBox(Modifier.fillMaxWidth(0.45f).height(d.textLg - 1.dp), radius = d.radiusSm)
+            Spacer(Modifier.height(d.spaceXs))
             // Genre pills
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ShimmerBox(Modifier.width(64.dp).height(24.dp), radius = 12.dp)
-                ShimmerBox(Modifier.width(64.dp).height(24.dp), radius = 12.dp)
-                ShimmerBox(Modifier.width(64.dp).height(24.dp), radius = 12.dp)
+            Row(horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
+                ShimmerBox(Modifier.width(d.avatarMd + d.spaceLg - d.spaceXs).height(d.spaceXl), radius = d.radiusMd - d.spaceXxs)
+                ShimmerBox(Modifier.width(d.avatarMd + d.spaceLg - d.spaceXs).height(d.spaceXl), radius = d.radiusMd - d.spaceXxs)
+                ShimmerBox(Modifier.width(d.avatarMd + d.spaceLg - d.spaceXs).height(d.spaceXl), radius = d.radiusMd - d.spaceXxs)
             }
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(d.spaceXs))
             // Play button
-            ShimmerBox(Modifier.fillMaxWidth().height(48.dp), radius = 14.dp)
-            Spacer(Modifier.height(4.dp))
+            ShimmerBox(Modifier.fillMaxWidth().height(d.buttonHeightMd), radius = d.radiusMd - d.spaceXs)
+            Spacer(Modifier.height(d.spaceXs))
             // Overview lines
-            ShimmerBox(Modifier.fillMaxWidth().height(13.dp))
-            ShimmerBox(Modifier.fillMaxWidth().height(13.dp))
-            ShimmerBox(Modifier.fillMaxWidth(0.6f).height(13.dp))
+            ShimmerBox(Modifier.fillMaxWidth().height(d.textMd), radius = d.radiusSm)
+            ShimmerBox(Modifier.fillMaxWidth().height(d.textMd), radius = d.radiusSm)
+            ShimmerBox(Modifier.fillMaxWidth(0.6f).height(d.textMd), radius = d.radiusSm)
         }
     }
 }
@@ -1484,18 +1495,19 @@ fun DetailSkeleton() {
 /** Skeleton row for the Cast section while extras are loading. */
 @Composable
 fun CastRowSkeleton() {
+    val d = LocalDimensions.current
     Row(
-        Modifier.padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
         repeat(5) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(d.spaceSm),
             ) {
-                ShimmerBox(Modifier.size(64.dp), radius = 32.dp)
-                ShimmerBox(Modifier.width(56.dp).height(10.dp))
-                ShimmerBox(Modifier.width(44.dp).height(9.dp))
+                ShimmerBox(Modifier.size(d.avatarLg), radius = d.avatarLg / 2)
+                ShimmerBox(Modifier.width(d.avatarMd + d.spaceLg - d.spaceXs - d.spaceXxs).height(d.textXs))
+                ShimmerBox(Modifier.width(d.avatarMd - d.spaceXxs).height(d.textXxs))
             }
         }
     }
@@ -1504,15 +1516,16 @@ fun CastRowSkeleton() {
 /** Skeleton row for the Similar / More Like This section while extras are loading. */
 @Composable
 fun MediaRowSkeleton() {
+    val d = LocalDimensions.current
     Row(
-        Modifier.padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs),
     ) {
         repeat(4) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                ShimmerBox(Modifier.width(120.dp).height(170.dp), radius = 10.dp)
-                ShimmerBox(Modifier.width(100.dp).height(11.dp))
-                ShimmerBox(Modifier.width(72.dp).height(10.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
+                ShimmerBox(Modifier.width(d.cardRowWidth).height(d.cardRowHeight), radius = d.radiusMd - d.spaceXs)
+                ShimmerBox(Modifier.width(d.cardRowWidth - d.spaceMd).height(d.textXs + 1.dp))
+                ShimmerBox(Modifier.width(d.cardRowWidth - d.spaceXl - d.spaceXs).height(d.textXxs))
             }
         }
     }

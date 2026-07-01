@@ -355,6 +355,7 @@ fun PlayerScreen(
     val player  by vm.exoPlayerFlow.collectAsState()
     val scope   = rememberCoroutineScope()
     val density = LocalDensity.current
+    val d       = LocalDimensions.current
 
     LaunchedEffect(tmdbId, season, episode) {
         vm.init(ctx, tmdbId, mediaType, season, episode, title, poster,
@@ -503,19 +504,19 @@ fun PlayerScreen(
             visible = ui.networkState is NetworkState.Disconnected && !ui.isOfflinePlayback,
             enter   = slideInVertically { -it } + fadeIn(),
             exit    = slideOutVertically { -it } + fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 60.dp),
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = d.buttonHeightMd + d.spaceXl),
         ) {
             Row(
                 Modifier
-                    .clip(RoundedCornerShape(100.dp))
+                    .clip(RoundedCornerShape(d.radiusPill))
                     .background(Color(0xCC1A1000))
-                    .border(1.dp, Color(0x55FF9A00), RoundedCornerShape(100.dp))
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .border(d.borderThin, Color(0x55FF9A00), RoundedCornerShape(d.radiusPill))
+                    .padding(horizontal = d.spaceMd, vertical = d.spaceSm + d.spaceXxs),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
             ) {
-                Icon(IconWifi, null, tint = Warning, modifier = Modifier.size(16.dp))
-                Text("No internet connection", color = Warning, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Icon(IconWifi, null, tint = Warning, modifier = Modifier.size(d.iconMd - 4.dp))
+                Text("No internet connection", color = Warning, fontSize = d.textSm, fontWeight = FontWeight.Medium)
             }
         }
 
@@ -541,12 +542,12 @@ fun PlayerScreen(
             Box(Modifier.fillMaxSize(), Alignment.Center) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXs),
                 ) {
-                    CinematicSpinner(size = 56.dp)
+                    CinematicSpinner(size = d.spaceXxl * 1.75f)
                     Text(
                         if (ui.state is PlayerState.Resolving) "Finding best stream…" else "Buffering…",
-                        color = White60, fontSize = 14.sp,
+                        color = White60, fontSize = d.textLg,
                     )
                 }
             }
@@ -561,30 +562,30 @@ fun PlayerScreen(
             Box(Modifier.fillMaxSize().background(Color(0xCC000000)), Alignment.Center) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(36.dp),
+                    verticalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
+                    modifier = Modifier.padding(d.spaceXxl + d.spaceXs),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Box(
-                            Modifier.size(80.dp).clip(CircleShape)
+                            Modifier.size(d.avatarLg + d.spaceXl - d.spaceXs).clip(CircleShape)
                                 .background(Brush.radialGradient(listOf(Error.copy(.2f), Color.Transparent)))
-                                .border(1.dp, Error.copy(.4f), CircleShape)
+                                .border(d.borderThin, Error.copy(.4f), CircleShape)
                         )
-                        Icon(IconError, null, tint = Error, modifier = Modifier.size(34.dp))
+                        Icon(IconError, null, tint = Error, modifier = Modifier.size(d.iconXl - 2.dp))
                     }
                     Text(
                         errorState?.msg ?: "",
-                        color = White80, fontSize = 15.sp,
-                        textAlign = TextAlign.Center, lineHeight = 22.sp,
+                        color = White80, fontSize = d.textXl - 2.sp,
+                        textAlign = TextAlign.Center, lineHeight = (d.textXl.value * 1.4f).sp,
                     )
                     // Extra note for network errors
                     if (errorState?.isNetworkError == true) {
                         Text(
                             "Playback will resume automatically when connection is restored.",
-                            color = White40, fontSize = 12.sp, textAlign = TextAlign.Center,
+                            color = White40, fontSize = d.textSm, textAlign = TextAlign.Center,
                         )
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs)) {
                         GhostButton("Go Back", onClick = onBack)
                         if (errorState?.isNetworkError != true) {
                             BrandButton("Retry", onClick = { vm.retry() })
@@ -616,11 +617,11 @@ fun PlayerScreen(
             Box(Modifier.fillMaxSize()) {
                 // Scrims
                 Box(
-                    Modifier.fillMaxWidth().height(140.dp)
+                    Modifier.fillMaxWidth().height(d.spaceXxl * 4.4f)
                         .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
                 )
                 Box(
-                    Modifier.fillMaxWidth().height(180.dp).align(Alignment.BottomCenter)
+                    Modifier.fillMaxWidth().height(d.spaceXxl * 5.6f).align(Alignment.BottomCenter)
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD000000))))
                 )
 
@@ -629,47 +630,47 @@ fun PlayerScreen(
                     Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = d.spaceMd, vertical = d.spaceSm + d.spaceXxs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(
-                        Modifier.size(40.dp).clip(CircleShape)
+                        Modifier.size(d.buttonHeightMd - d.spaceXxs).clip(CircleShape)
                             .background(GlassMd)
-                            .border(1.dp, GlassBorderMd, CircleShape)
+                            .border(d.borderThin, GlassBorderMd, CircleShape)
                             .clickable(onClick = onBack),
                         Alignment.Center,
                     ) {
-                        Icon(IconArrowLeft, null, tint = White, modifier = Modifier.size(20.dp))
+                        Icon(IconArrowLeft, null, tint = White, modifier = Modifier.size(d.iconMd))
                     }
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(d.spaceMd))
                     Column(Modifier.weight(1f)) {
-                        Text(ui.title, color = White, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1)
+                        Text(ui.title, color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg, maxLines = 1)
                         if (ui.episodeLabel.isNotBlank()) {
-                            Text(ui.episodeLabel, color = White60, fontSize = 12.sp)
+                            Text(ui.episodeLabel, color = White60, fontSize = d.textMd)
                         }
                     }
                     Box(
-                        Modifier.size(40.dp).clip(CircleShape)
+                        Modifier.size(d.buttonHeightMd - d.spaceXxs).clip(CircleShape)
                             .background(if (ui.isLocked) AmberGlass else GlassMd)
-                            .border(1.dp, if (ui.isLocked) AmberBorder else GlassBorderMd, CircleShape)
+                            .border(d.borderThin, if (ui.isLocked) AmberBorder else GlassBorderMd, CircleShape)
                             .clickable { vm.toggleLock() },
                         Alignment.Center,
                     ) {
                         Icon(
                             if (ui.isLocked) IconLock else IconUnlock, null,
                             tint = if (ui.isLocked) Brand else White,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(d.iconMd - 2.dp),
                         )
                     }
                 }
 
                 // ── Center play/pause ─────────────────────────────────────
                 Box(
-                    Modifier.align(Alignment.Center).size(76.dp)
+                    Modifier.align(Alignment.Center).size(d.avatarLg + d.spaceLg)
                         .clip(CircleShape)
                         .background(GlassHeavy)
                         .border(
-                            width = 1.5.dp,
+                            width = d.borderMed,
                             brush = Brush.linearGradient(listOf(Brand.copy(.7f), Brand2.copy(.3f))),
                             shape = CircleShape,
                         )
@@ -679,8 +680,8 @@ fun PlayerScreen(
                     Icon(
                         if (ui.state is PlayerState.Playing) IconPause else IconPlay,
                         null, tint = White,
-                        modifier = Modifier.size(30.dp)
-                            .padding(start = if (ui.state !is PlayerState.Playing) 3.dp else 0.dp),
+                        modifier = Modifier.size(d.iconXl - 6.dp)
+                            .padding(start = if (ui.state !is PlayerState.Playing) d.spaceXxs + 1.dp else 0.dp),
                     )
                 }
 
@@ -690,26 +691,26 @@ fun PlayerScreen(
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(horizontal = d.spaceMd + d.spaceXs, vertical = d.spaceMd - d.spaceXs),
                     verticalArrangement = Arrangement.spacedBy(0.dp),
                 ) {
                     if (ui.durationMs > 0) {
                         Row(
-                            Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                            Modifier.fillMaxWidth().padding(bottom = d.spaceXs),
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            Text(formatMs(ui.positionMs), color = White60, fontSize = 11.sp)
-                            Text(formatMs(ui.durationMs), color = White60, fontSize = 11.sp)
+                            Text(formatMs(ui.positionMs), color = White60, fontSize = d.textXs)
+                            Text(formatMs(ui.durationMs), color = White60, fontSize = d.textXs)
                         }
                     }
 
                     if (ui.durationMs > 0) {
                         val progress = (ui.positionMs.toFloat() / ui.durationMs).coerceIn(0f, 1f)
                         val buffered = (ui.bufferedMs.toFloat() / ui.durationMs).coerceIn(0f, 1f)
-                        Box(Modifier.fillMaxWidth().height(36.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.fillMaxWidth().height(d.buttonHeightSm), contentAlignment = Alignment.Center) {
                             Box(
-                                Modifier.fillMaxWidth().height(3.dp)
-                                    .clip(RoundedCornerShape(2.dp))
+                                Modifier.fillMaxWidth().height(d.progressBarHeight)
+                                    .clip(RoundedCornerShape(d.spaceXxs))
                                     .background(White.copy(alpha = 0.15f))
                             ) {
                                 Box(Modifier.fillMaxWidth(buffered).fillMaxHeight().background(White.copy(alpha = 0.28f)))
@@ -728,56 +729,56 @@ fun PlayerScreen(
                                     disabledThumbColor    = Color.Transparent,
                                     disabledActiveTrackColor = Color.Transparent,
                                 ),
-                                modifier       = Modifier.fillMaxWidth().height(36.dp),
+                                modifier       = Modifier.fillMaxWidth().height(d.buttonHeightSm),
                             )
                         }
                     }
 
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(d.spaceSm))
 
                     // Bottom action row
                     Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                        horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 2.dp, Alignment.End),
                         verticalAlignment     = Alignment.CenterVertically,
                     ) {
                         // Mute
                         Box(
-                            Modifier.size(36.dp).clip(CircleShape)
+                            Modifier.size(d.buttonHeightSm).clip(CircleShape)
                                 .background(GlassMd)
-                                .border(1.dp, GlassBorderMd, CircleShape)
+                                .border(d.borderThin, GlassBorderMd, CircleShape)
                                 .clickable { vm.toggleMute() },
                             Alignment.Center,
                         ) {
-                            Icon(if (ui.isMuted) IconVolumeOff else IconVolumeUp, null, tint = White, modifier = Modifier.size(18.dp))
+                            Icon(if (ui.isMuted) IconVolumeOff else IconVolumeUp, null, tint = White, modifier = Modifier.size(d.iconMd - 2.dp))
                         }
 
                         // Subtitles button — highlighted when active
                         val hasSubtitles = ui.subtitleOptions.isNotEmpty()
                         Box(
                             Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
                                 .background(if (ui.subtitlesEnabled) AmberGlass else GlassMd)
-                                .border(1.dp, if (ui.subtitlesEnabled) AmberBorder else GlassBorderMd, RoundedCornerShape(8.dp))
+                                .border(d.borderThin, if (ui.subtitlesEnabled) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusSm + d.spaceXxs))
                                 .clickable {
                                     if (hasSubtitles) vm.openSubtitleDrawer()
                                     else vm.openSubtitleDrawer()
                                 }
-                                .padding(horizontal = 10.dp, vertical = 7.dp)
+                                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp)
                         ) {
                             Row(
                                 verticalAlignment     = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                horizontalArrangement = Arrangement.spacedBy(d.spaceXs + 1.dp),
                             ) {
                                 Icon(
                                     IconSubtitles, null,
                                     tint     = if (ui.subtitlesEnabled) Brand else White,
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(d.iconSm + 4.dp),
                                 )
                                 Text(
                                     if (ui.subtitlesEnabled) "CC" else "CC",
                                     color      = if (ui.subtitlesEnabled) Brand else White,
-                                    fontSize   = 12.sp,
+                                    fontSize   = d.textSm,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                             }
@@ -785,27 +786,27 @@ fun PlayerScreen(
 
                         // Speed
                         Box(
-                            Modifier.clip(RoundedCornerShape(8.dp))
+                            Modifier.clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
                                 .background(GlassMd)
-                                .border(1.dp, GlassBorderMd, RoundedCornerShape(8.dp))
+                                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusSm + d.spaceXxs))
                                 .clickable { showSpeedDialog = true }
-                                .padding(horizontal = 10.dp, vertical = 7.dp)
+                                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp)
                         ) {
                             Text(
                                 ui.playbackSpeed.let { if (it == it.toLong().toFloat()) "${it.toLong()}×" else "${it}×" },
-                                color = White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                color = White, fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
                             )
                         }
 
                         // Quality
                         Box(
-                            Modifier.clip(RoundedCornerShape(8.dp))
+                            Modifier.clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
                                 .background(GlassMd)
-                                .border(1.dp, GlassBorderMd, RoundedCornerShape(8.dp))
+                                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusSm + d.spaceXxs))
                                 .clickable { showQualityDialog = true }
-                                .padding(horizontal = 10.dp, vertical = 7.dp)
+                                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp)
                         ) {
-                            Text(ui.selectedQuality, color = White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text(ui.selectedQuality, color = White, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -819,19 +820,19 @@ fun PlayerScreen(
                     .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {},
             ) {
                 Box(
-                    Modifier.align(Alignment.CenterStart).padding(20.dp)
-                        .clip(RoundedCornerShape(100.dp))
+                    Modifier.align(Alignment.CenterStart).padding(d.spaceXl)
+                        .clip(RoundedCornerShape(d.radiusPill))
                         .background(AmberGlass)
-                        .border(1.dp, AmberBorder, RoundedCornerShape(100.dp))
+                        .border(d.borderThin, AmberBorder, RoundedCornerShape(d.radiusPill))
                         .clickable { vm.toggleLock() }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                        .padding(horizontal = d.spaceMd, vertical = d.spaceSm + d.spaceXxs),
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        horizontalArrangement = Arrangement.spacedBy(d.spaceXs + 1.dp),
                     ) {
-                        Icon(IconUnlock, null, tint = Brand, modifier = Modifier.size(16.dp))
-                        Text("Unlock", color = Brand, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Icon(IconUnlock, null, tint = Brand, modifier = Modifier.size(d.iconSm + 4.dp))
+                        Text("Unlock", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -904,13 +905,17 @@ private fun SubtitleDrawer(
     onSearchOnline: () -> Unit,
     onUpgradeToPremium: () -> Unit,
 ) {
-    val drawerWidth   = 0.40f   // 40% of screen width
+    val d = LocalDimensions.current
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
+    val drawerWidth   = if (d.isTablet) 0.32f else 0.40f   // fraction of screen width
     var searchQuery   by remember { mutableStateOf("") }
     var showOffsetSection by remember { mutableStateOf(false) }
 
-    // Animate slide-in from right
+    // Animate slide-in from right — offscreen distance scales with actual screen width
+    // so the drawer always starts fully hidden, on any device size.
+    val offscreenX = screenWidthDp + d.spaceXl
     val offsetX by animateDpAsState(
-        targetValue = if (visible) 0.dp else 600.dp,
+        targetValue = if (visible) 0.dp else offscreenX,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
         label = "drawerSlide"
     )
@@ -920,7 +925,7 @@ private fun SubtitleDrawer(
         label = "drawerBg"
     )
 
-    if (!visible && offsetX == 600.dp) return
+    if (!visible && offsetX == offscreenX) return
 
     // Glassmorphism backdrop (dim left 60% softly)
     Box(
@@ -948,11 +953,11 @@ private fun SubtitleDrawer(
                     )
                 )
                 .border(
-                    width = 1.dp,
+                    width = d.borderThin,
                     brush = Brush.verticalGradient(listOf(GlassBorderHv, GlassBorderMd, GlassBorder)),
-                    shape = RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp),
+                    shape = RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg),
                 )
-                .clip(RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
+                .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
         ) {
             Column(Modifier.fillMaxSize()) {
 
@@ -965,7 +970,7 @@ private fun SubtitleDrawer(
                                 listOf(Color(0x33050510), Color.Transparent)
                             )
                         )
-                        .padding(top = 20.dp, start = 16.dp, end = 16.dp, bottom = 0.dp)
+                        .padding(top = d.spaceXl, start = d.spaceMd + d.spaceXs, end = d.spaceMd + d.spaceXs, bottom = 0.dp)
                 ) {
                     // Title row
                     Row(
@@ -975,88 +980,88 @@ private fun SubtitleDrawer(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                         ) {
                             Box(
-                                Modifier.size(32.dp).clip(CircleShape)
+                                Modifier.size(d.avatarSm).clip(CircleShape)
                                     .background(AmberGlass)
-                                    .border(1.dp, AmberBorder, CircleShape),
+                                    .border(d.borderThin, AmberBorder, CircleShape),
                                 Alignment.Center,
                             ) {
-                                Icon(IconSubtitles, null, tint = Brand, modifier = Modifier.size(15.dp))
+                                Icon(IconSubtitles, null, tint = Brand, modifier = Modifier.size(d.iconSm + 3.dp))
                             }
                             Text(
                                 "Subtitles",
                                 color      = White,
-                                fontSize   = 15.sp,
+                                fontSize   = d.textLg,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = (-0.3).sp,
                             )
                         }
                         Box(
-                            Modifier.size(30.dp).clip(CircleShape)
+                            Modifier.size(d.avatarSm - d.spaceXs).clip(CircleShape)
                                 .background(GlassMd)
-                                .border(1.dp, GlassBorderMd, CircleShape)
+                                .border(d.borderThin, GlassBorderMd, CircleShape)
                                 .clickable { onClose() },
                             Alignment.Center,
                         ) {
-                            Icon(IconClose, null, tint = White60, modifier = Modifier.size(14.dp))
+                            Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconSm + 2.dp))
                         }
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(d.spaceMd + d.spaceXs))
 
                     // ── Subtitle ON/OFF toggle ────────────────────────────
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(d.radiusMd))
                             .background(GlassMd)
-                            .border(1.dp, GlassBorderMd, RoundedCornerShape(12.dp))
+                            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd))
                             .clickable { onToggleOff() }
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                            .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceMd - d.spaceXs),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Column {
                             Text(
                                 "Subtitles",
-                                color = White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                                color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold
                             )
                             Text(
                                 if (ui.subtitlesEnabled) "On • ${ui.subtitleOptions.firstOrNull { it.language == ui.activeSubtitleLanguage }?.label ?: ""}"
                                 else "Off",
                                 color = if (ui.subtitlesEnabled) Brand else White40,
-                                fontSize = 10.sp,
+                                fontSize = d.textXxs + 1.sp,
                             )
                         }
                         // Pill toggle
                         SubtitleTogglePill(enabled = ui.subtitlesEnabled)
                     }
 
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(d.spaceMd - d.spaceXs))
 
                     // ── Search bar ────────────────────────────────────────
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                             .background(GlassSm)
-                            .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp))
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
+                            .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                     ) {
-                        Icon(IconSearch, null, tint = White40, modifier = Modifier.size(14.dp))
+                        Icon(IconSearch, null, tint = White40, modifier = Modifier.size(d.iconSm + 2.dp))
                         BasicTextField(
                             value         = searchQuery,
                             onValueChange = { searchQuery = it },
                             singleLine    = true,
-                            textStyle     = TextStyle(color = White, fontSize = 12.sp),
+                            textStyle     = TextStyle(color = White, fontSize = d.textSm),
                             decorationBox = { inner ->
                                 Box {
                                     if (searchQuery.isEmpty()) {
-                                        Text("Search language…", color = White40, fontSize = 12.sp)
+                                        Text("Search language…", color = White40, fontSize = d.textSm)
                                     }
                                     inner()
                                 }
@@ -1065,27 +1070,27 @@ private fun SubtitleDrawer(
                         )
                         if (searchQuery.isNotEmpty()) {
                             Box(
-                                Modifier.size(18.dp).clip(CircleShape)
+                                Modifier.size(d.iconMd - 2.dp).clip(CircleShape)
                                     .background(GlassMd)
                                     .clickable { searchQuery = "" },
                                 Alignment.Center,
                             ) {
-                                Icon(IconClose, null, tint = White60, modifier = Modifier.size(10.dp))
+                                Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconXs + 1.dp))
                             }
                         }
                     }
 
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
                 }
 
                 // Subtle separator
-                Box(Modifier.fillMaxWidth().height(1.dp).background(GlassBorder))
+                Box(Modifier.fillMaxWidth().height(d.borderThin).background(GlassBorder))
 
                 // ── Scrollable content ────────────────────────────────────
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    contentPadding = PaddingValues(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
+                    verticalArrangement = Arrangement.spacedBy(d.spaceXs),
                 ) {
 
                     // "Off" option
@@ -1106,10 +1111,10 @@ private fun SubtitleDrawer(
                             Text(
                                 if (ui.isOfflinePlayback) "Downloaded" else "Available",
                                 color    = White40,
-                                fontSize = 9.sp,
+                                fontSize = d.textXxs,
                                 fontWeight = FontWeight.SemiBold,
                                 letterSpacing = 1.sp,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = d.spaceXs, vertical = d.spaceSm),
                             )
                         }
 
@@ -1133,26 +1138,26 @@ private fun SubtitleDrawer(
                     } else if (searchQuery.isEmpty()) {
                         // No subtitles loaded yet — show Search Online CTA
                         item {
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
                             Column(
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 4.dp),
+                                    .padding(horizontal = d.spaceXs),
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                             ) {
                                 when {
                                     ui.isSubtitleSearching -> {
                                         // Searching spinner
                                         androidx.compose.material3.CircularProgressIndicator(
-                                            modifier = Modifier.size(22.dp),
+                                            modifier = Modifier.size(d.iconMd),
                                             color    = Brand,
-                                            strokeWidth = 2.dp,
+                                            strokeWidth = d.borderMed,
                                         )
                                         Text(
                                             "Searching…",
                                             color    = White40,
-                                            fontSize = 11.sp,
+                                            fontSize = d.textXs,
                                         )
                                     }
                                     ui.subtitleSearchEmpty -> {
@@ -1160,23 +1165,23 @@ private fun SubtitleDrawer(
                                         Text(
                                             "No subtitles found",
                                             color    = White40,
-                                            fontSize = 12.sp,
+                                            fontSize = d.textSm,
                                             fontWeight = FontWeight.Medium,
                                         )
                                         Box(
                                             Modifier
                                                 .fillMaxWidth()
-                                                .clip(RoundedCornerShape(10.dp))
+                                                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .background(GlassMd)
-                                                .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp))
+                                                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .clickable { onSearchOnline() }
-                                                .padding(vertical = 10.dp),
+                                                .padding(vertical = d.spaceSm + d.spaceXxs),
                                             Alignment.Center,
                                         ) {
                                             Text(
                                                 "Try again",
                                                 color      = Brand,
-                                                fontSize   = 12.sp,
+                                                fontSize   = d.textSm,
                                                 fontWeight = FontWeight.SemiBold,
                                             )
                                         }
@@ -1186,24 +1191,24 @@ private fun SubtitleDrawer(
                                         Text(
                                             ui.subtitleUpsellMessage,
                                             color      = White60,
-                                            fontSize   = 11.sp,
+                                            fontSize   = d.textXs,
                                             textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
-                                            lineHeight = 16.sp,
+                                            lineHeight = (d.textXs.value * 1.45f).sp,
                                         )
                                         Box(
                                             Modifier
                                                 .fillMaxWidth()
-                                                .clip(RoundedCornerShape(10.dp))
+                                                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .background(AmberGlass)
-                                                .border(1.dp, AmberBorder, RoundedCornerShape(10.dp))
+                                                .border(d.borderThin, AmberBorder, RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .clickable { onUpgradeToPremium() }
-                                                .padding(vertical = 10.dp),
+                                                .padding(vertical = d.spaceSm + d.spaceXxs),
                                             Alignment.Center,
                                         ) {
                                             Text(
                                                 "Upgrade to Premium",
                                                 color      = Brand,
-                                                fontSize   = 12.sp,
+                                                fontSize   = d.textSm,
                                                 fontWeight = FontWeight.Bold,
                                             )
                                         }
@@ -1214,33 +1219,33 @@ private fun SubtitleDrawer(
                                             if (ui.isOfflinePlayback) "Search for subtitles to download"
                                             else "Search OpenSubtitles for this title",
                                             color    = White40,
-                                            fontSize = 11.sp,
+                                            fontSize = d.textXs,
                                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                         )
                                         Box(
                                             Modifier
                                                 .fillMaxWidth()
-                                                .clip(RoundedCornerShape(10.dp))
+                                                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .background(AmberGlass)
-                                                .border(1.dp, AmberBorder, RoundedCornerShape(10.dp))
+                                                .border(d.borderThin, AmberBorder, RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .clickable { onSearchOnline() }
-                                                .padding(vertical = 11.dp),
+                                                .padding(vertical = d.spaceSm + d.spaceXs),
                                             Alignment.Center,
                                         ) {
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                                             ) {
                                                 Icon(
                                                     Icons.Default.Search,
                                                     contentDescription = null,
                                                     tint     = Brand,
-                                                    modifier = Modifier.size(14.dp),
+                                                    modifier = Modifier.size(d.iconSm + 2.dp),
                                                 )
                                                 Text(
                                                     "Search Online",
                                                     color      = Brand,
-                                                    fontSize   = 12.sp,
+                                                    fontSize   = d.textSm,
                                                     fontWeight = FontWeight.Bold,
                                                 )
                                             }
@@ -1248,24 +1253,24 @@ private fun SubtitleDrawer(
                                     }
                                 }
                             }
-                            Spacer(Modifier.height(4.dp))
+                            Spacer(Modifier.height(d.spaceXs))
                         }
                     }
 
                     // Gap
-                    item { Spacer(Modifier.height(8.dp)) }
+                    item { Spacer(Modifier.height(d.spaceSm + d.spaceXxs)) }
                 }
 
                 // ── Divider ───────────────────────────────────────────────
-                Box(Modifier.fillMaxWidth().height(1.dp).background(GlassBorder))
+                Box(Modifier.fillMaxWidth().height(d.borderThin).background(GlassBorder))
 
                 // ── Timing offset section ─────────────────────────────────
                 Column(
                     Modifier
                         .fillMaxWidth()
                         .background(Color(0x22050510))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                        .padding(d.spaceMd - d.spaceXxs),
+                    verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
                 ) {
                     // Section toggle
                     Row(
@@ -1275,28 +1280,28 @@ private fun SubtitleDrawer(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                         ) {
-                            Icon(IconTimerOff, null, tint = White60, modifier = Modifier.size(13.dp))
+                            Icon(IconTimerOff, null, tint = White60, modifier = Modifier.size(d.iconSm + 1.dp))
                             Text(
                                 "Subtitle Timing",
-                                color = White60, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                                color = White60, fontSize = d.textXs, fontWeight = FontWeight.Medium,
                             )
                         }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
                         ) {
                             if (ui.subtitleOffsetMs != 0) {
                                 val sign = if (ui.subtitleOffsetMs > 0) "+" else ""
                                 Text(
                                     "${sign}${ui.subtitleOffsetMs / 1000.0}s",
-                                    color = Brand, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+                                    color = Brand, fontSize = d.textXxs + 1.sp, fontWeight = FontWeight.SemiBold,
                                 )
                             }
                             Text(
                                 if (showOffsetSection) "▲" else "▼",
-                                color = White40, fontSize = 9.sp,
+                                color = White40, fontSize = d.textXxs,
                             )
                         }
                     }
@@ -1328,6 +1333,7 @@ private fun SubtitleRow(
     onToggle: (() -> Unit)? = null,
     dimmed: Boolean = false,
 ) {
+    val d = LocalDimensions.current
     val bg     = if (isActive) AmberGlass else Color.Transparent
     val border = if (isActive) AmberBorder else Color.Transparent
     val textColor = when {
@@ -1340,57 +1346,48 @@ private fun SubtitleRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
             .background(bg)
-            .border(1.dp, border, RoundedCornerShape(9.dp))
+            .border(d.borderThin, border, RoundedCornerShape(d.radiusMd - d.spaceXs))
             .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+            .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
             modifier = Modifier.weight(1f),
         ) {
-            // Check or language badge
             if (isActive) {
-                Icon(IconCheck, null, tint = Brand, modifier = Modifier.size(14.dp))
+                Icon(IconCheck, null, tint = Brand, modifier = Modifier.size(d.iconSm + 2.dp))
             } else {
-                Box(
-                    Modifier.size(14.dp).clip(CircleShape)
-                        .background(GlassMd),
-                )
+                Box(Modifier.size(d.iconSm + 2.dp).clip(CircleShape).background(GlassMd))
             }
             Text(
                 label,
-                color     = textColor,
-                fontSize  = 12.sp,
+                color      = textColor,
+                fontSize   = d.textSm,
                 fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines  = 1,
-                overflow  = TextOverflow.Ellipsis,
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
             )
         }
 
-        // Persistent subtitle: show toggle
         if (isPersistent && onToggle != null) {
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(d.spaceSm))
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(100.dp))
+                    .clip(RoundedCornerShape(d.radiusPill))
                     .background(if (isEnabled) AmberGlass else GlassSm)
-                    .border(
-                        1.dp,
-                        if (isEnabled) AmberBorder else GlassBorderMd,
-                        RoundedCornerShape(100.dp),
-                    )
+                    .border(d.borderThin, if (isEnabled) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusPill))
                     .clickable { onToggle() }
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                    .padding(horizontal = d.spaceSm + d.spaceXxs, vertical = d.spaceXxs + 1.dp),
             ) {
                 Text(
                     if (isEnabled) "On" else "Off",
-                    color    = if (isEnabled) Brand else White40,
-                    fontSize = 9.sp,
+                    color      = if (isEnabled) Brand else White40,
+                    fontSize   = d.textXxs + 1.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
@@ -1404,20 +1401,26 @@ private fun SubtitleRow(
 
 @Composable
 private fun SubtitleTogglePill(enabled: Boolean) {
+    val d = LocalDimensions.current
     val trackColor  by animateColorAsState(if (enabled) Brand else GlassBorderMd, label = "track")
-    val thumbOffset by animateDpAsState(if (enabled) 16.dp else 0.dp, label = "thumb")
+    // Thumb travel = track width - thumb size - 2*padding; scaled to d
+    val thumbTravel = d.spaceXl - d.spaceSm   // ~16 sp
+    val thumbOffset by animateDpAsState(if (enabled) thumbTravel else 0.dp, label = "thumb")
+    val trackW = d.spaceXxl - d.spaceXs
+    val trackH = d.spaceLg
+    val thumbSz = trackH - d.spaceSm
 
     Box(
         Modifier
-            .width(36.dp).height(20.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .width(trackW).height(trackH)
+            .clip(RoundedCornerShape(trackH / 2))
             .background(trackColor.copy(alpha = 0.35f))
-            .border(1.dp, trackColor, RoundedCornerShape(10.dp))
+            .border(d.borderThin, trackColor, RoundedCornerShape(trackH / 2))
     ) {
         Box(
             Modifier
-                .size(14.dp)
-                .offset(x = 3.dp + thumbOffset, y = 3.dp)
+                .size(thumbSz)
+                .offset(x = d.spaceXs + thumbOffset, y = d.spaceXs)
                 .clip(CircleShape)
                 .background(if (enabled) Brand else White40)
         )
@@ -1433,10 +1436,9 @@ private fun SubtitleOffsetControl(
     offsetMs: Int,
     onChanged: (Int) -> Unit,
 ) {
-    val steps = listOf(-3000, -2000, -1000, -500, 0, 500, 1000, 2000, 3000)
+    val d = LocalDimensions.current
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Current offset display
+    Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
@@ -1447,63 +1449,58 @@ private fun SubtitleOffsetControl(
             Text(
                 "${sign}${secs}s",
                 color      = if (offsetMs == 0) White40 else Brand,
-                fontSize   = 22.sp,
+                fontSize   = d.textXxl,
                 fontWeight = FontWeight.Bold,
             )
         }
         Text(
             "Positive = delay   Negative = advance",
-            color    = White40, fontSize = 9.sp,
+            color    = White40, fontSize = d.textXxs,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
         )
 
-        // Step buttons
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
         ) {
-            // Minus button
             Box(
                 Modifier.weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
                     .background(GlassMd)
-                    .border(1.dp, GlassBorderMd, RoundedCornerShape(8.dp))
+                    .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXs))
                     .clickable { onChanged((offsetMs - 500).coerceAtLeast(-10_000)) }
-                    .padding(vertical = 8.dp),
+                    .padding(vertical = d.spaceSm + d.spaceXxs),
                 Alignment.Center,
             ) {
-                Text("−0.5s", color = White80, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                Text("−0.5s", color = White80, fontSize = d.textXs, fontWeight = FontWeight.Medium)
             }
 
-            // Reset
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
                     .background(if (offsetMs != 0) AmberGlass else GlassMd)
-                    .border(1.dp, if (offsetMs != 0) AmberBorder else GlassBorderMd, RoundedCornerShape(8.dp))
+                    .border(d.borderThin, if (offsetMs != 0) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXs))
                     .clickable { onChanged(0) }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
                 Alignment.Center,
             ) {
-                Text("Reset", color = if (offsetMs != 0) Brand else White40, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                Text("Reset", color = if (offsetMs != 0) Brand else White40, fontSize = d.textXs, fontWeight = FontWeight.SemiBold)
             }
 
-            // Plus button
             Box(
                 Modifier.weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
                     .background(GlassMd)
-                    .border(1.dp, GlassBorderMd, RoundedCornerShape(8.dp))
+                    .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXs))
                     .clickable { onChanged((offsetMs + 500).coerceAtMost(10_000)) }
-                    .padding(vertical = 8.dp),
+                    .padding(vertical = d.spaceSm + d.spaceXxs),
                 Alignment.Center,
             ) {
-                Text("+0.5s", color = White80, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                Text("+0.5s", color = White80, fontSize = d.textXs, fontWeight = FontWeight.Medium)
             }
         }
 
-        // Fine control slider
         Slider(
             value         = offsetMs.toFloat(),
             onValueChange = { onChanged(it.roundToInt()) },
@@ -1514,7 +1511,7 @@ private fun SubtitleOffsetControl(
                 activeTrackColor   = Brand.copy(.5f),
                 inactiveTrackColor = GlassBorderMd,
             ),
-            modifier = Modifier.fillMaxWidth().height(28.dp),
+            modifier = Modifier.fillMaxWidth().height(d.buttonHeightSm - d.spaceSm),
         )
     }
 }
@@ -1525,6 +1522,7 @@ private fun SubtitleOffsetControl(
 
 @Composable
 private fun GestureIndicator(type: GestureType, value: Float, anchorValue: Float) {
+    val d = LocalDimensions.current
     val icon = when (type) {
         GestureType.VOLUME     -> if (value > 0f) IconVolumeUp else IconVolumeOff
         GestureType.BRIGHTNESS -> IconBrightness
@@ -1544,21 +1542,21 @@ private fun GestureIndicator(type: GestureType, value: Float, anchorValue: Float
     }
     Box(
         Modifier
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(d.radiusMd + d.spaceXs))
             .background(Color(0xCC000000))
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(16.dp))
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd + d.spaceXs))
+            .padding(horizontal = d.spaceXl, vertical = d.spaceLg),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
         ) {
-            Icon(icon, null, tint = White, modifier = Modifier.size(28.dp))
-            Text(label, color = White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Icon(icon, null, tint = White, modifier = Modifier.size(d.iconLg))
+            Text(label, color = White, fontSize = d.textXl, fontWeight = FontWeight.Bold)
             Box(
-                Modifier.width(100.dp).height(3.dp)
-                    .clip(RoundedCornerShape(2.dp))
+                Modifier.width(d.spaceXxl * 3.1f).height(d.progressBarHeight)
+                    .clip(RoundedCornerShape(d.spaceXxs))
                     .background(White.copy(.2f))
             ) {
                 Box(
@@ -1582,10 +1580,11 @@ fun <T> PlayerOptionDialog(
     onSelect: (String, T) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor   = BgCard,
-        shape            = RoundedCornerShape(20.dp),
+        shape            = RoundedCornerShape(d.radiusLg),
         title = {
             Text(title, color = White, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
         },
@@ -1594,10 +1593,10 @@ fun <T> PlayerOptionDialog(
                 options.forEach { (label, value) ->
                     Row(
                         Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
                             .background(if (label == selected) AmberGlass else Color.Transparent)
                             .clickable { onSelect(label, value) }
-                            .padding(vertical = 12.dp, horizontal = 10.dp),
+                            .padding(vertical = d.spaceMd - d.spaceXxs, horizontal = d.spaceMd - d.spaceXxs),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(
@@ -1608,11 +1607,12 @@ fun <T> PlayerOptionDialog(
                                 unselectedColor = White40,
                             ),
                         )
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
                         Text(
                             label,
                             color      = if (label == selected) Brand else White80,
                             fontWeight = if (label == selected) FontWeight.Bold else FontWeight.Normal,
+                            fontSize   = d.textMd,
                         )
                     }
                 }
@@ -1620,7 +1620,7 @@ fun <T> PlayerOptionDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close", color = Brand, fontWeight = FontWeight.SemiBold)
+                Text("Close", color = Brand, fontWeight = FontWeight.SemiBold, fontSize = d.textMd)
             }
         },
     )

@@ -406,11 +406,8 @@ private fun SendTab(
 ) {
     var selectedFile by remember { mutableStateOf<DownloadItem?>(null) }
 
-    // Wi-Fi Direct requires NEARBY_WIFI_DEVICES (API 33+) or ACCESS_FINE_LOCATION (below 33)
-    val p2pPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU)
-        Manifest.permission.NEARBY_WIFI_DEVICES
-    else
-        Manifest.permission.ACCESS_FINE_LOCATION
+    // LocalOnlyHotspot requires ACCESS_FINE_LOCATION on all API levels
+    val p2pPermission = Manifest.permission.ACCESS_FINE_LOCATION
 
     var hasP2pPerm by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(ctx, p2pPermission) == PackageManager.PERMISSION_GRANTED)
@@ -446,9 +443,9 @@ private fun SendTab(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Icon(IconWifi, null, tint = Brand, modifier = Modifier.size(36.dp))
-                            Text("Nearby permission needed", color = Color.White,
+                            Text("Location permission needed", color = Color.White,
                                 fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Text("Required to create a direct Wi-Fi link between devices.",
+                            Text("Required to create a Wi-Fi hotspot for direct transfer.",
                                 color = White60, fontSize = 13.sp, textAlign = TextAlign.Center)
                             BrandButton(
                                 text = "Allow & Generate QR",

@@ -39,6 +39,7 @@ import com.axio.reelz.ui.screens.settings.SettingsScreen
 import com.axio.reelz.ui.screens.detail.DetailScreen
 import com.axio.reelz.ui.screens.search.SearchScreen
 import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -199,6 +200,7 @@ fun ReelzBottomNav(
     onTabSelected: (String) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
+    val d = LocalDimensions.current
 
     Box(
         modifier = Modifier
@@ -265,13 +267,13 @@ fun ReelzBottomNav(
                                 label        = "homeIconCrossfade",
                             ) { spinning ->
                                 if (spinning) {
-                                    CinematicSpinner(size = 22.dp, color = Color.White)
+                                    CinematicSpinner(size = d.navIconSize, color = Color.White)
                                 } else {
                                     Icon(
                                         imageVector        = if (selected) tab.activeIcon else tab.icon,
                                         contentDescription = tab.label,
                                         tint               = if (selected) Color.White else Color.White.copy(alpha = 0.38f),
-                                        modifier           = Modifier.size(22.dp),
+                                        modifier           = Modifier.size(d.navIconSize),
                                     )
                                 }
                             }
@@ -286,7 +288,7 @@ fun ReelzBottomNav(
                                     imageVector        = if (isSelected) tab.activeIcon else tab.icon,
                                     contentDescription = tab.label,
                                     tint               = if (isSelected) Color.White else Color.White.copy(alpha = 0.38f),
-                                    modifier           = Modifier.size(22.dp),
+                                    modifier           = Modifier.size(d.navIconSize),
                                 )
                             }
                         }
@@ -296,7 +298,7 @@ fun ReelzBottomNav(
                         Text(
                             text       = tab.label,
                             color      = if (selected) Color.White else Color.White.copy(alpha = 0.38f),
-                            fontSize   = 10.sp,
+                            fontSize   = d.navFontSize,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         )
                     },

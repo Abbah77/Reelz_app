@@ -22,9 +22,11 @@ private val ReelzColorScheme = darkColorScheme(
 
 @Composable
 fun ReelzTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = ReelzColorScheme,
-        typography  = ReelzTypography,
-        content     = content,
-    )
+    ProvideDimensions {
+        MaterialTheme(
+            colorScheme = ReelzColorScheme,
+            typography  = ReelzTypography,
+            content     = content,
+        )
+    }
 }

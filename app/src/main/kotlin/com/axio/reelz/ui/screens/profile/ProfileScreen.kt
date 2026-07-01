@@ -242,35 +242,36 @@ class ProfileViewModel @Inject constructor(
 fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
+    val d = LocalDimensions.current
 
     LazyColumn(
         Modifier.fillMaxSize().background(Bg).statusBarsPadding(),
-        contentPadding = PaddingValues(bottom = 100.dp),
+        contentPadding = PaddingValues(bottom = d.spaceXxl * 3.1f),
     ) {
         // ── Header ─────────────────────────────────────────────────────
         item {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+                Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceLg),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column {
                     Text("Profile", style = MaterialTheme.typography.headlineMedium.copy(
                         color = White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp
                     ))
-                    Text("Your personal cinema", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Your personal cinema", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
                 }
                 Spacer(Modifier.weight(1f))
                 // Settings gear icon — navigates to Settings screen
                 Box(
                     Modifier
-                        .size(38.dp)
+                        .size(d.avatarSm + d.spaceMd)
                         .clip(CircleShape)
                         .background(GlassMd)
-                        .border(1.dp, GlassBorderMd, CircleShape)
+                        .border(d.borderThin, GlassBorderMd, CircleShape)
                         .clickable { nav.navigate(com.axio.reelz.ui.Route.Settings.path) },
                     Alignment.Center,
                 ) {
-                    Icon(IconSettings, "Settings", tint = White60, modifier = Modifier.size(18.dp))
+                    Icon(IconSettings, "Settings", tint = White60, modifier = Modifier.size(d.iconMd - 2.dp))
                 }
             }
         }
@@ -278,8 +279,8 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
         // ── Auth card ──────────────────────────────────────────────────
         item {
             Box(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                    .clip(RoundedCornerShape(20.dp))
+                Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad)
+                    .clip(RoundedCornerShape(d.radiusLg))
                     .background(
                         if (ui.profile.isSignedIn)
                             Brush.linearGradient(listOf(BgCard, BgRaised))
@@ -287,60 +288,60 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             Brush.linearGradient(listOf(BrandDim.copy(.4f), BgCard))
                     )
                     .border(
-                        1.dp,
+                        d.borderThin,
                         if (ui.profile.isSignedIn) GlassBorderMd else AmberBorder,
-                        RoundedCornerShape(20.dp)
+                        RoundedCornerShape(d.radiusLg)
                     )
             ) {
                 if (ui.profile.isSignedIn) {
-                    Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(58.dp).clip(CircleShape).background(BgRaised).border(2.dp, Brand.copy(.5f), CircleShape)) {
+                    Row(Modifier.padding(d.spaceLg + d.spaceXs), horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(d.avatarMd + d.spaceMd).clip(CircleShape).background(BgRaised).border(d.borderMed + 0.5.dp, Brand.copy(.5f), CircleShape)) {
                             if (ui.profile.photoUrl != null) {
                                 AsyncImage(ui.profile.photoUrl, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                             } else {
-                                Icon(IconUser, null, tint = White40, modifier = Modifier.fillMaxSize().padding(12.dp))
+                                Icon(IconUser, null, tint = White40, modifier = Modifier.fillMaxSize().padding(d.spaceMd))
                             }
                         }
                         Column(Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(ui.profile.name, color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
+                                Text(ui.profile.name, color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
                                 if (ui.userState == com.axio.reelz.remoteconfig.UserState.PREMIUM_ACTIVE ||
                                     ui.userState == com.axio.reelz.remoteconfig.UserState.PREMIUM_GRACE) {
                                     Row(
                                         Modifier
-                                            .clip(RoundedCornerShape(6.dp))
+                                            .clip(RoundedCornerShape(d.radiusSm))
                                             .background(Brand.copy(.18f))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                            .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
                                     ) {
-                                        Icon(IconCrown, null, tint = Brand, modifier = Modifier.size(10.dp))
-                                        Text("PREMIUM", color = Brand, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        Icon(IconCrown, null, tint = Brand, modifier = Modifier.size(d.iconSm - 2.dp))
+                                        Text("PREMIUM", color = Brand, fontSize = d.textXxs, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
-                            Text(ui.profile.email, color = White60, fontSize = 13.sp)
+                            Text(ui.profile.email, color = White60, fontSize = d.textMd)
                         }
                         TextButton(onClick = { vm.signOut() }) {
-                            Text("Sign Out", color = Error, fontSize = 12.sp)
+                            Text("Sign Out", color = Error, fontSize = d.textSm)
                         }
                     }
                 } else {
-                    Column(Modifier.padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(Modifier.padding(d.spaceXl - d.spaceXs), horizontalAlignment = Alignment.CenterHorizontally) {
                         Box(contentAlignment = Alignment.Center) {
-                            Box(Modifier.size(68.dp).clip(CircleShape)
+                            Box(Modifier.size(d.avatarLg + d.spaceXs).clip(CircleShape)
                                 .background(Brush.radialGradient(listOf(AmberGlass, Color.Transparent)))
-                                .border(1.dp, AmberBorder, CircleShape))
-                            Icon(IconUser, null, tint = Brand, modifier = Modifier.size(28.dp))
+                                .border(d.borderThin, AmberBorder, CircleShape))
+                            Icon(IconUser, null, tint = Brand, modifier = Modifier.size(d.iconLg + 2.dp))
                         }
-                        Spacer(Modifier.height(12.dp))
-                        Text("Sync your watchlist", color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(d.spaceMd + d.spaceXs))
+                        Text("Sync your watchlist", color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
+                        Spacer(Modifier.height(d.spaceXs))
                         Text(
                             "Your likes, saves & history are always saved locally",
-                            color = White60, fontSize = 12.sp, textAlign = TextAlign.Center, lineHeight = 18.sp,
+                            color = White60, fontSize = d.textSm, textAlign = TextAlign.Center, lineHeight = (d.textSm.value * 1.5f).sp,
                         )
-                        Spacer(Modifier.height(16.dp))
+                        Spacer(Modifier.height(d.spaceLg))
                         GoogleSignInButton(ctx = ctx) { idToken, name, email, photo -> vm.onSignIn(idToken, name, email, photo) }
                     }
                 }
@@ -349,20 +350,20 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
 
         // ── Premium entry / renew banner ──────────────────────────────────
         item {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(d.spaceMd + d.spaceXs))
             Box(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad)
+                    .clip(RoundedCornerShape(d.radiusMd + d.spaceXs))
                     .background(if (ui.showRenewBanner) AmberGlass else BgCard)
-                    .border(1.dp, if (ui.showRenewBanner) AmberBorder else GlassBorderMd, RoundedCornerShape(16.dp))
+                    .border(d.borderThin, if (ui.showRenewBanner) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusMd + d.spaceXs))
                     .clickable { nav.navigate(com.axio.reelz.ui.Route.Premium.path) }
-                    .padding(16.dp),
+                    .padding(d.spaceLg),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
                     Box(
-                        Modifier.size(36.dp).clip(CircleShape).background(Brand.copy(.15f)),
+                        Modifier.size(d.avatarSm + d.spaceXs).clip(CircleShape).background(Brand.copy(.15f)),
                         Alignment.Center,
-                    ) { Icon(IconCrown, null, tint = Brand, modifier = Modifier.size(18.dp)) }
+                    ) { Icon(IconCrown, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp)) }
                     Column(Modifier.weight(1f)) {
                         val (title, subtitle) = when (ui.userState) {
                             com.axio.reelz.remoteconfig.UserState.PREMIUM_GRACE ->
@@ -374,20 +375,20 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                                 "Premium expired" to "Renew to get your benefits back"
                             else -> "Go Premium" to "4K streaming, unlimited downloads, no ads"
                         }
-                        Text(title, color = White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Text(subtitle, color = White60, fontSize = 11.sp)
+                        Text(title, color = White, fontWeight = FontWeight.Bold, fontSize = d.textMd + 1.sp)
+                        Text(subtitle, color = White60, fontSize = d.textXs)
                     }
-                    Icon(IconChevronRight, null, tint = White40, modifier = Modifier.size(18.dp))
+                    Icon(IconChevronRight, null, tint = White40, modifier = Modifier.size(d.iconMd - 2.dp))
                 }
             }
         }
 
         // ── Stats row ──────────────────────────────────────────────────
         item {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(d.spaceLg - d.spaceXs))
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXs),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 2.dp),
             ) {
                 StatCard("Watchlist", ui.watchlist.size.toString(), IconBookmarkSolid, Modifier.weight(1f))
                 StatCard("Saved",    ui.saved.size.toString(),     IconVideoSolid,    Modifier.weight(1f))
@@ -397,16 +398,16 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
 
         // ── Tab selector ───────────────────────────────────────────────
         item {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(d.spaceLg))
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXs),
+                horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 2.dp),
             ) {
                 listOf("Watchlist", "Saved", "History").forEachIndexed { i, label ->
                     GenrePill(label, ui.activeTab == i) { vm.setTab(i) }
                 }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(d.spaceMd - d.spaceXs))
         }
 
         // ── Tab content ────────────────────────────────────────────────
@@ -424,9 +425,9 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                     Text(
                         "Items auto-remove after you watch 90% of them",
                         color = White30,
-                        fontSize = 11.sp,
+                        fontSize = d.textXs,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 24.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = d.spaceMd, horizontal = d.spaceXl),
                     )
                 }
             }
@@ -450,8 +451,8 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                     item { EmptyTabHint("No watch history yet", "Start watching something!") }
                 } else {
                     item {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = { vm.clearHistory() }) { Text("Clear All", color = Error, fontSize = 12.sp) }
+                        Row(Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceXs), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { vm.clearHistory() }) { Text("Clear All", color = Error, fontSize = d.textSm) }
                         }
                     }
                     items(ui.historyPage, key = { it.key }) { h ->
@@ -479,9 +480,9 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             Text(
                                 "That's all your history (${ui.historyTotal} items)",
                                 color = White30,
-                                fontSize = 11.sp,
+                                fontSize = d.textXs,
                                 textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = d.spaceLg),
                             )
                         }
                     }
@@ -495,6 +496,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
 
 @Composable
 fun HistoryRowSkeleton() {
+    val d = LocalDimensions.current
     val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
     val shimmerX by infiniteTransition.animateFloat(
         initialValue = -400f, targetValue = 400f,
@@ -511,27 +513,27 @@ fun HistoryRowSkeleton() {
         end   = Offset(shimmerX + 300f, 200f),
     )
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp),
+        Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceMd - d.spaceXs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
         // Poster skeleton
         Box(
-            Modifier.width(58.dp).height(82.dp)
-                .clip(RoundedCornerShape(10.dp))
+            Modifier.width(d.avatarLg - d.spaceXs).height(d.continueCardThumbHeight - d.spaceXs)
+                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                 .background(BgRaised)
                 .background(shimmer)
         )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
             // Title skeleton
-            Box(Modifier.fillMaxWidth(0.65f).height(14.dp).clip(RoundedCornerShape(6.dp))
+            Box(Modifier.fillMaxWidth(0.65f).height(d.textLg - 1.dp).clip(RoundedCornerShape(d.spaceSm))
                 .background(BgRaised).background(shimmer))
             // Subtitle skeleton
-            Box(Modifier.fillMaxWidth(0.35f).height(11.dp).clip(RoundedCornerShape(6.dp))
+            Box(Modifier.fillMaxWidth(0.35f).height(d.textSm).clip(RoundedCornerShape(d.spaceSm))
                 .background(BgRaised).background(shimmer))
         }
     }
-    Box(Modifier.fillMaxWidth().height(0.5.dp).padding(horizontal = 16.dp).background(GlassBorder))
+    Box(Modifier.fillMaxWidth().height(0.5.dp).padding(horizontal = d.screenHorizPad + d.spaceXs).background(GlassBorder))
 }
 
 // ── Google Sign-In button with loading/lock feedback ─────────────────────────
@@ -542,13 +544,14 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
     val activity = ctx as? android.app.Activity
     var errorMsg   by remember { mutableStateOf<String?>(null) }
     var isLoading  by remember { mutableStateOf(false) }
+    val d = LocalDimensions.current
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(100.dp))
+                .clip(RoundedCornerShape(d.radiusPill))
                 .background(if (isLoading) BgRaised.copy(alpha = 0.7f) else BgRaised)
-                .border(1.dp, if (isLoading) Brand.copy(.4f) else GlassBorderMd, RoundedCornerShape(100.dp))
+                .border(d.borderThin, if (isLoading) Brand.copy(.4f) else GlassBorderMd, RoundedCornerShape(d.radiusPill))
                 .clickable(enabled = !isLoading) {
                     if (activity == null) {
                         errorMsg = "Sign-in unavailable. Please restart the app."
@@ -616,25 +619,25 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
                         }
                     }
                 }
-                .padding(vertical = 14.dp),
+                .padding(vertical = d.spaceMd + d.spaceXs),
             contentAlignment = Alignment.Center,
         ) {
             // Show spinner while loading — prevents user re-tapping
             if (isLoading) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CinematicSpinner(size = 16.dp, color = Brand)
-                    Text("Opening Google…", color = White60, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
+                    CinematicSpinner(size = d.iconMd - 4.dp, color = Brand)
+                    Text("Opening Google…", color = White60, fontWeight = FontWeight.SemiBold, fontSize = d.textMd + 1.sp)
                 }
             } else {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("G", color = Brand, fontWeight = FontWeight.Black, fontSize = 16.sp)
-                    Text("Continue with Google", color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
+                    Text("G", color = Brand, fontWeight = FontWeight.Black, fontSize = d.textLg + 1.sp)
+                    Text("Continue with Google", color = White, fontWeight = FontWeight.SemiBold, fontSize = d.textMd + 1.sp)
                 }
             }
         }
         if (errorMsg != null) {
-            Spacer(Modifier.height(8.dp))
-            Text(errorMsg!!, color = Error, fontSize = 12.sp, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(d.spaceSm))
+            Text(errorMsg!!, color = Error, fontSize = d.textSm, textAlign = TextAlign.Center)
         }
     }
 }
@@ -643,33 +646,35 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
 
 @Composable
 fun StatCard(label: String, value: String, icon: ImageVector, modifier: Modifier = Modifier) {
+    val d = LocalDimensions.current
     Box(
         modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(d.radiusMd + d.spaceXs))
             .background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp))
-            .padding(vertical = 16.dp),
+            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd + d.spaceXs))
+            .padding(vertical = d.spaceLg),
     ) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(icon, null, tint = Brand, modifier = Modifier.size(22.dp))
-            Spacer(Modifier.height(6.dp))
-            Text(value, color = White, fontWeight = FontWeight.Black, fontSize = 22.sp)
-            Text(label, color = White60, fontSize = 11.sp)
+            Icon(icon, null, tint = Brand, modifier = Modifier.size(d.iconMd))
+            Spacer(Modifier.height(d.spaceSm))
+            Text(value, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
+            Text(label, color = White60, fontSize = d.textXs)
         }
     }
 }
 
 @Composable
 fun LibraryRow(title: String, poster: String?, subtitle: String = "", progress: Float = 0f, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 9.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceMd - d.spaceXs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
         Box(
-            Modifier.width(58.dp).height(82.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(10.dp))
+            Modifier.width(d.avatarLg - d.spaceXs).height(d.continueCardThumbHeight - d.spaceXs)
+                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
+                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
                 .background(BgRaised)
         ) {
             // Shimmer behind the image while it loads
@@ -692,38 +697,40 @@ fun LibraryRow(title: String, poster: String?, subtitle: String = "", progress: 
                 modifier = Modifier.fillMaxSize(),
             )
             if (progress > 0f) {
-                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(White20))
-                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(progress).height(3.dp)
+                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(d.progressBarHeight).background(White20))
+                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(progress).height(d.progressBarHeight)
                     .background(Brush.horizontalGradient(listOf(Brand, Brand2))))
             }
         }
         Column(Modifier.weight(1f)) {
-            Text(title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
+            Text(title, color = White, fontWeight = FontWeight.SemiBold, fontSize = d.textMd + 1.sp, maxLines = 1)
             if (subtitle.isNotBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(subtitle, color = White60, fontSize = 12.sp)
+                Spacer(Modifier.height(d.spaceXxs))
+                Text(subtitle, color = White60, fontSize = d.textSm)
             }
         }
-        Icon(IconChevronRight, null, tint = White40, modifier = Modifier.size(18.dp))
+        Icon(IconChevronRight, null, tint = White40, modifier = Modifier.size(d.iconMd - 2.dp))
     }
-    Box(Modifier.fillMaxWidth().height(0.5.dp).padding(horizontal = 16.dp).background(GlassBorder))
+    Box(Modifier.fillMaxWidth().height(0.5.dp).padding(horizontal = d.screenHorizPad + d.spaceXs).background(GlassBorder))
 }
 
 @Composable
 fun EmptyTabHint(title: String, subtitle: String) {
-    Box(Modifier.fillMaxWidth().height(200.dp), Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title,    color = White60, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            Text(subtitle, color = White40, fontSize = 13.sp, textAlign = TextAlign.Center, lineHeight = 19.sp)
+    val d = LocalDimensions.current
+    Box(Modifier.fillMaxWidth().height(d.spaceXxl * 6.25f), Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
+            Text(title,    color = White60, fontWeight = FontWeight.SemiBold, fontSize = d.textLg)
+            Text(subtitle, color = White40, fontSize = d.textMd, textAlign = TextAlign.Center, lineHeight = (d.textMd.value * 1.45f).sp)
         }
     }
 }
 
 @Composable
 fun ProfileSectionHeader(text: String) {
+    val d = LocalDimensions.current
     Text(
-        text, color = White60, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+        text, color = White60, fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
         letterSpacing = 0.6.sp,
-        modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 8.dp),
+        modifier = Modifier.padding(start = d.screenHorizPad + d.spaceMd, top = d.spaceXl, bottom = d.spaceSm + d.spaceXxs),
     )
 }
