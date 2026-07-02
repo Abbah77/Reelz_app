@@ -211,7 +211,7 @@ fun NoConfigScreen(
                 .padding(horizontal = d.spaceXxl + d.spaceLg)
                 .fillMaxWidth(),
         ) {
-            Text(text = "📡", fontSize = d.textHero + 30.sp, textAlign = TextAlign.Center)
+            Text(text = "📡", fontSize = (d.textHero.value + 30).sp, textAlign = TextAlign.Center)
 
             Spacer(Modifier.height(d.spaceXl))
 

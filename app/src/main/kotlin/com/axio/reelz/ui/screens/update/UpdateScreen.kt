@@ -85,7 +85,7 @@ fun UpdateScreen(
                     .border(d.borderMed, Brush.linearGradient(listOf(Brand, Brand2)), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("↑", color = Brand, fontSize = d.textHero + 6.sp, fontWeight = FontWeight.Bold)
+                Text("↑", color = Brand, fontSize = (d.textHero.value + 6).sp, fontWeight = FontWeight.Bold)
             }
 
             Spacer(Modifier.height(d.spaceXxl - d.spaceXs))

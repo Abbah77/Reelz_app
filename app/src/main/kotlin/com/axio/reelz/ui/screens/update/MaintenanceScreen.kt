@@ -91,7 +91,7 @@ fun MaintenanceScreen(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("⚙️", fontSize = d.textHero + 6.sp)
+                    Text("⚙️", fontSize = (d.textHero.value + 6).sp)
                 }
             }
 

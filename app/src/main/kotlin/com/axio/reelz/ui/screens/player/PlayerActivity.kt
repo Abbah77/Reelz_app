@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -351,7 +352,6 @@ fun PlayerScreen(
     streamOrigin: String = "",
     downloadId: String? = null,
 ) {
-    val d = LocalDimensions.current
     val ctx     = LocalContext.current
     val ui      by vm.ui.collectAsState()
     val player  by vm.exoPlayerFlow.collectAsState()
@@ -577,7 +577,7 @@ fun PlayerScreen(
                     }
                     Text(
                         errorState?.msg ?: "",
-                        color = White80, fontSize = d.textXl - 2.sp,
+                        color = White80, fontSize = (d.textXl.value - 2).sp,
                         textAlign = TextAlign.Center, lineHeight = (d.textXl.value * 1.4f).sp,
                     )
                     // Extra note for network errors
@@ -927,7 +927,7 @@ private fun SubtitleDrawer(
         label = "drawerBg"
     )
 
-    if (!visible && offsetX == offscreenX) return
+    if (!visible && offsetX >= offscreenX) return
 
     // Glassmorphism backdrop (dim left 60% softly)
     Box(
@@ -1034,7 +1034,7 @@ private fun SubtitleDrawer(
                                 if (ui.subtitlesEnabled) "On • ${ui.subtitleOptions.firstOrNull { it.language == ui.activeSubtitleLanguage }?.label ?: ""}"
                                 else "Off",
                                 color = if (ui.subtitlesEnabled) Brand else White40,
-                                fontSize = d.textXxs + 1.sp,
+                                fontSize = (d.textXxs.value + 1).sp,
                             )
                         }
                         // Pill toggle
@@ -1298,7 +1298,7 @@ private fun SubtitleDrawer(
                                 val sign = if (ui.subtitleOffsetMs > 0) "+" else ""
                                 Text(
                                     "${sign}${ui.subtitleOffsetMs / 1000.0}s",
-                                    color = Brand, fontSize = d.textXxs + 1.sp, fontWeight = FontWeight.SemiBold,
+                                    color = Brand, fontSize = (d.textXxs.value + 1).sp, fontWeight = FontWeight.SemiBold,
                                 )
                             }
                             Text(
@@ -1389,7 +1389,7 @@ private fun SubtitleRow(
                 Text(
                     if (isEnabled) "On" else "Off",
                     color      = if (isEnabled) Brand else White40,
-                    fontSize   = d.textXxs + 1.sp,
+                    fontSize   = (d.textXxs.value + 1).sp,
                     fontWeight = FontWeight.SemiBold,
                 )
             }

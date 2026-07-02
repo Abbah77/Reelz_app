@@ -53,7 +53,6 @@ import com.axio.reelz.remoteconfig.ShortCategory
 import com.axio.reelz.scanner.StreamHeaders
 import com.axio.reelz.ui.components.CinematicSpinner
 import com.axio.reelz.ui.theme.*
-import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -645,6 +644,7 @@ private fun rememberShortsPlayerPool(
 ): ShortsPlayerPool {
     val ctx = LocalContext.current
     val players = remember {
+        val d = LocalDimensions.current
         List(PLAYER_POOL_SIZE) {
             ExoPlayer.Builder(ctx).build().apply {
                 repeatMode    = Player.REPEAT_MODE_ONE
@@ -657,7 +657,6 @@ private fun rememberShortsPlayerPool(
 
     fun buildMediaSource(video: ShortVideo): androidx.media3.exoplayer.source.MediaSource {
         val primaryUrl = video.hlsUrl.ifBlank { video.fallbackUrl }
-    val d = LocalDimensions.current
         val isRealHls  = primaryUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
         val videoSrc = if (isRealHls) {
             HlsMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(primaryUrl))
@@ -687,6 +686,7 @@ private fun FeedToggle(feedMode: FeedMode, onSwitch: (FeedMode) -> Unit) {
             .padding(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        val d = LocalDimensions.current
         FeedTab("For You",   feedMode == FeedMode.FOR_YOU)   { onSwitch(FeedMode.FOR_YOU) }
         FeedTab("Discovery", feedMode == FeedMode.DISCOVERY) { onSwitch(FeedMode.DISCOVERY) }
     }
@@ -701,8 +701,9 @@ private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
         Modifier.scale(scale).clip(RoundedCornerShape(50)).background(bg)
             .clickable(indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                val d = LocalDimensions.current
                 onClick = onClick)
-            .padding(horizontal = d.heroPadding - d.spaceSm, vertical = d.spaceSm + 1.dp),
+            .padding(horizontal = 18.dp, vertical = 7.dp),
         Alignment.Center,
     ) {
         Text(label, color = txt, fontSize = d.textMd, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
@@ -723,7 +724,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
 
     var pullOverscrollPx   by remember { mutableStateOf(0f) }
     val d = LocalDimensions.current
-    val maxPullPx          = with(androidx.compose.ui.platform.LocalDensity.current) { (d.avatarLg + d.spaceLg).toPx() }
+    val maxPullPx          = with(androidx.compose.ui.platform.LocalDensity.current) { 80.dp.toPx() }
     val pullIndicatorScale = (pullOverscrollPx / maxPullPx).coerceIn(0f, 1f)
 
     val shortsConfig = vm.shortsConfig
@@ -858,7 +859,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             .nestedScroll(nestedScroll)
     ) {
         when {
-            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerLg + d.spaceXs) }
+            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = 52.dp) }
 
             !ui.error.isNullOrEmpty() || ui.videos.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -867,7 +868,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                         color     = White40,
                         fontSize = d.textLg,
                         textAlign = TextAlign.Center,
-                        modifier  = Modifier.padding(horizontal = d.spaceXxl),
+                        modifier  = Modifier.padding(horizontal = 32.dp),
                     )
                 }
             }
@@ -901,14 +902,14 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         }
 
         // Top overlay
-        Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = d.spaceSm)) {
+        Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 6.dp)) {
             AnimatedVisibility(
                 visible = showSearch,
                 enter   = fadeIn(tween(180)) + slideInVertically(tween(200)) { -it },
                 exit    = fadeOut(tween(140)) + slideOutVertically(tween(160)) { -it },
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad - d.spaceXxs, vertical = d.sectionVertPad),
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
                 ) {
@@ -952,7 +953,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                     horizontalArrangement = Arrangement.Center,
                 ) {
                     Box(
-                        Modifier.padding(start = d.screenHorizPad - d.spaceXxs).size(d.avatarSm + d.spaceXxs).clip(CircleShape)
+                        Modifier.padding(start = 14.dp).size(34.dp).clip(CircleShape)
                             .background(Color(0x88000000)).border(1.dp, GlassBorderMd, CircleShape)
                             .clickable { showSearch = true },
                         Alignment.Center,
@@ -960,7 +961,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                     Spacer(Modifier.weight(1f))
                     FeedToggle(feedMode = ui.feedMode, onSwitch = { vm.switchMode(it) })
                     Spacer(Modifier.weight(1f))
-                    Spacer(Modifier.size(d.iconXl).padding(end = d.screenHorizPad - d.spaceXxs))
+                    Spacer(Modifier.size(d.iconXl).padding(end = 14.dp))
                 }
             }
 
@@ -970,8 +971,8 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                 exit    = fadeOut(tween(150)) + shrinkVertically(tween(170)),
             ) {
                 androidx.compose.foundation.lazy.LazyRow(
-                    modifier              = Modifier.fillMaxWidth().padding(top = d.spaceSm + d.spaceXxs),
-                    contentPadding = PaddingValues(horizontal = d.screenHorizPad - d.spaceXxs),
+                    modifier              = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    contentPadding        = PaddingValues(horizontal = d.screenHorizPad - d.spaceXxs),
                     horizontalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
                 ) {
                     items(ui.categories.size) { i ->
@@ -987,7 +988,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                                 )
                                 .border(1.dp, if (selected) Color.Transparent else GlassBorderMd, RoundedCornerShape(d.radiusLg))
                                 .clickable { vm.selectCategory(i) }
-                                .padding(horizontal = d.screenHorizPad - d.spaceXxs, vertical = d.spaceSm + 1.dp),
+                                .padding(horizontal = 14.dp, vertical = 7.dp),
                             Alignment.Center,
                         ) {
                             Text(
@@ -1005,7 +1006,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         // Pull-to-refresh indicator
         AnimatedVisibility(
             visible  = pullOverscrollPx > 4f || ui.isRefreshing,
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = d.avatarLg + d.spaceXxl),
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 64.dp),
             enter    = fadeIn(tween(120)) + scaleIn(tween(150), 0.6f),
             exit     = fadeOut(tween(100)) + scaleOut(tween(120), 0.6f),
         ) {
@@ -1015,7 +1016,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                     .clip(CircleShape).background(Color(0xCC000000)).border(1.dp, GlassBorderMd, CircleShape),
                 Alignment.Center,
             ) {
-                if (ui.isRefreshing) CinematicSpinner(size = d.spinnerSm + d.spaceSm)
+                if (ui.isRefreshing) CinematicSpinner(size = 20.dp)
                 else Icon(
                     Icons.Default.Refresh, null, tint = White,
                     modifier = Modifier.size(d.iconMd - 2.dp).graphicsLayer { rotationZ = pullIndicatorScale * 180f },
@@ -1024,7 +1025,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         }
 
         if (ui.isLoadingMore) {
-            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = d.spaceXxl * 3.1f)) {
+            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 100.dp)) {
                 CinematicSpinner(size = d.spinnerMd)
             }
         }
@@ -1049,8 +1050,8 @@ fun ShortVideoPage(
     onSave: () -> Unit,
     onMute: () -> Unit,
 ) {
-    val d = LocalDimensions.current
     var isBuffering by remember { mutableStateOf(true) }
+val d = LocalDimensions.current
 
     DisposableEffect(isActive, activePlayer) {
         if (!isActive || activePlayer == null) return@DisposableEffect onDispose {}
@@ -1100,9 +1101,9 @@ fun ShortVideoPage(
         )
 
         Column(
-            Modifier.align(Alignment.BottomEnd).padding(end = d.screenHorizPad - d.spaceXxs, bottom = d.spaceXxl * 3.4f),
+            Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 110.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(d.spaceXxl - d.spaceXs),
+            verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
             TikTokAction(
                 icon  = if (isLiked) IconHeartFilled else IconHeart,
@@ -1127,14 +1128,14 @@ fun ShortVideoPage(
         }
 
         Column(
-            Modifier.align(Alignment.BottomStart).padding(start = d.screenHorizPad, end = d.avatarLg + d.spaceLg, bottom = d.spaceXxl * 3.375f),
+            Modifier.align(Alignment.BottomStart).padding(start = 16.dp, end = 80.dp, bottom = 108.dp),
             verticalArrangement = Arrangement.spacedBy(d.spaceSm),
         ) {
             Box(
                 Modifier.clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                     .background(Brand.copy(alpha = 0.18f))
                     .border(1.dp, Brand.copy(0.35f), RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                    .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 1.dp),
+                    .padding(horizontal = 10.dp, vertical = 3.dp),
             ) { Text(video.community, color = Brand2, fontSize = d.textXs, fontWeight = FontWeight.SemiBold) }
             Text(video.author, color = White80, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
             Text(video.title, color = White, fontSize = d.textMd, fontWeight = FontWeight.Medium,
@@ -1150,32 +1151,7 @@ fun ShortVideoPage(
 @Composable
 private fun TikTokAction(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
     var pressed by remember { mutableStateOf(false) }
-    val scale   by animateFloatAsState(if (pressed) 1.3f else 1f, spring(0.3f, 700f), label = "s")
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
-        Icon(
-            icon, null, tint = tint,
-            modifier = Modifier.size(d.avatarSm).scale(scale).clickable(
-                indication = null,
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-            ) { pressed = true; onClick() },
-        )
-        Text(label, color = White.copy(.85f), fontSize = d.textXs, fontWeight = FontWeight.Medium)
-    }
-    LaunchedEffect(pressed) { if (pressed) { kotlinx.coroutines.delay(200); pressed = false } }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-private fun formatCount(n: Int): String = when {
-    n >= 1_000_000 -> "${"%.1f".format(n / 1_000_000f)}M"
-    n >= 1_000     -> "${"%.1f".format(n / 1_000f)}K"
-    else           -> n.toString()
-}
-
-private fun TikTokAction(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    var pressed by remember { mutableStateOf(false) }
+    val d = LocalDimensions.current
     val scale   by animateFloatAsState(if (pressed) 1.3f else 1f, spring(0.3f, 700f), label = "s")
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
         Icon(

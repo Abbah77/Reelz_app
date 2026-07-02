@@ -15,7 +15,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import androidx.navigation.NavController
 import com.axio.reelz.ui.theme.*
-import com.axio.reelz.ui.theme.LocalDimensions
 
 // ── Icon vectors ──────────────────────────────────────────────────────────────
 
@@ -166,7 +165,7 @@ fun SettingsScreen(nav: NavController) {
             onDismiss = { showAboutDialog = false },
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
-                Text("Reelz", color = Brand, fontWeight = FontWeight.Black, fontSize = d.textXxl - 4.sp)
+                Text("Reelz", color = Brand, fontWeight = FontWeight.Black, fontSize = d.textXl)
                 Text(
                     "Your personal cinema — stream movies and TV shows, download for offline viewing, and discover what to watch next.\n\nBuilt with ❤️ using Kotlin & Jetpack Compose.",
                     color = White60, fontSize = d.textMd, lineHeight = (d.textMd.value * 1.5f).sp,
@@ -217,7 +216,7 @@ fun SettingsScreen(nav: NavController) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceLg),
+                .padding(horizontal = 12.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
         ) {
@@ -240,7 +239,7 @@ fun SettingsScreen(nav: NavController) {
             Modifier
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = d.screenHorizPad)
-                .padding(bottom = d.spaceXxl * 1.25f),
+                .padding(bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
         ) {
 
@@ -311,7 +310,7 @@ private fun SettingsSectionLabel(text: String) {
         fontSize = d.textXs,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = 0.8.sp,
-        modifier = Modifier.padding(start = d.spaceXs, top = d.spaceSm, bottom = d.spaceXxs),
+        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
     )
 }
 
@@ -334,15 +333,16 @@ private fun SettingsCard(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXxs),
     ) {
+        val d = LocalDimensions.current
         Box(
             Modifier
-                .size(d.buttonHeightSm - d.spaceXxs)
+                .size(40.dp)
                 .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                 .background(GlassMd)
                 .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs)),
             Alignment.Center,
         ) { Icon(icon, null, tint = iconTint, modifier = Modifier.size(d.iconMd - 2.dp)) }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(d.spaceXxs)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
             Text(subtitle, color = White40, fontSize = d.textXs)
         }
@@ -361,139 +361,7 @@ private fun ReelzDialog(
         containerColor = BgCard,
         shape = RoundedCornerShape(d.radiusLg),
         title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }
-        },
-    )
-}
-
-private fun SettingsSectionLabel(text: String) {
-    Text(
-        text,
-        color = White40,
-        fontSize = d.textXs,
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = 0.8.sp,
-        modifier = Modifier.padding(start = d.spaceXs, top = d.spaceSm, bottom = d.spaceXxs),
-    )
-}
-
-@Composable
-private fun SettingsCard(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    iconTint: Color = White60,
-    onClick: () -> Unit,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(d.radiusMd))
-            .background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
-            .clickable(onClick = onClick)
-            .padding(d.spaceLg),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXxs),
-    ) {
-        Box(
-            Modifier
-                .size(d.buttonHeightSm - d.spaceXxs)
-                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                .background(GlassMd)
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs)),
-            Alignment.Center,
-        ) { Icon(icon, null, tint = iconTint, modifier = Modifier.size(d.iconMd - 2.dp)) }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(d.spaceXxs)) {
-            Text(title, color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, color = White40, fontSize = d.textXs)
-        }
-        Icon(IconChevronRight, null, tint = White30, modifier = Modifier.size(d.iconMd - 4.dp))
-    }
-}
-
-@Composable
-private fun ReelzDialog(
-    title: String,
-    onDismiss: () -> Unit,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = BgCard,
-        shape = RoundedCornerShape(d.radiusLg),
-        title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }
-        },
-    )
-}
-
-private fun SettingsCard(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    iconTint: Color = White60,
-    onClick: () -> Unit,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(d.radiusMd))
-            .background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
-            .clickable(onClick = onClick)
-            .padding(d.spaceLg),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXxs),
-    ) {
-        Box(
-            Modifier
-                .size(d.buttonHeightSm - d.spaceXxs)
-                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                .background(GlassMd)
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs)),
-            Alignment.Center,
-        ) { Icon(icon, null, tint = iconTint, modifier = Modifier.size(d.iconMd - 2.dp)) }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(d.spaceXxs)) {
-            Text(title, color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, color = White40, fontSize = d.textXs)
-        }
-        Icon(IconChevronRight, null, tint = White30, modifier = Modifier.size(d.iconMd - 4.dp))
-    }
-}
-
-@Composable
-private fun ReelzDialog(
-    title: String,
-    onDismiss: () -> Unit,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = BgCard,
-        shape = RoundedCornerShape(d.radiusLg),
-        title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }
-        },
-    )
-}
-
-private fun ReelzDialog(
-    title: String,
-    onDismiss: () -> Unit,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = BgCard,
-        shape = RoundedCornerShape(d.radiusLg),
-        title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
+        val d = LocalDimensions.current
         text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }

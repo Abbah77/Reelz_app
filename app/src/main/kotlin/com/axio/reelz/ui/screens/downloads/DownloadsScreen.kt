@@ -248,6 +248,7 @@ private fun toggle(set: Set<String>, key: String): Set<String> =
 
 @Composable
 private fun EmptyDownloadsState() {
+    val d = LocalDimensions.current
     Box(Modifier.fillMaxSize(), Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
             Box(contentAlignment = Alignment.Center) {
@@ -411,6 +412,7 @@ fun SeriesCard(
 
 @Composable
 private fun SeriesStatusDot(group: SeriesGroup) {
+    val d = LocalDimensions.current
     val color = when {
         group.isFullyDownloaded -> Success
         group.isAnyActive       -> Brand

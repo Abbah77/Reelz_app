@@ -812,7 +812,7 @@ fun DownloadQualitySheet(
                                     track.label,
                                     color = if (isLocked) White40 else if (isBest) Brand else White,
                                     fontWeight = FontWeight.ExtraBold,
-                                    fontSize = d.textMd + 1.sp,
+                                    fontSize = (d.textMd.value + 1).sp,
                                 )
                             }
 
@@ -826,7 +826,7 @@ fun DownloadQualitySheet(
                                         descLabel,
                                         color = if (isLocked) White40 else White,
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = d.textMd + 1.sp,
+                                        fontSize = (d.textMd.value + 1).sp,
                                     )
                                     when {
                                         isLocked -> {
@@ -1358,7 +1358,7 @@ fun CastCard(cast: CastMember) {
             }
         }
         Spacer(Modifier.height(d.spaceXs + 1.dp))
-        Text(cast.name, color = White80, fontSize = d.textXxs + 1.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = ((d.textXxs.value + 1) * 1.3f).sp)
+        Text(cast.name, color = White80, fontSize = (d.textXxs.value + 1).sp, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = ((d.textXxs.value + 1) * 1.3f).sp)
         Text(cast.character, color = White40, fontSize = d.textXxs, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
     }
 }
@@ -1472,9 +1472,9 @@ fun DetailSkeleton() {
         Spacer(Modifier.height(d.spaceMd + d.spaceXs))
         Column(Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs), verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs)) {
             // Title
-            ShimmerBox(Modifier.fillMaxWidth(0.7f).height(d.textXxl + 4.dp), radius = d.radiusSm)
+            ShimmerBox(Modifier.fillMaxWidth(0.7f).height(d.spaceXl + 4.dp), radius = d.radiusSm)
             // Subtitle line
-            ShimmerBox(Modifier.fillMaxWidth(0.45f).height(d.textLg - 1.dp), radius = d.radiusSm)
+            ShimmerBox(Modifier.fillMaxWidth(0.45f).height(d.spaceLg - d.spaceXxs), radius = d.radiusSm)
             Spacer(Modifier.height(d.spaceXs))
             // Genre pills
             Row(horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
@@ -1487,9 +1487,9 @@ fun DetailSkeleton() {
             ShimmerBox(Modifier.fillMaxWidth().height(d.buttonHeightMd), radius = d.radiusMd - d.spaceXs)
             Spacer(Modifier.height(d.spaceXs))
             // Overview lines
-            ShimmerBox(Modifier.fillMaxWidth().height(d.textMd), radius = d.radiusSm)
-            ShimmerBox(Modifier.fillMaxWidth().height(d.textMd), radius = d.radiusSm)
-            ShimmerBox(Modifier.fillMaxWidth(0.6f).height(d.textMd), radius = d.radiusSm)
+            ShimmerBox(Modifier.fillMaxWidth().height(d.spaceMd), radius = d.radiusSm)
+            ShimmerBox(Modifier.fillMaxWidth().height(d.spaceMd), radius = d.radiusSm)
+            ShimmerBox(Modifier.fillMaxWidth(0.6f).height(d.spaceMd), radius = d.radiusSm)
         }
     }
 }
@@ -1508,8 +1508,8 @@ fun CastRowSkeleton() {
                 verticalArrangement = Arrangement.spacedBy(d.spaceSm),
             ) {
                 ShimmerBox(Modifier.size(d.avatarLg), radius = d.avatarLg / 2)
-                ShimmerBox(Modifier.width(d.avatarMd + d.spaceLg - d.spaceXs - d.spaceXxs).height(d.textXs))
-                ShimmerBox(Modifier.width(d.avatarMd - d.spaceXxs).height(d.textXxs))
+                ShimmerBox(Modifier.width(d.avatarMd + d.spaceLg - d.spaceXs - d.spaceXxs).height(d.spaceSm))
+                ShimmerBox(Modifier.width(d.avatarMd - d.spaceXxs).height(d.spaceXs))
             }
         }
     }
@@ -1526,8 +1526,8 @@ fun MediaRowSkeleton() {
         repeat(4) {
             Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                 ShimmerBox(Modifier.width(d.cardRowWidth).height(d.cardRowHeight), radius = d.radiusMd - d.spaceXs)
-                ShimmerBox(Modifier.width(d.cardRowWidth - d.spaceMd).height(d.textXs + 1.dp))
-                ShimmerBox(Modifier.width(d.cardRowWidth - d.spaceXl - d.spaceXs).height(d.textXxs))
+                ShimmerBox(Modifier.width(d.cardRowWidth - d.spaceMd).height(d.spaceSm + 1.dp))
+                ShimmerBox(Modifier.width(d.cardRowWidth - d.spaceXl - d.spaceXs).height(d.spaceXs))
             }
         }
     }

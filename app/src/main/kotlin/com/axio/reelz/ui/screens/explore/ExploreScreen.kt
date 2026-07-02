@@ -363,6 +363,7 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
 
 @Composable
 private fun ExploreEmptyState(onClear: () -> Unit) {
+    val d = LocalDimensions.current
     Box(Modifier.fillMaxSize(), Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
             Box(contentAlignment = Alignment.Center) {
@@ -371,7 +372,7 @@ private fun ExploreEmptyState(onClear: () -> Unit) {
                     .border(1.dp, Brand.copy(.3f), CircleShape))
                 Icon(IconCompass, null, tint = Brand.copy(.8f), modifier = Modifier.size(d.buttonHeightSm - d.spaceMd))
             }
-            Text("Nothing matches yet", color = White60, fontSize = d.textXl - 1.sp, fontWeight = FontWeight.SemiBold)
+            Text("Nothing matches yet", color = White60, fontSize = (d.textXl.value - 1).sp, fontWeight = FontWeight.SemiBold)
             Text("Try widening your filters", color = White40, fontSize = d.textMd)
             Spacer(Modifier.height(d.spaceXs))
             TextButton(onClick = onClear) { Text("Clear filters", color = Brand, fontWeight = FontWeight.SemiBold) }
@@ -454,7 +455,7 @@ fun ExploreFilterSheet(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Icon(IconFilter, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp))
                 Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
-                Text("Refine results", color = White, fontWeight = FontWeight.Bold, fontSize = d.textXl - 1.sp)
+                Text("Refine results", color = White, fontWeight = FontWeight.Bold, fontSize = (d.textXl.value - 1).sp)
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onClear) { Text("Reset", color = White60, fontSize = d.textMd) }
             }

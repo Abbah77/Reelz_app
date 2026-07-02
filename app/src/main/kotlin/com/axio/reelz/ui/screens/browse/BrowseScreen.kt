@@ -465,7 +465,7 @@ fun BrowseScreen(
                     item(key = "skeletonRow1") {
                         Column {
                             Box(
-                                Modifier.fillMaxWidth(0.45f).height(d.textLg)
+                                Modifier.fillMaxWidth(0.45f).height(d.spaceLg - d.spaceXxs)
                                     .padding(start = d.screenHorizPad, top = d.spaceXl, bottom = d.spaceMd)
                                     .clip(RoundedCornerShape(d.spaceSm)).background(BgSurface)
                             )
@@ -475,7 +475,7 @@ fun BrowseScreen(
                     item(key = "skeletonRow2") {
                         Column {
                             Box(
-                                Modifier.fillMaxWidth(0.35f).height(d.textLg)
+                                Modifier.fillMaxWidth(0.35f).height(d.spaceLg - d.spaceXxs)
                                     .padding(start = d.screenHorizPad, top = d.spaceXl, bottom = d.spaceMd)
                                     .clip(RoundedCornerShape(d.spaceSm)).background(BgSurface)
                             )
@@ -1064,6 +1064,7 @@ fun HeroBannerPager(
     onClick: (Media) -> Unit,
 ) {
     val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
     val pagerState = rememberPagerState { items.size }
 
     LaunchedEffect(pagerState) {
@@ -1077,9 +1078,6 @@ fun HeroBannerPager(
             }
         }
     }
-
-    val d = LocalDimensions.current
-    val screenH = LocalConfiguration.current.screenHeightDp.dp
 
     Box(Modifier.fillMaxWidth()) {
         HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->

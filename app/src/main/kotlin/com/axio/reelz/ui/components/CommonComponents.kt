@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.*
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -842,9 +843,9 @@ fun SkeletonBannerLoader() {
             )
     ) {
         Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding), verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs)) {
-            Box(Modifier.fillMaxWidth(0.22f).height(d.textLg).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
+            Box(Modifier.fillMaxWidth(0.22f).height(d.spaceLg - d.spaceXxs).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
             Box(Modifier.fillMaxWidth(0.7f).height(d.textHero + 4.dp).clip(RoundedCornerShape(d.spaceSm)).background(BgRaised))
-            Box(Modifier.fillMaxWidth(0.45f).height(d.textMd).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
+            Box(Modifier.fillMaxWidth(0.45f).height(d.spaceMd).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
             Row(horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
                 Box(Modifier.fillMaxWidth(0.38f).height(d.buttonHeightMd).clip(RoundedCornerShape(d.radiusPill)).background(BgSurface))
                 Box(Modifier.fillMaxWidth(0.30f).height(d.buttonHeightMd).clip(RoundedCornerShape(d.radiusPill)).background(BgRaised))
@@ -876,8 +877,8 @@ fun SkeletonRowLoader() {
         repeat(4) {
             Column(Modifier.width(d.cardRowWidth), verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                 Box(Modifier.width(d.cardRowWidth).height(d.cardRowHeight).clip(RoundedCornerShape(d.radiusMd)).background(shimmerBrush))
-                Box(Modifier.fillMaxWidth(0.88f).height(d.textSm).clip(RoundedCornerShape(d.spaceXs)).background(shimmerBrush))
-                Box(Modifier.fillMaxWidth(0.65f).height(d.textXs).clip(RoundedCornerShape(d.spaceXs)).background(shimmerBrush))
+                Box(Modifier.fillMaxWidth(0.88f).height(d.spaceSm + d.spaceXxs).clip(RoundedCornerShape(d.spaceXs)).background(shimmerBrush))
+                Box(Modifier.fillMaxWidth(0.65f).height(d.spaceSm).clip(RoundedCornerShape(d.spaceXs)).background(shimmerBrush))
             }
         }
     }
@@ -902,7 +903,6 @@ fun CinematicSpinner(size: Dp = 44.dp, modifier: Modifier = Modifier, color: Col
     val pulse  by inf.animateFloat(0.6f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), "p")
 
     Canvas(modifier.size(size)) {
-    val d = LocalDimensions.current
         val r1 = size.toPx() / 2f
         val r2 = r1 * 0.62f
         val cx = r1; val cy = r1
@@ -1141,7 +1141,7 @@ fun RemoveAdsBanner(
                     "Remove ads",
                     color      = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize   = d.textMd + 1.sp,
+                    fontSize   = (d.textMd.value + 1).sp,
                 )
                 Text(
                     "Go Premium for an uninterrupted, ad-free experience",
@@ -1153,7 +1153,7 @@ fun RemoveAdsBanner(
             }
         }
         IconButton(onClick = onDismiss, modifier = Modifier.padding(end = d.spaceMd).size(d.buttonHeightSm - d.spaceSm)) {
-            Icon(IconClose, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(d.iconSm + 2.dp))
+            Icon(androidx.compose.material.icons.Icons.Default.Close, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(d.iconSm + 2.dp))
         }
     }
 }

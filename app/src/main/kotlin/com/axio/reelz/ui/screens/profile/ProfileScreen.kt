@@ -376,7 +376,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                                 "Premium expired" to "Renew to get your benefits back"
                             else -> "Go Premium" to "4K streaming, unlimited downloads, no ads"
                         }
-                        Text(title, color = White, fontWeight = FontWeight.Bold, fontSize = d.textMd + 1.sp)
+                        Text(title, color = White, fontWeight = FontWeight.Bold, fontSize = (d.textMd.value + 1).sp)
                         Text(subtitle, color = White60, fontSize = d.textXs)
                     }
                     Icon(IconChevronRight, null, tint = White40, modifier = Modifier.size(d.iconMd - 2.dp))
@@ -527,10 +527,10 @@ fun HistoryRowSkeleton() {
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
             // Title skeleton
-            Box(Modifier.fillMaxWidth(0.65f).height(d.textLg - 1.dp).clip(RoundedCornerShape(d.spaceSm))
+            Box(Modifier.fillMaxWidth(0.65f).height(d.spaceLg - d.spaceXxs).clip(RoundedCornerShape(d.spaceSm))
                 .background(BgRaised).background(shimmer))
             // Subtitle skeleton
-            Box(Modifier.fillMaxWidth(0.35f).height(d.textSm).clip(RoundedCornerShape(d.spaceSm))
+            Box(Modifier.fillMaxWidth(0.35f).height(d.spaceMd).clip(RoundedCornerShape(d.spaceSm))
                 .background(BgRaised).background(shimmer))
         }
     }
@@ -627,12 +627,12 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
             if (isLoading) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
                     CinematicSpinner(size = d.iconMd - 4.dp, color = Brand)
-                    Text("Opening Google…", color = White60, fontWeight = FontWeight.SemiBold, fontSize = d.textMd + 1.sp)
+                    Text("Opening Google…", color = White60, fontWeight = FontWeight.SemiBold, fontSize = (d.textMd.value + 1).sp)
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
-                    Text("G", color = Brand, fontWeight = FontWeight.Black, fontSize = d.textLg + 1.sp)
-                    Text("Continue with Google", color = White, fontWeight = FontWeight.SemiBold, fontSize = d.textMd + 1.sp)
+                    Text("G", color = Brand, fontWeight = FontWeight.Black, fontSize = (d.textLg.value + 1).sp)
+                    Text("Continue with Google", color = White, fontWeight = FontWeight.SemiBold, fontSize = (d.textMd.value + 1).sp)
                 }
             }
         }
@@ -704,7 +704,7 @@ fun LibraryRow(title: String, poster: String?, subtitle: String = "", progress: 
             }
         }
         Column(Modifier.weight(1f)) {
-            Text(title, color = White, fontWeight = FontWeight.SemiBold, fontSize = d.textMd + 1.sp, maxLines = 1)
+            Text(title, color = White, fontWeight = FontWeight.SemiBold, fontSize = (d.textMd.value + 1).sp, maxLines = 1)
             if (subtitle.isNotBlank()) {
                 Spacer(Modifier.height(d.spaceXxs))
                 Text(subtitle, color = White60, fontSize = d.textSm)

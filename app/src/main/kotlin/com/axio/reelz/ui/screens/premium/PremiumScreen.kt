@@ -44,7 +44,6 @@ import com.axio.reelz.remoteconfig.TierConfig
 import com.axio.reelz.remoteconfig.UserState
 import com.axio.reelz.ui.components.BrandButton
 import com.axio.reelz.ui.theme.*
-import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -216,10 +215,10 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
     val glow by shimmer.animateFloat(0.5f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "g")
 
     Box(Modifier.fillMaxSize().background(Bg)) {
-    val d = LocalDimensions.current
+        val d = LocalDimensions.current
         LazyColumn(
             Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = d.spaceXxl),
+            contentPadding = PaddingValues(bottom = 32.dp),
         ) {
             // ── Header ───────────────────────────────────────────────────
             item {
@@ -236,7 +235,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
             // ── Signature: glowing crown + state-aware headline ─────────────
             item {
                 Column(
-                    Modifier.fillMaxWidth().padding(horizontal = d.spaceXl, vertical = d.spaceMd - d.spaceXxs),
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Box(
@@ -393,6 +392,7 @@ private fun PaystackSubscribeButton(
             disabledContentColor = White40,
         ),
     ) {
+        val d = LocalDimensions.current
         if (isLoading) {
             CircularProgressIndicator(Modifier.size(d.iconSm + 2.dp), color = Brand2, strokeWidth = 2.dp)
         } else {
@@ -413,6 +413,7 @@ private fun ComparisonRow(
         Modifier.fillMaxWidth().padding(vertical = d.spaceMd),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        val d = LocalDimensions.current
         Text(label, color = White80, fontSize = d.textMd, modifier = Modifier.weight(1.3f))
         Box(Modifier.weight(1f), Alignment.Center) {
             if (boolFree != null) BoolPip(boolFree) else Text(freeValue, color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
@@ -430,6 +431,7 @@ private fun BoolPip(value: Boolean) {
             .background(if (value) Brand.copy(.18f) else GlassMd),
         Alignment.Center,
     ) {
+        val d = LocalDimensions.current
         Icon(
             if (value) IconCheck else IconX,
             null,
@@ -449,217 +451,7 @@ private fun PriceCard(label: String, price: String, period: String, modifier: Mo
             .padding(d.spaceLg),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (best) {
-            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
-            Spacer(Modifier.height(d.spaceXs))
-        }
-        Text(label, color = White60, fontSize = d.textSm)
-        Spacer(Modifier.height(d.spaceXs))
-        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
-        Text(period, color = White40, fontSize = d.textXs)
-    }
-}
-
-private fun formatNgn(amount: Long): String =
-    amount.toString().reversed().chunked(3).joinToString(",").reversed()
-
-private fun PaystackSubscribeButton(
-    label: String,
-    enabled: Boolean,
-    isLoading: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    OutlinedButton(
-        onClick  = onClick,
-        enabled  = enabled,
-        modifier = modifier.height(d.buttonHeightMd),
-        shape    = RoundedCornerShape(d.radiusPill),
-        border   = BorderStroke(1.dp, if (enabled) Brand.copy(.5f) else GlassBorderMd),
-        colors   = ButtonDefaults.outlinedButtonColors(
-            contentColor         = if (enabled) Brand2 else White40,
-            disabledContentColor = White40,
-        ),
-    ) {
-        if (isLoading) {
-            CircularProgressIndicator(Modifier.size(d.iconSm + 2.dp), color = Brand2, strokeWidth = 2.dp)
-        } else {
-            Text(label, fontWeight = FontWeight.SemiBold, fontSize = d.textMd)
-        }
-    }
-}
-
-@Composable
-private fun ComparisonRow(
-    label: String,
-    freeValue: String,
-    premiumValue: String,
-    boolFree: Boolean? = null,
-    boolPremium: Boolean? = null,
-) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = d.spaceMd),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, color = White80, fontSize = d.textMd, modifier = Modifier.weight(1.3f))
-        Box(Modifier.weight(1f), Alignment.Center) {
-            if (boolFree != null) BoolPip(boolFree) else Text(freeValue, color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
-        }
-        Box(Modifier.weight(1f), Alignment.Center) {
-            if (boolPremium != null) BoolPip(boolPremium) else Text(premiumValue, color = Brand2, fontWeight = FontWeight.SemiBold, fontSize = d.textSm, textAlign = TextAlign.Center)
-        }
-    }
-}
-
-@Composable
-private fun BoolPip(value: Boolean) {
-    Box(
-        Modifier.size(d.iconMd).clip(CircleShape)
-            .background(if (value) Brand.copy(.18f) else GlassMd),
-        Alignment.Center,
-    ) {
-        Icon(
-            if (value) IconCheck else IconX,
-            null,
-            tint = if (value) Brand2 else White40,
-            modifier = Modifier.size(d.iconSm),
-        )
-    }
-}
-
-@Composable
-private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
-            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .padding(d.spaceLg),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (best) {
-            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
-            Spacer(Modifier.height(d.spaceXs))
-        }
-        Text(label, color = White60, fontSize = d.textSm)
-        Spacer(Modifier.height(d.spaceXs))
-        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
-        Text(period, color = White40, fontSize = d.textXs)
-    }
-}
-
-private fun formatNgn(amount: Long): String =
-    amount.toString().reversed().chunked(3).joinToString(",").reversed()
-
-private fun ComparisonRow(
-    label: String,
-    freeValue: String,
-    premiumValue: String,
-    boolFree: Boolean? = null,
-    boolPremium: Boolean? = null,
-) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = d.spaceMd),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, color = White80, fontSize = d.textMd, modifier = Modifier.weight(1.3f))
-        Box(Modifier.weight(1f), Alignment.Center) {
-            if (boolFree != null) BoolPip(boolFree) else Text(freeValue, color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
-        }
-        Box(Modifier.weight(1f), Alignment.Center) {
-            if (boolPremium != null) BoolPip(boolPremium) else Text(premiumValue, color = Brand2, fontWeight = FontWeight.SemiBold, fontSize = d.textSm, textAlign = TextAlign.Center)
-        }
-    }
-}
-
-@Composable
-private fun BoolPip(value: Boolean) {
-    Box(
-        Modifier.size(d.iconMd).clip(CircleShape)
-            .background(if (value) Brand.copy(.18f) else GlassMd),
-        Alignment.Center,
-    ) {
-        Icon(
-            if (value) IconCheck else IconX,
-            null,
-            tint = if (value) Brand2 else White40,
-            modifier = Modifier.size(d.iconSm),
-        )
-    }
-}
-
-@Composable
-private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
-            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .padding(d.spaceLg),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (best) {
-            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
-            Spacer(Modifier.height(d.spaceXs))
-        }
-        Text(label, color = White60, fontSize = d.textSm)
-        Spacer(Modifier.height(d.spaceXs))
-        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
-        Text(period, color = White40, fontSize = d.textXs)
-    }
-}
-
-private fun formatNgn(amount: Long): String =
-    amount.toString().reversed().chunked(3).joinToString(",").reversed()
-
-private fun BoolPip(value: Boolean) {
-    Box(
-        Modifier.size(d.iconMd).clip(CircleShape)
-            .background(if (value) Brand.copy(.18f) else GlassMd),
-        Alignment.Center,
-    ) {
-        Icon(
-            if (value) IconCheck else IconX,
-            null,
-            tint = if (value) Brand2 else White40,
-            modifier = Modifier.size(d.iconSm),
-        )
-    }
-}
-
-@Composable
-private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
-            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .padding(d.spaceLg),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (best) {
-            Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
-            Spacer(Modifier.height(d.spaceXs))
-        }
-        Text(label, color = White60, fontSize = d.textSm)
-        Spacer(Modifier.height(d.spaceXs))
-        Text(price, color = White, fontWeight = FontWeight.Black, fontSize = d.textXxl)
-        Text(period, color = White40, fontSize = d.textXs)
-    }
-}
-
-private fun formatNgn(amount: Long): String =
-    amount.toString().reversed().chunked(3).joinToString(",").reversed()
-
-private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .background(if (best) Brush.linearGradient(listOf(BrandDeep, BgCard)) else Brush.linearGradient(listOf(BgCard, BgCard)))
-            .border(1.dp, if (best) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .padding(d.spaceLg),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+        val d = LocalDimensions.current
         if (best) {
             Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
             Spacer(Modifier.height(d.spaceXs))
