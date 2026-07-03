@@ -1153,7 +1153,7 @@ fun RemoveAdsBanner(
             }
         }
         IconButton(onClick = onDismiss, modifier = Modifier.padding(end = d.spaceMd).size(d.buttonHeightSm - d.spaceSm)) {
-            Icon(androidx.compose.material.icons.Icons.Default.Close, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(d.iconSm + 2.dp))
+            Icon(androidx.compose.material.icons.Icons.Filled.Close, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(d.iconSm + 2.dp))
         }
     }
 }
