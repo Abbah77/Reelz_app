@@ -123,6 +123,7 @@ dependencies {
     // sessions with basic device/app-state breadcrumbs.
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.crashlytics)
+    implementation(libs.firebase.crashlytics.ndk)
     implementation(libs.firebase.analytics)
 
     // Compose BOM
