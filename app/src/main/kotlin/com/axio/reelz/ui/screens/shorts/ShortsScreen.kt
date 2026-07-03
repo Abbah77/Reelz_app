@@ -644,7 +644,6 @@ private fun rememberShortsPlayerPool(
 ): ShortsPlayerPool {
     val ctx = LocalContext.current
     val players = remember {
-        val d = LocalDimensions.current
         List(PLAYER_POOL_SIZE) {
             ExoPlayer.Builder(ctx).build().apply {
                 repeatMode    = Player.REPEAT_MODE_ONE
@@ -694,6 +693,7 @@ private fun FeedToggle(feedMode: FeedMode, onSwitch: (FeedMode) -> Unit) {
 
 @Composable
 private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     val bg    by animateColorAsState(if (selected) White else Color.Transparent, tween(200), label = "tabBg")
     val txt   by animateColorAsState(if (selected) Color.Black else White60, tween(200), label = "tabTxt")
     val scale by animateFloatAsState(if (selected) 1f else 0.95f, spring(0.7f, 600f), label = "tabS")
@@ -701,7 +701,6 @@ private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
         Modifier.scale(scale).clip(RoundedCornerShape(50)).background(bg)
             .clickable(indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                val d = LocalDimensions.current
                 onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 7.dp),
         Alignment.Center,
@@ -717,13 +716,13 @@ private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
 @OptIn(UnstableApi::class)
 @Composable
 fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = hiltViewModel()) {
+    val d = LocalDimensions.current
     val ui      by vm.ui.collectAsState()
     val liked   by vm.liked.collectAsState()
     val saved   by vm.saved.collectAsState()
     val deadIds by vm.deadIds.collectAsState()
 
     var pullOverscrollPx   by remember { mutableStateOf(0f) }
-    val d = LocalDimensions.current
     val maxPullPx          = with(androidx.compose.ui.platform.LocalDensity.current) { 80.dp.toPx() }
     val pullIndicatorScale = (pullOverscrollPx / maxPullPx).coerceIn(0f, 1f)
 
@@ -1050,8 +1049,8 @@ fun ShortVideoPage(
     onSave: () -> Unit,
     onMute: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     var isBuffering by remember { mutableStateOf(true) }
-val d = LocalDimensions.current
 
     DisposableEffect(isActive, activePlayer) {
         if (!isActive || activePlayer == null) return@DisposableEffect onDispose {}
@@ -1150,8 +1149,8 @@ val d = LocalDimensions.current
 
 @Composable
 private fun TikTokAction(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    var pressed by remember { mutableStateOf(false) }
     val d = LocalDimensions.current
+    var pressed by remember { mutableStateOf(false) }
     val scale   by animateFloatAsState(if (pressed) 1.3f else 1f, spring(0.3f, 700f), label = "s")
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
         Icon(

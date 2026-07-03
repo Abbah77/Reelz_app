@@ -241,9 +241,9 @@ class ProfileViewModel @Inject constructor(
 
 @Composable
 fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
+    val d = LocalDimensions.current
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
-    val d = LocalDimensions.current
 
     LazyColumn(
         Modifier.fillMaxSize().background(Bg).statusBarsPadding(),
@@ -541,11 +541,11 @@ fun HistoryRowSkeleton() {
 
 @Composable
 fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, String?) -> Unit) {
+    val d = LocalDimensions.current
     val scope = rememberCoroutineScope()
     val activity = ctx as? android.app.Activity
     var errorMsg   by remember { mutableStateOf<String?>(null) }
     var isLoading  by remember { mutableStateOf(false) }
-    val d = LocalDimensions.current
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(

@@ -200,8 +200,8 @@ fun ReelzBottomNav(
     isHomeRefreshing: Boolean,
     onTabSelected: (String) -> Unit,
 ) {
-    val haptic = LocalHapticFeedback.current
     val d = LocalDimensions.current
+    val haptic = LocalHapticFeedback.current
 
     Box(
         modifier = Modifier

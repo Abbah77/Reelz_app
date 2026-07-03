@@ -536,10 +536,12 @@ fun DetailScreen(
     LaunchedEffect(tmdbId) { vm.load(tmdbId, mediaType) }
 
     fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
+        val d = LocalDimensions.current
         val d = ui.detail ?: return
 
         // Helper so both the ad-dismissed path and the direct path share one call-site
         fun startPlayerActivity() {
+            val d = LocalDimensions.current
             // Check engine's live prefetchState first — handles the race where the
             // subscriber coroutine has not updated preResolvedStream yet but the engine
             // already finished. Either path avoids a second resolve() in the player.
@@ -1071,9 +1073,9 @@ private fun DetailContent(
     onDownloadMovie: () -> Unit,
     onDownloadEpisode: (Int, Int, String) -> Unit,
 ) {
+    val d = LocalDimensions.current
     val detail  = ui.detail!!
     val isMovie = detail.mediaType == MediaType.MOVIE
-    val d = LocalDimensions.current
     val screenH = LocalConfiguration.current.screenHeightDp.dp
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = d.spaceXxl * 2.8f)) {

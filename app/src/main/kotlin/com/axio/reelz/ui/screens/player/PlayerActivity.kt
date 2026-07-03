@@ -352,12 +352,12 @@ fun PlayerScreen(
     streamOrigin: String = "",
     downloadId: String? = null,
 ) {
+    val d = LocalDimensions.current
     val ctx     = LocalContext.current
     val ui      by vm.ui.collectAsState()
     val player  by vm.exoPlayerFlow.collectAsState()
     val scope   = rememberCoroutineScope()
     val density = LocalDensity.current
-    val d       = LocalDimensions.current
 
     LaunchedEffect(tmdbId, season, episode) {
         vm.init(ctx, tmdbId, mediaType, season, episode, title, poster,

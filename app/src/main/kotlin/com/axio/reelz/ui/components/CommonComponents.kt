@@ -844,7 +844,7 @@ fun SkeletonBannerLoader() {
     ) {
         Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding), verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs)) {
             Box(Modifier.fillMaxWidth(0.22f).height(d.spaceLg - d.spaceXxs).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
-            Box(Modifier.fillMaxWidth(0.7f).height(d.textHero + 4.dp).clip(RoundedCornerShape(d.spaceSm)).background(BgRaised))
+            Box(Modifier.fillMaxWidth(0.7f).height(d.textHero.value.dp + 4.dp).clip(RoundedCornerShape(d.spaceSm)).background(BgRaised))
             Box(Modifier.fillMaxWidth(0.45f).height(d.spaceMd).clip(RoundedCornerShape(d.spaceXs)).background(BgRaised))
             Row(horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
                 Box(Modifier.fillMaxWidth(0.38f).height(d.buttonHeightMd).clip(RoundedCornerShape(d.radiusPill)).background(BgSurface))

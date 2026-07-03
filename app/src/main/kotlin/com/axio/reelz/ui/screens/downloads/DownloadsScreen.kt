@@ -129,12 +129,12 @@ class DownloadsViewModel @Inject constructor(
 
 @Composable
 fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
+    val d = LocalDimensions.current
     val ctx          = LocalContext.current
     val movies        by vm.movies.collectAsState()
     val seriesGroups   by vm.seriesGroups.collectAsState()
     val readyCount    by vm.readyCount.collectAsState()
     var tab by remember { mutableStateOf(0) }
-    val d = LocalDimensions.current
 
     // Which series / season keys are expanded. Collapsed by default — progressive disclosure.
     val expandedSeries = remember { mutableStateOf(setOf<Int>()) }
@@ -620,6 +620,7 @@ fun EpisodeRow(
 
 @Composable
 private fun CompactIconAction(icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     Box(
         Modifier.size(d.iconLg).clip(CircleShape).background(tint.copy(.15f))
             .clickable(onClick = onClick),
@@ -629,6 +630,7 @@ private fun CompactIconAction(icon: androidx.compose.ui.graphics.vector.ImageVec
 
 @Composable
 private fun CompactTextAction(symbol: String, color: Color, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     Box(
         Modifier.size(d.iconLg).clip(CircleShape).background(color.copy(alpha = .15f))
             .clickable(onClick = onClick),
@@ -772,13 +774,13 @@ fun StatusBadge(status: String) {
 
 @Composable
 fun QualityBadge(quality: String) {
+    val d = LocalDimensions.current
     if (quality.isBlank()) return
     Box(
         Modifier.clip(RoundedCornerShape(d.spaceXs + 1.dp)).background(GlassSm)
             .border(1.dp, GlassBorderMd, RoundedCornerShape(d.spaceXs + 1.dp))
             .padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)
     ) { Text(quality, color = White60, fontSize = d.textXs, fontWeight = FontWeight.Bold) }
-    val d = LocalDimensions.current
 }
 
 fun formatSize(bytes: Long): String = when {

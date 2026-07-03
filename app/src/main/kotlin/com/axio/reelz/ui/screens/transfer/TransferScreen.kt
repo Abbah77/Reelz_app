@@ -262,6 +262,7 @@ class TransferViewModel @Inject constructor(
 
 @Composable
 fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewModel()) {
+    val d = LocalDimensions.current
     val ctx       = LocalContext.current
     val history  by vm.history.collectAsState()
     val progress by vm.progress.collectAsState()
@@ -270,7 +271,6 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
 
     // Tab: 0 = Send, 1 = Receive
     var tab by remember { mutableStateOf(0) }
-    val d = LocalDimensions.current
     val screenH = LocalConfiguration.current.screenHeightDp.dp
 
     LaunchedEffect(Unit) { vm.ensureServiceRunning(ctx) }
@@ -408,6 +408,7 @@ private fun SendTab(
     ctx: Context,
     vm: TransferViewModel,
 ) {
+    val d = LocalDimensions.current
     var selectedFile by remember { mutableStateOf<DownloadItem?>(null) }
 
     // LocalOnlyHotspot requires ACCESS_FINE_LOCATION on all API levels
@@ -579,6 +580,7 @@ private fun ReceiveTab(
     ctx: Context,
     vm: TransferViewModel,
 ) {
+    val d = LocalDimensions.current
     var hasCam by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
@@ -654,6 +656,8 @@ private fun ReceiveTab(
 
 @Composable
 private fun ScannerCard(onScanned: (String) -> Unit) {
+    val d = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
     Box(
         Modifier.fillMaxWidth().height(screenH * 0.40f)
             .clip(RoundedCornerShape(d.radiusLg))
@@ -693,6 +697,7 @@ private fun ScannerCard(onScanned: (String) -> Unit) {
 
 @Composable
 private fun CameraPermCard(onRequest: () -> Unit) {
+    val d = LocalDimensions.current
     Box(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusLg))
@@ -712,6 +717,7 @@ private fun CameraPermCard(onRequest: () -> Unit) {
 
 @Composable
 private fun ConnectedBadge(peerIp: String, isHost: Boolean) {
+    val d = LocalDimensions.current
     Row(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
@@ -735,6 +741,7 @@ private fun ConnectedBadge(peerIp: String, isHost: Boolean) {
 
 @Composable
 private fun ErrorCard(msg: String, onRetry: () -> Unit) {
+    val d = LocalDimensions.current
     Box(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
@@ -757,6 +764,7 @@ private fun FilePickerList(
     selectedFile: DownloadItem?,
     onSelect: (DownloadItem) -> Unit,
 ) {
+    val d = LocalDimensions.current
     if (downloads.isEmpty()) {
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
@@ -868,6 +876,7 @@ fun generateQr(content: String, sizePx: Int): Bitmap? = try {
 
 @Composable
 fun TransferHistoryRow(record: TransferRecord) {
+    val d = LocalDimensions.current
     Row(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusMd))

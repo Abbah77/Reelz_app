@@ -209,13 +209,13 @@ class PremiumViewModel @Inject constructor(
 
 @Composable
 fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
+    val d = LocalDimensions.current
     val ui by vm.ui.collectAsState()
 
     val shimmer = rememberInfiniteTransition(label = "crownGlow")
     val glow by shimmer.animateFloat(0.5f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "g")
 
     Box(Modifier.fillMaxSize().background(Bg)) {
-        val d = LocalDimensions.current
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 32.dp),
@@ -381,6 +381,7 @@ private fun PaystackSubscribeButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     OutlinedButton(
         onClick  = onClick,
         enabled  = enabled,
@@ -392,7 +393,6 @@ private fun PaystackSubscribeButton(
             disabledContentColor = White40,
         ),
     ) {
-        val d = LocalDimensions.current
         if (isLoading) {
             CircularProgressIndicator(Modifier.size(d.iconSm + 2.dp), color = Brand2, strokeWidth = 2.dp)
         } else {
@@ -409,11 +409,11 @@ private fun ComparisonRow(
     boolFree: Boolean? = null,
     boolPremium: Boolean? = null,
 ) {
+    val d = LocalDimensions.current
     Row(
         Modifier.fillMaxWidth().padding(vertical = d.spaceMd),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val d = LocalDimensions.current
         Text(label, color = White80, fontSize = d.textMd, modifier = Modifier.weight(1.3f))
         Box(Modifier.weight(1f), Alignment.Center) {
             if (boolFree != null) BoolPip(boolFree) else Text(freeValue, color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
@@ -426,12 +426,12 @@ private fun ComparisonRow(
 
 @Composable
 private fun BoolPip(value: Boolean) {
+    val d = LocalDimensions.current
     Box(
         Modifier.size(d.iconMd).clip(CircleShape)
             .background(if (value) Brand.copy(.18f) else GlassMd),
         Alignment.Center,
     ) {
-        val d = LocalDimensions.current
         Icon(
             if (value) IconCheck else IconX,
             null,
@@ -443,6 +443,7 @@ private fun BoolPip(value: Boolean) {
 
 @Composable
 private fun PriceCard(label: String, price: String, period: String, modifier: Modifier = Modifier, best: Boolean = false) {
+    val d = LocalDimensions.current
     Column(
         modifier
             .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
@@ -451,7 +452,6 @@ private fun PriceCard(label: String, price: String, period: String, modifier: Mo
             .padding(d.spaceLg),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        val d = LocalDimensions.current
         if (best) {
             Text("BEST VALUE", color = Brand2, fontSize = d.textXxs, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
             Spacer(Modifier.height(d.spaceXs))

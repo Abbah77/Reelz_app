@@ -104,8 +104,8 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
-    val ui by vm.ui.collectAsState()
     val d = LocalDimensions.current
+    val ui by vm.ui.collectAsState()
     val focusReq = remember { FocusRequester() }
     val hasActiveFilters = ui.filters.mediaType != null || ui.selectedGenreId != null ||
                            ui.filters.minRating != null || ui.filters.sortBy != "popularity"

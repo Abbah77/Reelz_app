@@ -275,8 +275,8 @@ fun NoConfigScreen(
 
 @Composable
 fun PoweredByScreen(onFinished: () -> Unit) {
-    val logoAlpha   = remember { Animatable(0f) }
     val d = LocalDimensions.current
+    val logoAlpha   = remember { Animatable(0f) }
     val logoScale   = remember { Animatable(0.72f) }
     val textAlpha   = remember { Animatable(0f) }
     val screenAlpha = remember { Animatable(1f) }

@@ -208,9 +208,9 @@ class ExploreViewModel @Inject constructor(
 
 @Composable
 fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
+    val d = LocalDimensions.current
     val ui by vm.ui.collectAsState()
     var showFilterSheet by remember { mutableStateOf(false) }
-    val d = LocalDimensions.current
     val currentYear = remember { Calendar.getInstance().get(Calendar.YEAR) }
 
     val activeFilterCount = with(ui.filters) {
@@ -383,6 +383,7 @@ private fun ExploreEmptyState(onClear: () -> Unit) {
 // ── Type switch (Movies / TV) — large pill, primary navigation axis ─────────
 @Composable
 fun TypeSwitchPill(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     Box(
         modifier
             .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
@@ -395,7 +396,6 @@ fun TypeSwitchPill(label: String, selected: Boolean, modifier: Modifier = Modifi
             .padding(vertical = d.spaceMd + 1.dp),
         contentAlignment = Alignment.Center,
     ) {
-    val d = LocalDimensions.current
         Text(label, color = if (selected) Color.White else White60, fontSize = d.textMd,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
     }
@@ -404,6 +404,7 @@ fun TypeSwitchPill(label: String, selected: Boolean, modifier: Modifier = Modifi
 // ── Mood preset chip ──────────────────────────────────────────────────────────
 @Composable
 fun MoodChip(mood: MoodPreset, selected: Boolean, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     Row(
         Modifier
             .clip(RoundedCornerShape(d.radiusPill))
@@ -417,7 +418,6 @@ fun MoodChip(mood: MoodPreset, selected: Boolean, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
     ) {
-    val d = LocalDimensions.current
         Text(mood.emoji, fontSize = d.textMd)
         Text(mood.label, color = if (selected) White else White60, fontSize = d.textSm,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
@@ -529,6 +529,7 @@ fun ExploreFilterSheet(
 // ── Local filter chip — accent color defaults to Brand, kept overridable ───
 @Composable
 fun SmallFilterChip(label: String, selected: Boolean, accent: Color = Brand, onClick: () -> Unit) {
+    val d = LocalDimensions.current
     Box(
         Modifier
             .clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
@@ -538,7 +539,6 @@ fun SmallFilterChip(label: String, selected: Boolean, accent: Color = Brand, onC
             .clickable(onClick = onClick)
             .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp),
     ) {
-    val d = LocalDimensions.current
         Text(label, color = if (selected) Color.White else White60, fontSize = d.textSm,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
     }

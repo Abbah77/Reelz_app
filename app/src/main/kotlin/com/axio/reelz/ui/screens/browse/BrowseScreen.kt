@@ -448,6 +448,7 @@ fun BrowseScreen(
             .background(Bg)
             .nestedScroll(nestedScrollConnection)
     ) {
+val d = LocalDimensions.current
 
         // ── Scrollable content ──────────────────────────────────────────────
         LazyColumn(

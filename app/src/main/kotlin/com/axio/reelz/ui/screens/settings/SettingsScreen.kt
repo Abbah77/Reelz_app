@@ -103,8 +103,8 @@ private val White30 = Color(0x4DF8F4EE)
 
 @Composable
 fun SettingsScreen(nav: NavController) {
-    var showStorageDialog       by remember { mutableStateOf(false) }
     val d = LocalDimensions.current
+    var showStorageDialog       by remember { mutableStateOf(false) }
     var showPrivacyDialog       by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
     var showAboutDialog         by remember { mutableStateOf(false) }
@@ -304,6 +304,7 @@ fun SettingsScreen(nav: NavController) {
 
 @Composable
 private fun SettingsSectionLabel(text: String) {
+    val d = LocalDimensions.current
     Text(
         text,
         color = White40,
@@ -322,6 +323,7 @@ private fun SettingsCard(
     iconTint: Color = White60,
     onClick: () -> Unit,
 ) {
+    val d = LocalDimensions.current
     Row(
         Modifier
             .fillMaxWidth()
@@ -333,7 +335,6 @@ private fun SettingsCard(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXxs),
     ) {
-        val d = LocalDimensions.current
         Box(
             Modifier
                 .size(40.dp)
@@ -356,12 +357,12 @@ private fun ReelzDialog(
     onDismiss: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val d = LocalDimensions.current
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = BgCard,
         shape = RoundedCornerShape(d.radiusLg),
         title = { Text(title, color = White, fontWeight = FontWeight.Bold) },
-        val d = LocalDimensions.current
         text = { Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) { content() } },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Got it", color = Brand) }
