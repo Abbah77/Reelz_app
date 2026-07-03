@@ -303,17 +303,19 @@ class PlayerActivity : ComponentActivity() {
         val downloadId    = intent.getStringExtra("downloadId")
 
         setContent {
-            MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(primary = Brand)) {
-                PlayerScreen(
-                    vm          = vm,
-                    tmdbId      = tmdbId, mediaType = mediaType,
-                    season      = season, episode = episode,
-                    title       = title, poster = poster,
-                    onBack      = { finish() },
-                    streamUrl   = streamUrl, streamIsHls = streamIsHls,
-                    streamReferer = streamReferer, streamOrigin = streamOrigin,
-                    downloadId  = downloadId,
-                )
+            com.axio.reelz.ui.theme.ProvideDimensions {
+                MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(primary = Brand)) {
+                    PlayerScreen(
+                        vm          = vm,
+                        tmdbId      = tmdbId, mediaType = mediaType,
+                        season      = season, episode = episode,
+                        title       = title, poster = poster,
+                        onBack      = { finish() },
+                        streamUrl   = streamUrl, streamIsHls = streamIsHls,
+                        streamReferer = streamReferer, streamOrigin = streamOrigin,
+                        downloadId  = downloadId,
+                    )
+                }
             }
         }
     }
