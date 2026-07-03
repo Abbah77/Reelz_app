@@ -198,8 +198,10 @@ class TransferService : Service() {
         updateNotif("Sending", file.name)
 
         try {
-            Socket().use { socket ->
-                // Connect with a reasonable timeout — Wi-Fi Direct links are fast
+            val boundNetwork = com.axio.reelz.transfer.NetworkBindingHolder.current
+            val socket = boundNetwork?.socketFactory?.createSocket() ?: Socket()
+            socket.use {
+                // Connect with a reasonable timeout — hotspot links are fast once joined
                 socket.connect(InetSocketAddress(ip, port), 8_000)
                 socket.sendBufferSize = BUF
                 // Keep Nagle on (default) for large sequential writes — best throughput

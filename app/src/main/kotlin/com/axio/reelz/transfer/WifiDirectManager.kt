@@ -2,6 +2,10 @@ package com.axio.reelz.transfer
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
@@ -41,11 +45,28 @@ class WifiDirectManager(private val ctx: Context) {
     val state: StateFlow<P2pState> = _state.asStateFlow()
 
     private val wifi = ctx.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    private val cm   = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * The actual Network object for the hotspot Wi-Fi link (receiver side).
+     * Sockets must be bound to this via network.socketFactory / network.bindSocket()
+     * or ALL traffic (including our TCP transfer) can silently route over mobile
+     * data instead, on OEMs that don't auto-prioritize the joined Wi-Fi network.
+     * This is set once the suggestion is actually connected.
+     */
+    @Volatile var boundNetwork: Network? = null
+        private set
 
     // No-op — kept so call sites compile
     fun register()   {}
-    fun unregister() {}
+    fun unregister() {
+        networkCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
+        networkCallback = null
+        boundNetwork = null
+        publishBoundNetwork(null)
+    }
 
     // ── Sender: start local-only hotspot ──────────────────────────────────────
 
@@ -82,8 +103,11 @@ class WifiDirectManager(private val ctx: Context) {
                             return
                         }
 
-                        // Sender's IP on its own hotspot is always 192.168.43.1
-                        val ownerIp = GO_IP
+                        // Read the sender's ACTUAL hotspot IP — do not assume 192.168.43.1.
+                        // OEMs (Samsung, MIUI, HiOS/XOS on Tecno/Itel, etc.) frequently hand
+                        // out a different subnet. This is read from the WifiManager's own
+                        // link info once the hotspot is up.
+                        val ownerIp = readLocalHotspotIp() ?: GO_IP
                         val info = GroupInfo(ssid, pass, ownerIp)
                         _state.value = P2pState.Connected(
                             groupOwnerAddress = java.net.InetAddress.getByName(ownerIp),
@@ -128,6 +152,26 @@ class WifiDirectManager(private val ctx: Context) {
         }
     }
 
+    /**
+     * Reads this device's own IP address on the local-only hotspot interface
+     * (the "ap" / "swlan" interface), which is what the receiver must dial.
+     * Falls back to null if it can't be determined (caller uses GO_IP as last resort).
+     */
+    private fun readLocalHotspotIp(): String? = try {
+        java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())
+            .filter { iface ->
+                val n = iface.name.lowercase()
+                iface.isUp && !iface.isLoopback &&
+                    (n.contains("ap") || n.contains("softap") || n.contains("swlan") || n.contains("wlan"))
+            }
+            .flatMap { java.util.Collections.list(it.inetAddresses) }
+            .firstOrNull { addr ->
+                !addr.isLoopbackAddress && addr is java.net.Inet4Address &&
+                    addr.hostAddress?.startsWith("192.168.") == true
+            }
+            ?.hostAddress
+    } catch (_: Exception) { null }
+
     // ── Receiver: join sender's hotspot silently ──────────────────────────────
 
     @SuppressLint("NewApi")
@@ -136,14 +180,16 @@ class WifiDirectManager(private val ctx: Context) {
             _state.value = P2pState.Connecting
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // API 29+: WifiNetworkSuggestion — silent background join, no system dialog
+                // API 29+: WifiNetworkSuggestion — silent background join where the OEM
+                // allows it; some OEMs surface a one-tap "Networks available" notification
+                // instead of a silent join. Nothing we can do about that at the API level —
+                // it's an Android anti-abuse protection, not something we can suppress.
                 val suggestion = WifiNetworkSuggestion.Builder()
                     .setSsid(ssid)
                     .setWpa2Passphrase(passphrase)
                     .setIsAppInteractionRequired(false)
                     .build()
 
-                // Remove any stale suggestion for this SSID first
                 wifi.removeNetworkSuggestions(listOf(suggestion))
                 val status = wifi.addNetworkSuggestions(listOf(suggestion))
 
@@ -153,39 +199,53 @@ class WifiDirectManager(private val ctx: Context) {
                     return@withContext Result.failure(Exception(msg))
                 }
 
-                // Wait for connection — poll connectivity every 500 ms up to 20 s
-                val ownerIp = java.net.InetAddress.getByName(GO_IP)
-                val deadline = System.currentTimeMillis() + 20_000
-                while (System.currentTimeMillis() < deadline) {
-                    delay(500)
-                    try {
-                        // If we can reach the owner IP, we're connected
-                        if (ownerIp.isReachable(1000)) {
+                // CRITICAL: request the actual Network object for this suggestion via
+                // ConnectivityManager, rather than assuming a fixed gateway IP or hoping
+                // the OS auto-routes our traffic there. This does two things:
+                //  1. Gives us the REAL gateway IP for this specific device/OEM/subnet.
+                //  2. Lets us bind our sockets to this exact Network so transfer traffic
+                //     can't silently leak out over mobile data on devices that don't
+                //     auto-prioritize the joined Wi-Fi (a very common OEM quirk).
+                val request = NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+
+                val result = suspendCancellableCoroutine<Result<java.net.InetAddress>> { netCont ->
+                    val callback = object : ConnectivityManager.NetworkCallback() {
+                        override fun onAvailable(network: Network) {
+                            boundNetwork = network
+                            publishBoundNetwork(network)
+                            // Bind THIS PROCESS's future sockets to this network by default —
+                            // belt-and-suspenders alongside explicit per-socket binding in
+                            // TransferService.
+                            cm.bindProcessToNetwork(network)
+
+                            val gatewayIp = resolveGatewayIp(network) ?: GO_IP
+                            val addr = java.net.InetAddress.getByName(gatewayIp)
                             _state.value = P2pState.Connected(
-                                groupOwnerAddress = ownerIp,
+                                groupOwnerAddress = addr,
                                 isGroupOwner      = false,
                             )
-                            return@withContext Result.success(ownerIp)
+                            if (netCont.isActive) netCont.resumeWith(kotlin.Result.success(Result.success(addr)))
                         }
-                    } catch (_: Exception) {}
+
+                        override fun onUnavailable() {
+                            val msg = "Couldn't connect to sender's network. " +
+                                "If a Wi-Fi notification appeared, tap it once to connect, then try again."
+                            _state.value = P2pState.Failed(msg)
+                            if (netCont.isActive) netCont.resumeWith(kotlin.Result.success(Result.failure(Exception(msg))))
+                        }
+
+                        override fun onLost(network: Network) {
+                            if (boundNetwork == network) boundNetwork = null
+                        }
+                    }
+                    networkCallback = callback
+                    cm.requestNetwork(request, callback, 20_000) // 20s timeout, same budget as before
                 }
 
-                // Even if ping fails (some devices block ICMP), attempt TCP connection
-                // — TransferService will fail fast if device isn't actually there
-                try {
-                    val sock = java.net.Socket()
-                    sock.connect(java.net.InetSocketAddress(GO_IP, TransferService.TRANSFER_PORT), 2000)
-                    sock.close()
-                    _state.value = P2pState.Connected(
-                        groupOwnerAddress = ownerIp,
-                        isGroupOwner      = false,
-                    )
-                    return@withContext Result.success(ownerIp)
-                } catch (_: Exception) {}
-
-                val msg = "Couldn't connect to sender. Make sure both devices have Wi-Fi on and are close together."
-                _state.value = P2pState.Failed(msg)
-                Result.failure(Exception(msg))
+                result
 
             } else {
                 // API 26–28: use deprecated WifiConfiguration
@@ -207,18 +267,36 @@ class WifiDirectManager(private val ctx: Context) {
                 @Suppress("DEPRECATION")
                 wifi.reconnect()
 
-                // Wait up to 15 s for connection
+                // Wait up to a few seconds, then read the ACTUAL DHCP gateway rather
+                // than assuming 192.168.43.1 — older OEM builds vary just as much.
                 delay(3000)
-                val ownerIp = java.net.InetAddress.getByName(GO_IP)
+                @Suppress("DEPRECATION")
+                val dhcp = wifi.dhcpInfo
+                val gatewayIp = if (dhcp != null && dhcp.gateway != 0) {
+                    val g = dhcp.gateway
+                    "${g and 0xff}.${g shr 8 and 0xff}.${g shr 16 and 0xff}.${g shr 24 and 0xff}"
+                } else GO_IP
+                val ownerIp = java.net.InetAddress.getByName(gatewayIp)
                 _state.value = P2pState.Connected(groupOwnerAddress = ownerIp, isGroupOwner = false)
                 Result.success(ownerIp)
             }
         }
 
+    /** Resolves the gateway IP for a given Network via its LinkProperties — the real, OEM-correct value. */
+    private fun resolveGatewayIp(network: Network): String? = try {
+        val lp = cm.getLinkProperties(network)
+        lp?.routes
+            ?.firstOrNull { it.isDefaultRoute && it.gateway != null }
+            ?.gateway
+            ?.hostAddress
+    } catch (_: Exception) { null }
+
     // ── Disconnect ────────────────────────────────────────────────────────────
 
     fun disconnect() {
         stopHotspot()
+        cm.bindProcessToNetwork(null)
+        unregister()
         _state.value = P2pState.Idle
     }
 
@@ -228,6 +306,8 @@ class WifiDirectManager(private val ctx: Context) {
     }
 
     data class GroupInfo(val ssid: String, val passphrase: String, val ownerIp: String)
+
+    private fun publishBoundNetwork(n: Network?) { NetworkBindingHolder.current = n }
 
     companion object {
         /** Sender's IP on its own hotspot — fixed by Android */

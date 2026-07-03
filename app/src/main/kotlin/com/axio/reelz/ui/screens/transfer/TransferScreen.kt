@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
@@ -411,13 +412,28 @@ private fun SendTab(
     val d = LocalDimensions.current
     var selectedFile by remember { mutableStateOf<DownloadItem?>(null) }
 
-    // LocalOnlyHotspot requires ACCESS_FINE_LOCATION on all API levels
-    val p2pPermission = Manifest.permission.ACCESS_FINE_LOCATION
-
-    var hasP2pPerm by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(ctx, p2pPermission) == PackageManager.PERMISSION_GRANTED)
+    // LocalOnlyHotspot requires ACCESS_FINE_LOCATION on all API levels.
+    // On API 33+ (Android 13+) it ALSO requires NEARBY_WIFI_DEVICES at runtime —
+    // this is a separate permission from location and is NOT granted just because
+    // location was granted. Without requesting it explicitly here, Android silently
+    // denies the hotspot at runtime and the only way to grant it is via App Settings,
+    // which is the bug being fixed.
+    val p2pPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES)
+    } else {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     }
-    val p2pPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+
+    fun allP2pPermsGranted(): Boolean = p2pPermissions.all {
+        ContextCompat.checkSelfPermission(ctx, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    var hasP2pPerm by remember { mutableStateOf(allP2pPermsGranted()) }
+
+    val p2pPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val granted = results.values.all { it }
         hasP2pPerm = granted
         if (granted) vm.initAsSender(ctx)
     }
@@ -454,7 +470,7 @@ private fun SendTab(
                                 color = White60, fontSize = d.textMd, textAlign = TextAlign.Center)
                             BrandButton(
                                 text = "Allow & Generate QR",
-                                onClick = { p2pPermLauncher.launch(p2pPermission) },
+                                onClick = { p2pPermLauncher.launch(p2pPermissions) },
                                 modifier = Modifier.fillMaxWidth(),
                                 icon = { Icon(IconQr, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(d.iconMd - 4.dp)) },
                             )
@@ -587,6 +603,39 @@ private fun ReceiveTab(
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCam = it }
     var selectedFile by remember { mutableStateOf<DownloadItem?>(null) }
 
+    // Joining the sender's hotspot (WifiNetworkSuggestion) also needs
+    // NEARBY_WIFI_DEVICES on API 33+, same as the sender side. Without asking for
+    // it here, a scan can silently fail to join with no way to grant it except
+    // through App Settings.
+    val joinPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES)
+    } else {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+    fun hasJoinPerms(): Boolean = joinPermissions.all {
+        ContextCompat.checkSelfPermission(ctx, it) == PackageManager.PERMISSION_GRANTED
+    }
+    // Holds the QR payload we tried to connect to while waiting on the permission dialog.
+    var pendingQrPayload by remember { mutableStateOf<String?>(null) }
+    val joinPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val granted = results.values.all { it }
+        val payload = pendingQrPayload
+        pendingQrPayload = null
+        if (granted && payload != null) {
+            vm.connectFromQr(ctx, payload)
+        }
+    }
+    fun onQrScanned(payload: String) {
+        if (hasJoinPerms()) {
+            vm.connectFromQr(ctx, payload)
+        } else {
+            pendingQrPayload = payload
+            joinPermLauncher.launch(joinPermissions)
+        }
+    }
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -603,7 +652,7 @@ private fun ReceiveTab(
                 if (!hasCam) {
                     CameraPermCard { permLauncher.launch(Manifest.permission.CAMERA) }
                 } else {
-                    ScannerCard(onScanned = { vm.connectFromQr(ctx, it) })
+                    ScannerCard(onScanned = { onQrScanned(it) })
                 }
             }
 
@@ -630,7 +679,7 @@ private fun ReceiveTab(
             is TransferViewModel.P2pUiState.Error -> {
                 ErrorCard(msg = p2p.msg, onRetry = { vm.reset() })
                 // Show scanner again so they can retry immediately
-                if (hasCam) ScannerCard(onScanned = { vm.connectFromQr(ctx, it) })
+                if (hasCam) ScannerCard(onScanned = { onQrScanned(it) })
             }
 
             else -> {}
