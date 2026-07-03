@@ -189,6 +189,14 @@ data class LikedItem(
     val likedAt: Long = System.currentTimeMillis(),
 )
 
+@Entity(tableName = "recent_searches")
+data class RecentSearch(
+    // Query text itself is the key — re-searching "batman" updates its
+    // timestamp (bumps it to the top) instead of creating a duplicate row.
+    @PrimaryKey val query: String,
+    val searchedAt: Long = System.currentTimeMillis(),
+)
+
 @Entity(tableName = "saved_videos")
 data class SavedVideoItem(
     @PrimaryKey val tmdbId: Int,

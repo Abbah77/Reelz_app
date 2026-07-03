@@ -218,6 +218,30 @@ interface TransferDao {
     @Query("DELETE FROM transfer_history WHERE id = :id") suspend fun delete(id: String)
 }
 
+// ── Recent searches ──────────────────────────────────────────────────────────
+@Dao
+interface RecentSearchDao {
+    @Query("SELECT * FROM recent_searches ORDER BY searchedAt DESC LIMIT :limit")
+    fun getRecent(limit: Int = 15): Flow<List<RecentSearch>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(s: RecentSearch)
+
+    @Query("DELETE FROM recent_searches WHERE query = :query")
+    suspend fun delete(query: String)
+
+    @Query("DELETE FROM recent_searches")
+    suspend fun clear()
+
+    /** Trim oldest entries beyond the cap so the table never grows unbounded. */
+    @Query("""
+        DELETE FROM recent_searches WHERE query IN (
+            SELECT query FROM recent_searches ORDER BY searchedAt DESC LIMIT -1 OFFSET :keepCount
+        )
+    """)
+    suspend fun trimToLimit(keepCount: Int = 15)
+}
+
 // ── User session (premium) ────────────────────────────────────────────────────
 @Dao
 interface UserSessionDao {
@@ -307,6 +331,18 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+// ── Migration v6 → v7: recent searches ────────────────────────────────────────
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS recent_searches (
+                query TEXT PRIMARY KEY NOT NULL,
+                searchedAt INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+    }
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 @Database(
     entities = [
@@ -319,8 +355,9 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         TransferRecord::class,
         DownloadSubtitle::class,
         UserSession::class,
+        RecentSearch::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 @TypeConverters(com.axio.reelz.data.model.MediaConverters::class)
@@ -334,4 +371,5 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun downloadSubtitleDao(): DownloadSubtitleDao
     abstract fun transferDao(): TransferDao
     abstract fun userSessionDao(): UserSessionDao
+    abstract fun recentSearchDao(): RecentSearchDao
 }

@@ -435,6 +435,27 @@ val IconFilter: ImageVector get() = ImageVector.Builder("Filter", 24.dp, 24.dp, 
        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
 }.build()
 
+// ── History / recent (clock) — Lucide-style ───────────────────────────────────
+val IconHistory: ImageVector get() = ImageVector.Builder("History", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        // Clock face
+        moveTo(21f, 12f)
+        curveTo(21f, 16.9706f, 16.9706f, 21f, 12f, 21f)
+        curveTo(7.02944f, 21f, 3f, 16.9706f, 3f, 12f)
+        curveTo(3f, 7.02944f, 7.02944f, 3f, 12f, 3f)
+        curveTo(16.9706f, 3f, 21f, 7.02944f, 21f, 12f)
+        close()
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+    addPath(pathData = PathData {
+        // Clock hands, pointing to a "past" position to read as "recent/history"
+        moveTo(12f, 7f); verticalLineTo(12f); lineTo(15f, 14f)
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+}.build()
+
 // ── Chevron down (Lucide) ─────────────────────────────────────────────────────
 val IconChevronDown: ImageVector get() = ImageVector.Builder("ChevDown", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData { moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f) },

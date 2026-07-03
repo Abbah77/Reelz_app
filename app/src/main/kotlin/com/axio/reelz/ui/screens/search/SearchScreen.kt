@@ -8,6 +8,8 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -40,7 +42,10 @@ data class SearchFilters(
 )
 
 @HiltViewModel
-class SearchViewModel @Inject constructor(private val repo: MediaRepository) : ViewModel() {
+class SearchViewModel @Inject constructor(
+    private val repo: MediaRepository,
+    private val recentSearchDao: com.axio.reelz.data.local.RecentSearchDao,
+) : ViewModel() {
     data class UiState(
         val query: String = "",
         val results: List<Media> = emptyList(),
@@ -51,6 +56,7 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
         val genres: List<Genre> = emptyList(),
         val selectedGenreId: Int? = null,
         val showFilters: Boolean = false,
+        val recentSearches: List<String> = emptyList(),
     )
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -59,6 +65,11 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
     init {
         viewModelScope.launch {
             try { _ui.update { it.copy(genres = repo.getMovieGenres()) } } catch (_: Exception) {}
+        }
+        viewModelScope.launch {
+            recentSearchDao.getRecent().collect { list ->
+                _ui.update { it.copy(recentSearches = list.map { r -> r.query }) }
+            }
         }
     }
 
@@ -70,11 +81,36 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
             delay(320)
             _ui.update { it.copy(isLoading = true, error = null) }
             try {
-                _ui.update { it.copy(results = applyFilters(repo.search(q)), isLoading = false, hasSearched = true) }
+                val searchResults = applyFilters(repo.search(q))
+                _ui.update { it.copy(results = searchResults, isLoading = false, hasSearched = true) }
+                // Only record once the search actually resolves — a query the
+                // user is still mid-typing (cancelled by a newer keystroke)
+                // never reaches here, so history stays free of fragments.
+                if (searchResults.isNotEmpty()) recordSearch(q)
             } catch (e: Exception) {
                 _ui.update { it.copy(isLoading = false, error = friendlySearchError(e), hasSearched = true) }
             }
         }
+    }
+
+    /** Re-run a tapped recent-search chip — same path as typing it, so results/filters apply consistently. */
+    fun searchRecent(query: String) = onQuery(query)
+
+    private fun recordSearch(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            recentSearchDao.insert(com.axio.reelz.data.local.RecentSearch(query = trimmed))
+            recentSearchDao.trimToLimit(15)
+        }
+    }
+
+    fun deleteRecentSearch(query: String) {
+        viewModelScope.launch { recentSearchDao.delete(query) }
+    }
+
+    fun clearRecentSearches() {
+        viewModelScope.launch { recentSearchDao.clear() }
     }
 
     fun toggleFilters() = _ui.update { it.copy(showFilters = !it.showFilters) }
@@ -84,7 +120,7 @@ class SearchViewModel @Inject constructor(private val repo: MediaRepository) : V
     fun setSortBy(sort: String) { _ui.update { it.copy(filters = it.filters.copy(sortBy = sort)) }; reFilter() }
     fun clearFilters() { _ui.update { it.copy(filters = SearchFilters(), selectedGenreId = null) }; reFilter() }
     private fun reFilter() { val q = _ui.value.query; if (q.isNotBlank()) onQuery(q) }
-    fun clear() { searchJob?.cancel(); _ui.update { UiState() } }
+    fun clear() { searchJob?.cancel(); val recents = _ui.value.recentSearches; _ui.update { UiState(recentSearches = recents) } }
 
     private fun applyFilters(raw: List<Media>): List<Media> {
         val f = _ui.value.filters
@@ -254,6 +290,15 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
             else ->
                 Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                     Spacer(Modifier.height(d.spaceXl))
+                    if (ui.recentSearches.isNotEmpty()) {
+                        RecentSearchesSection(
+                            queries  = ui.recentSearches,
+                            onTap    = vm::searchRecent,
+                            onDelete = vm::deleteRecentSearch,
+                            onClearAll = vm::clearRecentSearches,
+                        )
+                        Spacer(Modifier.height(d.spaceXl))
+                    }
                     if (ui.genres.isNotEmpty()) {
                         Text("Browse by Genre", color = White40, fontSize = d.textSm,
                             fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = d.screenHorizPad))
@@ -287,6 +332,83 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                     Text("Discover anything", color = White60, fontSize = d.textXl, fontWeight = FontWeight.Medium)
                     Text("Movies, TV shows, actors…", color = White40, fontSize = d.textMd)
                 }
+        }
+    }
+}
+
+// ── Recent Searches ─────────────────────────────────────────────────────────
+/**
+ * UX notes:
+ *  - "Clear all" sits next to the label (mirrors the Filters "Clear all" pattern
+ *    elsewhere in this screen) so the destructive action never competes with
+ *    individual chips for attention, and is easy to find without hunting.
+ *  - Each chip's delete (✕) is always visible, not a long-press/swipe secret —
+ *    recall value drops fast if users have to discover how to prune history.
+ *  - Tapping the chip body (not the ✕) re-runs the search; the two hit targets
+ *    are visually and spatially separated so a mis-tap can't delete instead of
+ *    search, or vice versa.
+ *  - List collapses to nothing (not an empty section) the instant it's cleared,
+ *    so there's no dead space or "there's nothing here" placeholder.
+ */
+@Composable
+fun RecentSearchesSection(
+    queries: List<String>,
+    onTap: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onClearAll: () -> Unit,
+) {
+    val d = LocalDimensions.current
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(IconHistory, null, tint = White40, modifier = Modifier.size(d.iconSm))
+            Spacer(Modifier.width(d.spaceXs))
+            Text(
+                "Recent Searches", color = White40, fontSize = d.textSm,
+                fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onClearAll) {
+                Text("Clear all", color = Brand, fontSize = d.textSm)
+            }
+        }
+        Spacer(Modifier.height(d.spaceXs))
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
+            verticalArrangement = Arrangement.spacedBy(d.spaceXxs),
+        ) {
+            queries.forEach { q ->
+                key(q) {
+                    RecentSearchRow(query = q, onTap = { onTap(q) }, onDelete = { onDelete(q) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentSearchRow(query: String, onTap: () -> Unit, onDelete: () -> Unit) {
+    val d = LocalDimensions.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(d.radiusSm))
+            .clickable(onClick = onTap)
+            .padding(vertical = d.spaceSm, horizontal = d.spaceXs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(IconHistory, null, tint = White40, modifier = Modifier.size(d.iconSm - 2.dp))
+        Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
+        Text(
+            query, color = White60, fontSize = d.textMd,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        // Dedicated tap target for delete, separate from the row's own search-tap
+        // area, sized to the standard touch-friendly icon-button footprint.
+        IconButton(onClick = onDelete, modifier = Modifier.size(d.avatarSm - d.spaceMd)) {
+            Icon(Icons.Filled.Close, null, tint = White40, modifier = Modifier.size(d.iconSm - 4.dp))
         }
     }
 }
