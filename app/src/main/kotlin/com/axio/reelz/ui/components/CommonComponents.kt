@@ -7,6 +7,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -1153,7 +1155,7 @@ fun RemoveAdsBanner(
             }
         }
         IconButton(onClick = onDismiss, modifier = Modifier.padding(end = d.spaceMd).size(d.buttonHeightSm - d.spaceSm)) {
-            Icon(androidx.compose.material.icons.Icons.Filled.Close, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(d.iconSm + 2.dp))
+            Icon(Icons.Filled.Close, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(d.iconSm + 2.dp))
         }
     }
 }
