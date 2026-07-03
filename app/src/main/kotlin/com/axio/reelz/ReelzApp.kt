@@ -13,6 +13,7 @@ import com.axio.reelz.remoteconfig.ConfigSyncWorker
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.service.DownloadService
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,16 @@ class ReelzApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Crashlytics auto-initializes from google-services.json, but tagging
+        // the app version as a custom key makes it possible to tell "which
+        // build is this crash from" at a glance in the Firebase console,
+        // without having to cross-reference versionCode separately.
+        FirebaseCrashlytics.getInstance().apply {
+            setCrashlyticsCollectionEnabled(true)
+            setCustomKey("versionName", BuildConfig.VERSION_NAME)
+            setCustomKey("versionCode", BuildConfig.VERSION_CODE)
+        }
 
         // Load cache first so ad config (sdk key, toggles, ad unit ids) is
         // available before the ad SDK initializes.
@@ -71,7 +82,9 @@ class ReelzApp : Application(), ImageLoaderFactory {
                     downloadDao.markPaused(item.id)
                     DownloadService.start(this@ReelzApp, item.id)
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                FirebaseCrashlytics.getInstance().recordException(e)
+            }
         }
     }
 

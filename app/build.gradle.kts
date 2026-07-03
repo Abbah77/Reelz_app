@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
     alias(libs.plugins.google.services)
+    alias(libs.plugins.firebase.crashlytics)
 }
 
 android {
@@ -70,6 +71,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Uploads mapping.txt to Firebase automatically at build time, so
+            // crashes captured from real (obfuscated) release APKs deobfuscate
+            // back to real Kotlin file/line in the Crashlytics console.
+            configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
+                mappingFileUploadEnabled = true
+                nativeSymbolUploadEnabled = true
+            }
         }
     }
 
@@ -108,6 +116,14 @@ dependencies {
     implementation(libs.androidx.splashscreen)
     implementation(libs.material)
     implementation(libs.androidx.work.runtime)
+
+    // Firebase — Crashlytics reports real crashes from real user devices,
+    // deobfuscated via the mapping.txt uploaded automatically by the plugin
+    // above. Analytics is required alongside it so Crashlytics can tag crash
+    // sessions with basic device/app-state breadcrumbs.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.crashlytics)
+    implementation(libs.firebase.analytics)
 
     // Compose BOM
     implementation(platform(libs.compose.bom))
