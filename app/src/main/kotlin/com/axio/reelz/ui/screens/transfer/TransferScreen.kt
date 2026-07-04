@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
@@ -279,6 +280,44 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
     // Reset P2P when switching tabs so state doesn't bleed across
     LaunchedEffect(tab) { vm.reset() }
 
+    // CRITICAL: WifiManager only allows ONE active LocalOnlyHotspot reservation per
+    // process at a time. TransferViewModel is Hilt-scoped and survives navigation
+    // away from this screen, so without this, leaving the screen while a hotspot
+    // is active (or mid-Preparing) leaves the reservation open. Coming back and
+    // tapping "Generate QR" again then fails with:
+    // "Caller already has an active LocalOnlyHotspot request".
+    // Closing it here, keyed on Unit with onDispose, guarantees cleanup whenever
+    // this composable leaves the tree — back navigation, process the tab is on,
+    // or otherwise — not just on explicit tab switches.
+    DisposableEffect(Unit) {
+        onDispose { vm.reset() }
+    }
+
+    // Prevent accidental disconnect: while a session is live, intercept the
+    // system back button and ask for confirmation instead of silently tearing
+    // down the hotspot / leaving the screen mid-transfer.
+    var showDisconnectConfirm by remember { mutableStateOf(false) }
+    BackHandler(enabled = p2p is TransferViewModel.P2pUiState.Connected) {
+        showDisconnectConfirm = true
+    }
+    if (showDisconnectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDisconnectConfirm = false },
+            title = { Text("Disconnect?") },
+            text = { Text("Leaving this screen will end the connection to the other device.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDisconnectConfirm = false
+                    vm.reset()
+                    nav?.popBackStack()
+                }) { Text("Disconnect") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisconnectConfirm = false }) { Text("Stay") }
+            },
+        )
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -295,7 +334,13 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
                 Box(
                     Modifier.size(d.buttonHeightSm - d.spaceMd).clip(CircleShape)
                         .background(GlassMd).border(1.dp, GlassBorderMd, CircleShape)
-                        .clickable { nav.popBackStack() },
+                        .clickable {
+                            if (p2p is TransferViewModel.P2pUiState.Connected) {
+                                showDisconnectConfirm = true
+                            } else {
+                                nav.popBackStack()
+                            }
+                        },
                     Alignment.Center,
                 ) { Icon(IconBack, null, tint = Color.White, modifier = Modifier.size(d.iconMd - 2.dp)) }
                 Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
@@ -311,6 +356,9 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
         }
 
         // ── Send / Receive toggle ─────────────────────────────────────────────
+        // Hidden once connected — see ConnectedSessionTab below, which replaces
+        // both tabs with one shared bidirectional screen.
+        if (p2p !is TransferViewModel.P2pUiState.Connected) {
         Box(
             Modifier.padding(horizontal = d.screenHorizPad)
                 .clip(RoundedCornerShape(d.radiusMd))
@@ -347,6 +395,7 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
                     }
                 }
             }
+        }
         }
 
         Spacer(Modifier.height(d.spaceXs))
@@ -392,11 +441,105 @@ fun TransferScreen(nav: NavController? = null, vm: TransferViewModel = hiltViewM
         }
 
         // ── Tab content ───────────────────────────────────────────────────────
-        if (tab == 0) {
-            SendTab(p2p = p2p, downloads = downloads, ctx = ctx, vm = vm)
+        // Once connected, show ONE shared session screen regardless of which tab
+        // started it — both sides can send files to each other from here, same as
+        // Xender/ShareIt. This also removes the tab switcher so a user can't
+        // accidentally tear down the live connection by tapping the other tab.
+        //
+        // `p2p` comes from `by collectAsState()`, so it's a delegated property —
+        // Kotlin cannot smart-cast a delegated property from `is Connected` to
+        // the `Connected` type directly. Capturing it in a local `val` first
+        // gives the compiler a plain variable it CAN smart-cast.
+        val p2pNow = p2p
+        if (p2pNow is TransferViewModel.P2pUiState.Connected) {
+            ConnectedSessionTab(p2p = p2pNow, downloads = downloads, history = history, ctx = ctx, vm = vm)
+        } else if (tab == 0) {
+            SendTab(p2p = p2pNow, downloads = downloads, ctx = ctx, vm = vm)
         } else {
-            ReceiveTab(p2p = p2p, history = history, ctx = ctx, vm = vm)
+            ReceiveTab(p2p = p2pNow, history = history, ctx = ctx, vm = vm)
         }
+    }
+}
+
+// ── Connected session (bidirectional, both sides can send) ─────────────────────
+
+@Composable
+private fun ConnectedSessionTab(
+    p2p: TransferViewModel.P2pUiState.Connected,
+    downloads: List<DownloadItem>,
+    history: List<TransferRecord>,
+    ctx: Context,
+    vm: TransferViewModel,
+) {
+    val d = LocalDimensions.current
+    var selectedFile by remember { mutableStateOf<DownloadItem?>(null) }
+    var showDisconnectConfirm by remember { mutableStateOf(false) }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = d.screenHorizPad)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
+    ) {
+        Spacer(Modifier.height(d.spaceXs))
+
+        ConnectedBadge(peerIp = p2p.peerIp, isHost = p2p.isHost)
+
+        Text(
+            "Pick a file to send. Files the other device sends will appear automatically.",
+            color = White60, fontSize = d.textSm,
+        )
+
+        SectionHeader("Send a file")
+        FilePickerList(
+            downloads    = downloads,
+            selectedFile = selectedFile,
+            onSelect     = { selectedFile = it },
+        )
+
+        BrandButton(
+            text    = if (selectedFile == null) "Select a file above" else "Send \"${selectedFile!!.title}\"",
+            enabled = selectedFile != null,
+            onClick = {
+                val file = selectedFile ?: return@BrandButton
+                vm.sendFile(ctx, file.filePath, p2p.peerIp)
+                selectedFile = null
+            },
+            modifier = Modifier.fillMaxWidth(),
+            icon    = { Icon(IconUpload, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(d.iconMd - 4.dp)) },
+        )
+
+        // Transfer history — shows both directions live, so both sides can see
+        // sends and receives from this same session without switching screens.
+        if (history.isNotEmpty()) {
+            Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
+            SectionHeader("This session")
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
+                modifier = Modifier.heightIn(max = d.spaceXxl * 12.5f),
+            ) {
+                items(history.take(30), key = { it.id }) { TransferHistoryRow(it) }
+            }
+        }
+
+        GhostButton("Disconnect", onClick = { showDisconnectConfirm = true }, modifier = Modifier.fillMaxWidth())
+
+        Spacer(Modifier.height(d.spaceXxl * 3.1f))
+    }
+
+    if (showDisconnectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDisconnectConfirm = false },
+            title = { Text("Disconnect?") },
+            text = { Text("This will end the connection to the other device.") },
+            confirmButton = {
+                TextButton(onClick = { showDisconnectConfirm = false; vm.reset() }) { Text("Disconnect") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisconnectConfirm = false }) { Text("Stay") }
+            },
+        )
     }
 }
 
@@ -550,31 +693,6 @@ private fun SendTab(
                 )
             }
 
-            // ── Connected: receiver joined, can now send ───────────────────────
-            is TransferViewModel.P2pUiState.Connected -> {
-                ConnectedBadge(peerIp = p2p.peerIp, isHost = p2p.isHost)
-
-                FilePickerList(
-                    downloads    = downloads,
-                    selectedFile = selectedFile,
-                    onSelect     = { selectedFile = it },
-                )
-
-                BrandButton(
-                    text    = if (selectedFile == null) "Select a file above"
-                              else "Send \"${selectedFile!!.title}\"",
-                    enabled = selectedFile != null,
-                    onClick = {
-                        val file = selectedFile ?: return@BrandButton
-                        vm.sendFile(ctx, file.filePath, p2p.peerIp)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    icon    = { Icon(IconUpload, null, tint = Color(0xFF1A0F00), modifier = Modifier.size(d.iconMd - 4.dp)) },
-                )
-
-                GhostButton("Disconnect", onClick = { vm.reset() }, modifier = Modifier.fillMaxWidth())
-            }
-
             // ── Error ─────────────────────────────────────────────────────────
             is TransferViewModel.P2pUiState.Error -> {
                 ErrorCard(msg = p2p.msg, onRetry = { vm.reset() })
@@ -665,14 +783,6 @@ private fun ReceiveTab(
                         Text("Connecting…", color = White60, fontSize = d.textMd)
                     }
                 }
-            }
-
-            // ── Connected: can receive (auto) and optionally send back ─────────
-            is TransferViewModel.P2pUiState.Connected -> {
-                ConnectedBadge(peerIp = p2p.peerIp, isHost = p2p.isHost)
-                Text("Files from the sender will arrive automatically.",
-                    color = White60, fontSize = d.textSm)
-                GhostButton("Disconnect", onClick = { vm.reset() }, modifier = Modifier.fillMaxWidth())
             }
 
             // ── Error ─────────────────────────────────────────────────────────

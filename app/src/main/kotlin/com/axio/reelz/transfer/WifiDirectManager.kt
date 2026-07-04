@@ -231,8 +231,16 @@ class WifiDirectManager(private val ctx: Context) {
                         }
 
                         override fun onUnavailable() {
-                            val msg = "Couldn't connect to sender's network. " +
-                                "If a Wi-Fi notification appeared, tap it once to connect, then try again."
+                            // Android 10+ deliberately does not let apps silently join a
+                            // suggested Wi-Fi network — it posts a "Wi-Fi networks
+                            // available" system notification and requires one manual tap.
+                            // This is Android anti-abuse behavior we cannot bypass at the
+                            // API level. onUnavailable() fires once our timeout below
+                            // expires without that tap happening, or the join failing
+                            // outright (wrong password, sender's hotspot already gone, etc).
+                            val msg = "Couldn't connect automatically. Pull down your " +
+                                "notification shade, tap the \"Wi-Fi networks available\" " +
+                                "notification, choose this network, then come back and tap Try Again."
                             _state.value = P2pState.Failed(msg)
                             if (netCont.isActive) netCont.resumeWith(kotlin.Result.success(Result.failure(Exception(msg))))
                         }
@@ -242,7 +250,11 @@ class WifiDirectManager(private val ctx: Context) {
                         }
                     }
                     networkCallback = callback
-                    cm.requestNetwork(request, callback, 20_000) // 20s timeout, same budget as before
+                    // 45s, not 20s: the user has to notice the system notification in
+                    // their status bar, pull it down, and tap it — that round trip
+                    // regularly takes longer than 20s, especially on first use when
+                    // they don't yet know to look for it.
+                    cm.requestNetwork(request, callback, 45_000)
                 }
 
                 result
