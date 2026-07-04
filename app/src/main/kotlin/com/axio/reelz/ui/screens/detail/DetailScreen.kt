@@ -465,21 +465,24 @@ class DetailViewModel @Inject constructor(
         runtimeMinutes: Int?,
         @Suppress("UNUSED_PARAMETER") key: String,
         seed: List<QualityTrack> = emptyList(),
-    ): List<QualityTrack> = kotlinx.coroutines.coroutineScope {
+    ): List<QualityTrack> = kotlinx.coroutines.coroutineScope thisScope@{
         // Parse every source's tracks in parallel — this is the slow part
         // (each may require an extra HTTP fetch for the master playlist).
-        val perSourceTracks = streams.map { stream ->
-            kotlinx.coroutines.async {
-                val tracks = try {
-                    when {
-                        stream.qualities.isNotEmpty() -> normalizeQualities(stream.qualities, runtimeMinutes)
-                        stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, runtimeMinutes)
-                        else -> listOf(QualityTrack("Best available", stream.url))
-                    }
-                } catch (_: Exception) { emptyList() }
-                stream to tracks
+        val jobs: List<kotlinx.coroutines.Deferred<Pair<com.axio.reelz.data.model.StreamResult, List<QualityTrack>>>> =
+            streams.map { stream ->
+                this@thisScope.async {
+                    val tracks: List<QualityTrack> = try {
+                        when {
+                            stream.qualities.isNotEmpty() -> normalizeQualities(stream.qualities, runtimeMinutes)
+                            stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, runtimeMinutes)
+                            else -> listOf(QualityTrack("Best available", stream.url))
+                        }
+                    } catch (_: Exception) { emptyList() }
+                    stream to tracks
+                }
             }
-        }.map { it.await() }
+        val perSourceTracks: List<Pair<com.axio.reelz.data.model.StreamResult, List<QualityTrack>>> =
+            jobs.map { it.await() }
 
         // Fold: for each label, keep the highest-bandwidth track + remember its source.
         val bestPerLabel = LinkedHashMap<String, Pair<QualityTrack, com.axio.reelz.data.model.StreamResult>>()
@@ -488,7 +491,9 @@ class DetailViewModel @Inject constructor(
         // a background top-up never loses tiers it previously found.
         seed.forEach { t -> bestPerLabel[t.label] = t to (downloadTrackContext[t.label] ?: streams.first()) }
 
-        perSourceTracks.forEach { (stream, tracks) ->
+        perSourceTracks.forEach { pair ->
+            val stream = pair.first
+            val tracks = pair.second
             tracks.forEach { track ->
                 val current = bestPerLabel[track.label]
                 if (current == null || track.bandwidth > current.first.bandwidth) {
@@ -497,7 +502,7 @@ class DetailViewModel @Inject constructor(
             }
         }
 
-        bestPerLabel.forEach { (label, pair) -> downloadTrackContext[label] = pair.second }
+        bestPerLabel.forEach { entry -> downloadTrackContext[entry.key] = entry.value.second }
 
         bestPerLabel.values
             .map { it.first }
