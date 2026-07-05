@@ -911,8 +911,9 @@ fun DownloadQualitySheet(
                         // cap is locked behind Premium with a clear, factual nudge,
                         // matching the subtitle drawer's upsell pattern elsewhere in
                         // the player. trackHeightPx("Auto"/"Best available") resolves
-                        // to Int.MAX_VALUE, so an unlabeled "best" track is correctly
-                        // treated as top-tier rather than silently unlocked.
+                        // to 0 (unknown resolution), so an unlabeled/fallback track is
+                        // never wrongly locked as if it were a top-tier resolution —
+                        // only genuinely parsed, above-cap tiers ever show the lock.
                         val isLocked  = trackHeightPx(track.label) > maxResolutionHeight
 
                         Row(
@@ -1547,8 +1548,21 @@ private fun friendlyDetailError(e: Exception): String {
  * quality, which is exactly what the free tier must NOT be allowed to silently
  * download, so they are treated as the highest tier rather than unlocked.
  */
+/**
+ * Parses a leading resolution height (e.g. "1080p" -> 1080) from a quality label.
+ *
+ * IMPORTANT: when the label has no parseable digits (e.g. "Best available",
+ * "Auto", or any other fallback label used when a source's actual resolution
+ * couldn't be determined), this returns 0 — NOT Int.MAX_VALUE. An unknown
+ * resolution must never be treated as "highest possible" for premium-gating
+ * purposes: doing so silently locked every fallback-labeled track behind
+ * Premium, even on sources whose real (unparsed) quality was low. Treating
+ * unknown as 0 means these tracks are always allowed through the resolution
+ * cap, which is the safe default — the actual gate that matters is the
+ * genuinely-parsed resolution tiers coming from the HLS ladder.
+ */
 fun trackHeightPx(label: String): Int =
-    label.takeWhile { it.isDigit() }.toIntOrNull() ?: Int.MAX_VALUE
+    label.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
 
 /** Human label for a tier's cap height, used in lock-sheet copy ("Free plan streams up to 480p"). */
 fun qualityLabelFor(heightPx: Int): String = when {
