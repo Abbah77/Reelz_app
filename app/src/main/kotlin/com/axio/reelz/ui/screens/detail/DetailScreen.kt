@@ -240,7 +240,7 @@ class DetailViewModel @Inject constructor(
                             val stream = (state as com.axio.reelz.scanner.PrefetchState.Ready).result
                             preResolvedStream = stream
                             try {
-                                val qualities = when {
+                                var qualities = when {
                                     stream.qualities.isNotEmpty() -> normalizeQualities(
                                         stream.qualities,
                                         _ui.value.detail?.runtime,
@@ -249,7 +249,16 @@ class DetailViewModel @Inject constructor(
                                         stream.url, stream.headers,
                                         _ui.value.detail?.runtime,
                                     )
-                                    else -> listOf(QualityTrack("Best available", stream.url))
+                                    else -> emptyList()
+                                }
+                                if (qualities.isEmpty()) {
+                                    // No variant ladder — single real quality. Probe its
+                                    // actual resolution instead of an unlockable placeholder.
+                                    qualities = listOf(
+                                        com.axio.reelz.scanner.QualityListParsing.probeSingleQuality(
+                                            stream.url, stream.headers,
+                                        )
+                                    )
                                 }
                                 preResolvedQualities[qualityKey(tmdbId)] = qualities
                             } catch (_: Exception) {}
@@ -360,11 +369,20 @@ class DetailViewModel @Inject constructor(
 
                     cachedStreamResult = stream
 
-                    val qualities = when {
+                    var qualities = when {
                         stream == null -> emptyList()
                         stream.qualities.isNotEmpty() -> normalizeQualities(stream.qualities, detail.runtime)
                         stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, detail.runtime)
-                        else -> listOf(QualityTrack("Best available", stream.url))
+                        else -> emptyList()
+                    }
+                    if (qualities.isEmpty() && stream != null) {
+                        // No variant ladder — single real quality. Probe its actual
+                        // resolution instead of an unlockable "Best available" placeholder.
+                        qualities = listOf(
+                            com.axio.reelz.scanner.QualityListParsing.probeSingleQuality(
+                                stream.url, stream.headers,
+                            )
+                        )
                     }
                     if (qualities.isNotEmpty()) preResolvedQualities[key] = qualities
                     _ui.update { it.copy(downloadQualities = qualities, isResolvingQualities = false) }

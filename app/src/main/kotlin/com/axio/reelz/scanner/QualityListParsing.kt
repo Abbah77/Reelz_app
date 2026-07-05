@@ -1,11 +1,13 @@
 package com.axio.reelz.scanner
 
+import android.media.MediaMetadataRetriever
 import com.axio.reelz.data.model.QualityTrack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -34,7 +36,17 @@ object QualityListParsing {
         .followRedirects(true)
         .build()
 
-    /** Fetches and parses a master playlist into quality variants (no sizes yet). */
+    /**
+     * Fetches and parses a master playlist into quality variants (no sizes yet).
+     * If the playlist has NO variant ladder (just one media playlist — common
+     * for scraped embed sources that pre-resolve server-side to one quality),
+     * this returns an empty list; callers should fall back to
+     * [probeSingleQuality] rather than a synthetic "Best available" label —
+     * "Best available" was being treated as Int.MAX_VALUE height, which
+     * ALWAYS exceeded the free-tier cap and locked it behind Premium even
+     * when the real (only) resolution was something the free tier allows,
+     * like 480p.
+     */
     suspend fun parseVariants(
         masterUrl: String,
         headers: Map<String, String>,
@@ -49,6 +61,59 @@ object QualityListParsing {
             withRealSizes(raw, headers)
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    /**
+     * For a stream with NO variant ladder (single quality only — either a
+     * plain MP4 or an HLS media playlist with no #EXT-X-STREAM-INF entries),
+     * detects the REAL resolution by probing the actual video with
+     * MediaMetadataRetriever (reads the real frame height, not a guess),
+     * and also gets the real size (HEAD for MP4, segment-sampling for HLS).
+     *
+     * This is what makes locking correct: a single 480p stream must show up
+     * and unlock as "480p" for free users, not as an unknown "Best available"
+     * that always locks regardless of the real quality.
+     */
+    suspend fun probeSingleQuality(
+        url: String,
+        headers: Map<String, String>,
+    ): QualityTrack = withContext(Dispatchers.IO) {
+        val heightPx = try {
+            withTimeoutOrNull(6_000L) { probeRealHeight(url, headers) }
+        } catch (_: Exception) { null } ?: 0
+
+        val label = when {
+            heightPx >= 2100 -> "4K"
+            heightPx >= 1000 -> "1080p"
+            heightPx >= 700  -> "720p"
+            heightPx >= 440  -> "480p"
+            heightPx >= 320  -> "360p"
+            heightPx > 0     -> "240p"
+            else -> "Best available" // last resort only if probing truly fails
+        }
+
+        val realSize = try { measureRealSize(url, headers) } catch (_: Exception) { null }
+
+        QualityTrack(
+            label = label,
+            url = url,
+            bandwidth = 0,
+            estimatedSizeBytes = realSize ?: 0L,
+            isSizeExact = realSize != null,
+        )
+    }
+
+    /** Reads the real video height via Android's MediaMetadataRetriever — an
+     *  actual measurement of the stream, not an assumption. */
+    private fun probeRealHeight(url: String, headers: Map<String, String>): Int {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(url, headers)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull() ?: 0
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
         }
     }
 

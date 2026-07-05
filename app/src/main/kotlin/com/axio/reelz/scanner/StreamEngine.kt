@@ -297,7 +297,13 @@ class StreamEngine @Inject constructor(
                     val tracks: List<com.axio.reelz.data.model.QualityTrack> = when {
                         stream.qualities.isNotEmpty() -> stream.qualities
                         stream.isHls -> QualityListParsing.parseVariants(stream.url, stream.headers)
-                        else -> listOf(com.axio.reelz.data.model.QualityTrack("Best available", stream.url))
+                        else -> emptyList()
+                    }.ifEmpty {
+                        // No variant ladder found (plain MP4, or HLS media playlist with
+                        // no #EXT-X-STREAM-INF entries) — this is a single real quality.
+                        // Probe its REAL resolution instead of using an unknown
+                        // "Best available" placeholder that would always lock.
+                        listOf(QualityListParsing.probeSingleQuality(stream.url, stream.headers))
                     }
 
                     var addedNew = false
