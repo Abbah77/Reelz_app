@@ -10,20 +10,24 @@ import com.axio.reelz.data.model.TransferRecord
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import java.io.*
-import java.net.*
+import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 
 /**
- * Wi-Fi Direct Transfer Service — Xender-style bidirectional, Quick Share-speed.
+ * TransferService — foreground-service shell around NearbyTransferManager.
  *
- * Architecture:
- *  • Both devices always run a TCP server (ServerSocket) so either side can send.
- *  • Sender connects to receiver's server socket and streams the file.
- *  • Speed is limited only by the Wi-Fi Direct link (~50–200 MB/s on modern hardware).
- *  • 256 KB I/O buffers, TCP_NODELAY off (Nagle ON) for large streaming throughput.
- *  • Real-time progress + speed reporting every 300 ms.
+ * All the actual P2P negotiation, medium upgrade (Bluetooth -> Wi-Fi Direct/Aware),
+ * chunking, retry, and throughput tuning is handled by Google Play Services via
+ * NearbyTransferManager. This service exists purely so:
+ *  1. Android doesn't kill our process mid-transfer (foreground service + notification).
+ *  2. The transfer keeps running if the user backgrounds the app or the TransferScreen
+ *     composable is torn down.
+ *  3. We have one place to persist completed transfers to TransferDao.
+ *
+ * This replaces the old hand-rolled ServerSocket/Socket + 256KB buffer loop entirely —
+ * see git history for that implementation if it's ever needed as a no-Play-Services
+ * fallback path.
  */
 @AndroidEntryPoint
 class TransferService : Service() {
@@ -31,23 +35,15 @@ class TransferService : Service() {
     @Inject lateinit var transferDao: TransferDao
 
     companion object {
-        const val CHANNEL_ID    = "reelz_transfer"
-        const val ACTION_SEND   = "action_send"
-        const val ACTION_RECEIVE = "action_receive"
-        const val ACTION_STOP   = "action_stop"
-        const val EXTRA_FILE    = "file_path"
-        const val EXTRA_IP      = "peer_ip"
-        const val EXTRA_PORT    = "peer_port"
-        /** Both devices listen on this port so either can send. */
-        const val TRANSFER_PORT = 49_200
-        const val REELZ_MAGIC   = "REELZ\u0001"
-        /** I/O buffer — 256 KB for maximum throughput */
-        private const val BUF = 262_144
+        const val CHANNEL_ID = "reelz_transfer"
+        const val ACTION_SEND = "action_send"
+        const val ACTION_STOP = "action_stop"
+        const val EXTRA_FILE = "file_path"
+        const val EXTRA_ENDPOINT_ID = "endpoint_id"
 
-        /** UI subscribes to this for real-time transfer updates. */
+        /** UI subscribes to this for real-time transfer updates — same shape as before. */
         val progressFlow = MutableStateFlow<TransferProgress?>(null)
 
-        /** Friendly progress model exposed to the UI. */
         data class TransferProgress(
             val id: String,
             val fileName: String,
@@ -59,203 +55,101 @@ class TransferService : Service() {
             val done: Boolean = false,
             val error: String? = null,
         )
+
+        /**
+         * Shared manager instance so both the Service (for lifecycle/notifications)
+         * and the ViewModel (for advertise/discover/connect calls from the UI) talk
+         * to the exact same NearbyTransferManager / Play Services session.
+         */
+        @Volatile var nearbyManager: NearbyTransferManager? = null
+            private set
+
+        fun ensureManager(ctx: Context): NearbyTransferManager =
+            nearbyManager ?: NearbyTransferManager(ctx.applicationContext).also { nearbyManager = it }
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    /** Our persistent receive server — always listening so peer can send to us. */
-    private var receiveServer: ServerSocket? = null
+    private val speedTracker = SpeedTracker()
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
         startForeground(2, buildNotif("Reelz Transfer", "Ready to transfer"))
-        // Always start receive server so THIS device can also be a recipient
-        scope.launch { runReceiveServer() }
+
+        val manager = ensureManager(this)
+        manager.incomingDir = File(filesDir, "transfers")
+
+        // Bridge NearbyTransferManager's low-level events into the same
+        // TransferProgress shape the existing UI (TransferScreen) already renders,
+        // and persist completed transfers to Room — same as the old implementation.
+        scope.launch {
+            manager.events.collect { event ->
+                when (event) {
+                    is NearbyTransferManager.NearbyEvent.TransferProgress -> {
+                        val bps = speedTracker.update(event.payloadId, event.bytesTransferred)
+                        progressFlow.emit(
+                            TransferProgress(
+                                id = event.payloadId.toString(),
+                                fileName = event.fileName,
+                                totalBytes = event.totalBytes,
+                                transferredBytes = event.bytesTransferred,
+                                direction = event.direction,
+                                peerName = event.endpointId,
+                                speedBps = bps,
+                                done = event.done,
+                                error = event.error,
+                            )
+                        )
+                        updateNotif(
+                            title = when {
+                                event.error != null -> "Transfer failed"
+                                event.done -> "${if (event.direction == "SEND") "Sent" else "Received"} \u2713"
+                                event.direction == "SEND" -> "Sending"
+                                else -> "Receiving"
+                            },
+                            text = event.error
+                                ?: "${event.fileName} \u00b7 ${fmt(event.bytesTransferred)} / ${fmt(event.totalBytes)}" +
+                                    if (bps > 0) " \u00b7 ${fmtSpeed(bps)}" else "",
+                        )
+                    }
+
+                    is NearbyTransferManager.NearbyEvent.FileReceived -> {
+                        recordTransfer(
+                            id = event.payloadId.toString(),
+                            name = event.file.name,
+                            path = event.file.absolutePath,
+                            size = event.file.length(),
+                            dir = "RECEIVE",
+                            peer = event.endpointId,
+                        )
+                    }
+
+                    else -> Unit
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_SEND -> {
                 val filePath = intent.getStringExtra(EXTRA_FILE) ?: return START_NOT_STICKY
-                val ip       = intent.getStringExtra(EXTRA_IP)   ?: return START_NOT_STICKY
-                val port     = intent.getIntExtra(EXTRA_PORT, TRANSFER_PORT)
-                scope.launch { sendFile(filePath, ip, port) }
+                val endpointId = intent.getStringExtra(EXTRA_ENDPOINT_ID) ?: return START_NOT_STICKY
+                val file = File(filePath)
+                if (file.exists()) {
+                    ensureManager(this).sendFile(endpointId, file)
+                }
             }
             ACTION_STOP -> stopSelf()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onBind(i: Intent?): IBinder? = null
 
     override fun onDestroy() {
         scope.cancel()
-        receiveServer?.close()
         super.onDestroy()
-    }
-
-    // ── Persistent receive server ─────────────────────────────────────────────
-
-    /**
-     * Runs forever while the service is alive.
-     * Accepts multiple sequential incoming transfers — after one completes it
-     * immediately loops back and waits for the next, just like Xender.
-     */
-    private suspend fun runReceiveServer() {
-        try {
-            receiveServer = ServerSocket(TRANSFER_PORT)
-            while (scope.isActive) {
-                try {
-                    val socket = receiveServer!!.accept()
-                    // Each accepted connection is handled in its own coroutine
-                    // so simultaneous inbound transfers don't block each other.
-                    scope.launch { handleIncoming(socket) }
-                } catch (e: SocketException) {
-                    if (receiveServer?.isClosed == true) break   // clean shutdown
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("TransferService", "Receive server error: ${e.message}")
-        }
-    }
-
-    private suspend fun handleIncoming(socket: Socket) {
-        val id = UUID.randomUUID().toString()
-        withContext(Dispatchers.IO) {
-            socket.use { s ->
-                try {
-                    val peerIp = s.inetAddress.hostAddress ?: "unknown"
-                    val inp    = DataInputStream(BufferedInputStream(s.getInputStream(), BUF))
-
-                    val magic = inp.readUTF()
-                    if (!magic.startsWith("REELZ")) {
-                        updateNotif("Transfer", "Unrecognised transfer request")
-                        return@use
-                    }
-
-                    val fileName  = inp.readUTF()
-                    val totalSize = inp.readLong()
-                    val prog = Companion.TransferProgress(id, fileName, totalSize, 0L, "RECEIVE", peerIp)
-                    progressFlow.emit(prog)
-                    updateNotif("Receiving", fileName)
-
-                    val outDir  = File(filesDir, "transfers").also { it.mkdirs() }
-                    val outFile = uniqueFile(outDir, fileName)
-
-                    var received = 0L
-                    var windowBytes = 0L
-                    var windowStart = System.currentTimeMillis()
-
-                    FileOutputStream(outFile).use { fos ->
-                        val buf = ByteArray(BUF)
-                        var n: Int
-                        while (received < totalSize) {
-                            val toRead = minOf(buf.size.toLong(), totalSize - received).toInt()
-                            n = inp.read(buf, 0, toRead)
-                            if (n == -1) break
-                            fos.write(buf, 0, n)
-                            received    += n
-                            windowBytes += n
-
-                            val now     = System.currentTimeMillis()
-                            val elapsed = now - windowStart
-                            if (elapsed >= 300) {
-                                val bps = windowBytes * 1000 / elapsed
-                                windowBytes = 0; windowStart = now
-                                progressFlow.emit(prog.copy(transferredBytes = received, speedBps = bps))
-                                updateNotif(
-                                    "Receiving ${fileName}",
-                                    "${fmt(received)} / ${fmt(totalSize)} · ${fmtSpeed(bps)}"
-                                )
-                            }
-                        }
-                    }
-
-                    progressFlow.emit(prog.copy(transferredBytes = totalSize, done = true))
-                    recordTransfer(id, fileName, outFile.absolutePath, totalSize, "RECEIVE", peerIp)
-                    updateNotif("Received ✓", "$fileName · ${fmt(totalSize)}")
-
-                } catch (e: Exception) {
-                    android.util.Log.w("TransferService", "Receive error: ${e.message}")
-                    progressFlow.emit(
-                        Companion.TransferProgress(id, "", 0, 0, "RECEIVE", "",
-                            error = "Receiving failed. Make sure both devices are connected.")
-                    )
-                    updateNotif("Transfer failed", "Could not receive file")
-                }
-            }
-        }
-    }
-
-    // ── Send ──────────────────────────────────────────────────────────────────
-
-    private suspend fun sendFile(filePath: String, ip: String, port: Int) {
-        val file = File(filePath)
-        if (!file.exists()) return
-        val id   = UUID.randomUUID().toString()
-        val prog = Companion.TransferProgress(id, file.name, file.length(), 0L, "SEND", ip)
-        progressFlow.emit(prog)
-        updateNotif("Sending", file.name)
-
-        try {
-            val boundNetwork = com.axio.reelz.transfer.NetworkBindingHolder.current
-            val socket = boundNetwork?.socketFactory?.createSocket() ?: Socket()
-            socket.use {
-                // Connect with a reasonable timeout — hotspot links are fast once joined
-                socket.connect(InetSocketAddress(ip, port), 8_000)
-                socket.sendBufferSize = BUF
-                // Keep Nagle on (default) for large sequential writes — best throughput
-
-                val out = DataOutputStream(BufferedOutputStream(socket.getOutputStream(), BUF))
-                out.writeUTF(REELZ_MAGIC)
-                out.writeUTF(file.name)
-                out.writeLong(file.length())
-                out.flush()
-
-                var sent = 0L
-                var windowBytes = 0L
-                var windowStart = System.currentTimeMillis()
-
-                FileInputStream(file).use { fis ->
-                    val buf = ByteArray(BUF)
-                    var n: Int
-                    while (fis.read(buf).also { n = it } != -1) {
-                        out.write(buf, 0, n)
-                        sent        += n
-                        windowBytes += n
-
-                        val now     = System.currentTimeMillis()
-                        val elapsed = now - windowStart
-                        if (elapsed >= 300) {
-                            val bps = windowBytes * 1000 / elapsed
-                            windowBytes = 0; windowStart = now
-                            progressFlow.emit(prog.copy(transferredBytes = sent, speedBps = bps))
-                            updateNotif(
-                                "Sending ${file.name}",
-                                "${fmt(sent)} / ${fmt(file.length())} · ${fmtSpeed(bps)}"
-                            )
-                        }
-                    }
-                }
-                out.flush()
-
-                progressFlow.emit(prog.copy(transferredBytes = file.length(), done = true))
-                recordTransfer(id, file.name, filePath, file.length(), "SEND", ip)
-                updateNotif("Sent ✓", "${file.name} · ${fmt(file.length())}")
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("TransferService", "Send error: ${e.message}")
-            val friendly = when {
-                e is ConnectException ||
-                e.message?.contains("refused") == true ->
-                    "Couldn't reach the other device. Make sure you're both connected."
-                e is SocketTimeoutException ->
-                    "Connection timed out. Move devices closer together and try again."
-                else -> "Send failed. Reconnect and try again."
-            }
-            progressFlow.emit(prog.copy(error = friendly))
-            updateNotif("Send failed", "Could not send ${file.name}")
-        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -264,20 +158,6 @@ class TransferService : Service() {
         id: String, name: String, path: String, size: Long, dir: String, peer: String,
     ) {
         transferDao.insert(TransferRecord(id, name, path, size, dir, peer, peer, "DONE"))
-    }
-
-    /** Returns a file that doesn't collide with an existing file in the directory. */
-    private fun uniqueFile(dir: File, name: String): File {
-        var f = File(dir, name)
-        if (!f.exists()) return f
-        val base = name.substringBeforeLast(".")
-        val ext  = name.substringAfterLast(".", "")
-        var i    = 1
-        while (f.exists()) {
-            f = File(dir, if (ext.isNotEmpty()) "$base($i).$ext" else "$base($i)")
-            i++
-        }
-        return f
     }
 
     private fun buildNotif(title: String, text: String) =
@@ -309,5 +189,26 @@ class TransferService : Service() {
         bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
         bps >= 1_000     -> "%.0f KB/s".format(bps / 1_000.0)
         else             -> "$bps B/s"
+    }
+
+    /**
+     * Nearby's PayloadTransferUpdate gives cumulative bytes, not instantaneous speed —
+     * derive a rolling B/s figure the same way the old socket-loop implementation did,
+     * so the UI's speed readout behaves identically.
+     */
+    private class SpeedTracker {
+        private data class Window(var lastBytes: Long, var lastTimeMs: Long)
+        private val windows = mutableMapOf<Long, Window>()
+
+        fun update(payloadId: Long, bytesNow: Long): Long {
+            val now = System.currentTimeMillis()
+            val w = windows.getOrPut(payloadId) { Window(bytesNow, now) }
+            val dt = now - w.lastTimeMs
+            if (dt < 300) return 0L // not enough elapsed time for a stable reading yet
+            val bps = ((bytesNow - w.lastBytes) * 1000) / dt.coerceAtLeast(1)
+            w.lastBytes = bytesNow
+            w.lastTimeMs = now
+            return bps
+        }
     }
 }

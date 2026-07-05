@@ -48,7 +48,7 @@ import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.TransferRecord
 import com.axio.reelz.transfer.TransferService
-import com.axio.reelz.transfer.WifiDirectManager
+import com.axio.reelz.transfer.NearbyTransferManager
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.downloads.formatSize
 import com.axio.reelz.ui.screens.downloads.formatSpeed
@@ -156,90 +156,104 @@ class TransferViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // ── P2P state ─────────────────────────────────────────────────────────────
+    // Backed by NearbyTransferManager (Google Play Services Nearby Connections)
+    // instead of hand-rolled WifiP2pManager/LocalOnlyHotspot. See NearbyTransferManager
+    // kdoc for why this is what lets us skip any manual Settings/Wi-Fi navigation.
 
     sealed class P2pUiState {
         object Idle        : P2pUiState()
         object Preparing   : P2pUiState()
         object Connecting  : P2pUiState()
-        data class SenderReady(val ssid: String, val passphrase: String, val qr: Bitmap?)  : P2pUiState()
-        data class Connected(val peerIp: String, val isHost: Boolean) : P2pUiState()
+        /** ssid/passphrase fields are gone — Nearby needs no Wi-Fi credentials at all.
+         *  qr now encodes a short pairing code purely for a nice "scan to find me instantly"
+         *  UX layered on top of Nearby's own radio-level discovery (BLE + Wi-Fi scan). */
+        data class SenderReady(val pairingCode: String, val qr: Bitmap?) : P2pUiState()
+        /** peerId is the Nearby endpointId (opaque per-session identifier — replaces the old peerIp). */
+        data class Connected(val peerId: String, val isHost: Boolean) : P2pUiState()
         data class Error(val msg: String) : P2pUiState()
     }
 
     private val _p2p = MutableStateFlow<P2pUiState>(P2pUiState.Idle)
     val p2p: StateFlow<P2pUiState> = _p2p.asStateFlow()
 
-    private var wifiDirect: WifiDirectManager? = null
+    private var nearby: NearbyTransferManager? = null
+    private var eventsJob: kotlinx.coroutines.Job? = null
 
-    // Sender: create group → show QR
+    /** Human-readable name we advertise/connect as — shown on the other device. */
+    private fun deviceDisplayName(): String =
+        "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".take(32)
+
+    // Sender/host: start advertising, show a QR/code so the other device can find us fast.
     fun initAsSender(ctx: Context) {
         if (_p2p.value is P2pUiState.SenderReady || _p2p.value is P2pUiState.Connected) return
         _p2p.value = P2pUiState.Preparing
-        val wd = WifiDirectManager(ctx).also { wifiDirect = it }
-        wd.register()
 
-        viewModelScope.launch {
-            // Watch for receiver connecting
-            launch {
-                wd.state.collect { state ->
-                    if (state is WifiDirectManager.P2pState.Connected) {
-                        _p2p.value = P2pUiState.Connected(
-                            peerIp = state.groupOwnerAddress.hostAddress ?: WifiDirectManager.GO_IP,
-                            isHost = state.isGroupOwner,
-                        )
-                    }
-                }
-            }
+        val manager = TransferService.ensureManager(ctx).also { nearby = it }
+        val name = deviceDisplayName()
+        val pairingCode = (100000..999999).random().toString()
 
-            wd.startGroup()
-                .onSuccess { group ->
-                    val payload = "reelzp2p://${group.ssid}::${group.passphrase}"
-                    val qr = generateQr(payload, 700)
-                    _p2p.value = P2pUiState.SenderReady(group.ssid, group.passphrase, qr)
-                }
-                .onFailure { e ->
-                    _p2p.value = P2pUiState.Error(e.message ?: "Failed to start. Make sure Wi-Fi is on.")
-                }
+        eventsJob = viewModelScope.launch {
+            manager.startAdvertising(name).collect { event -> handleEvent(event, isHost = true) }
         }
+
+        // QR still gives an instant, unambiguous "scan to connect" path for two phones
+        // sitting next to each other, but it no longer carries Wi-Fi credentials —
+        // it's just a hint the receiver's camera flow uses to skip the peer list and
+        // auto-select the right endpoint once Nearby discovery finds it.
+        val payload = "reelzp2p://$pairingCode"
+        val qr = generateQr(payload, 700)
+        _p2p.value = P2pUiState.SenderReady(pairingCode, qr)
     }
 
-    // Receiver: parse QR → join group silently
+    // Receiver: start discovery, auto-connect to the first/matching endpoint found.
     fun connectFromQr(ctx: Context, raw: String) {
-        val parts = runCatching {
-            val body = raw.removePrefix("reelzp2p://")
-            body.substringBefore("::") to body.substringAfter("::")
-        }.getOrNull()
-
-        if (parts == null || parts.first.isBlank() || parts.second.isBlank()) {
+        // We don't strictly need the code's value (Nearby discovery finds any advertising
+        // Reelz endpoint by SERVICE_ID alone) — parsing it just validates it's actually
+        // our QR format before we spin up discovery.
+        if (!raw.startsWith("reelzp2p://")) {
             _p2p.value = P2pUiState.Error("Not a Reelz QR code.")
             return
         }
+        startDiscoveryAndConnect(ctx)
+    }
 
+    /** Also usable without a QR at all — e.g. a plain "Find nearby devices" button. */
+    fun startDiscoveryAndConnect(ctx: Context) {
         _p2p.value = P2pUiState.Connecting
-        val wd = WifiDirectManager(ctx).also { wifiDirect = it }
-        wd.register()
+        val manager = TransferService.ensureManager(ctx).also { nearby = it }
+        val name = deviceDisplayName()
 
-        viewModelScope.launch {
-            wd.joinGroup(parts.first, parts.second)
-                .onSuccess { ip ->
-                    _p2p.value = P2pUiState.Connected(
-                        peerIp = ip.hostAddress ?: WifiDirectManager.GO_IP,
-                        isHost = false,
-                    )
+        eventsJob = viewModelScope.launch {
+            manager.startDiscovery().collect { event ->
+                if (event is NearbyTransferManager.NearbyEvent.EndpointFound) {
+                    // Connect to the first Reelz endpoint we see — matches the simple
+                    // one-to-one pairing flow of the old QR/hotspot approach. (P2P_STAR
+                    // strategy still allows the host to accept more than one of these.)
+                    manager.requestConnection(name, event.endpointId)
                 }
-                .onFailure { e ->
-                    _p2p.value = P2pUiState.Error(e.message ?: "Connection failed.")
-                }
+                handleEvent(event, isHost = false)
+            }
         }
     }
 
-    fun sendFile(ctx: Context, filePath: String, peerIp: String) {
+    private fun handleEvent(event: NearbyTransferManager.NearbyEvent, isHost: Boolean) {
+        when (event) {
+            is NearbyTransferManager.NearbyEvent.Connected ->
+                _p2p.value = P2pUiState.Connected(peerId = event.endpointId, isHost = isHost)
+            is NearbyTransferManager.NearbyEvent.ConnectionFailed ->
+                _p2p.value = P2pUiState.Error(event.reason)
+            is NearbyTransferManager.NearbyEvent.Disconnected ->
+                if (_p2p.value is P2pUiState.Connected) _p2p.value = P2pUiState.Idle
+            else -> Unit
+        }
+    }
+
+    fun sendFile(ctx: Context, filePath: String, peerId: String) {
         ctx.startForegroundService(
             Intent(ctx, TransferService::class.java)
                 .setAction(TransferService.ACTION_SEND)
                 .putExtra(TransferService.EXTRA_FILE, filePath)
-                .putExtra(TransferService.EXTRA_IP, peerIp)
-                .putExtra(TransferService.EXTRA_PORT, TransferService.TRANSFER_PORT),
+                .putExtra(TransferService.EXTRA_ENDPOINT_ID, peerId),
         )
     }
 
@@ -248,15 +262,17 @@ class TransferViewModel @Inject constructor(
     }
 
     fun reset() {
-        wifiDirect?.disconnect()
-        wifiDirect?.unregister()
-        wifiDirect = null
+        eventsJob?.cancel()
+        eventsJob = null
+        nearby?.stopAll()
+        nearby = null
         _p2p.value = P2pUiState.Idle
     }
 
     override fun onCleared() {
         super.onCleared()
-        wifiDirect?.unregister()
+        eventsJob?.cancel()
+        nearby?.stopAll()
     }
 }
 
@@ -484,7 +500,7 @@ private fun ConnectedSessionTab(
     ) {
         Spacer(Modifier.height(d.spaceXs))
 
-        ConnectedBadge(peerIp = p2p.peerIp, isHost = p2p.isHost)
+        ConnectedBadge(peerIp = p2p.peerId, isHost = p2p.isHost)
 
         Text(
             "Pick a file to send. Files the other device sends will appear automatically.",
@@ -503,7 +519,7 @@ private fun ConnectedSessionTab(
             enabled = selectedFile != null,
             onClick = {
                 val file = selectedFile ?: return@BrandButton
-                vm.sendFile(ctx, file.filePath, p2p.peerIp)
+                vm.sendFile(ctx, file.filePath, p2p.peerId)
                 selectedFile = null
             },
             modifier = Modifier.fillMaxWidth(),
@@ -555,16 +571,27 @@ private fun SendTab(
     val d = LocalDimensions.current
     var selectedFile by remember { mutableStateOf<DownloadItem?>(null) }
 
-    // LocalOnlyHotspot requires ACCESS_FINE_LOCATION on all API levels.
-    // On API 33+ (Android 13+) it ALSO requires NEARBY_WIFI_DEVICES at runtime —
-    // this is a separate permission from location and is NOT granted just because
-    // location was granted. Without requesting it explicitly here, Android silently
-    // denies the hotspot at runtime and the only way to grant it is via App Settings,
-    // which is the bug being fixed.
-    val p2pPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES)
-    } else {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    // Nearby Connections advertising needs Bluetooth (used for discovery + the initial
+    // handshake before Play Services silently upgrades the link to Wi-Fi Direct/Aware)
+    // plus NEARBY_WIFI_DEVICES on API 33+ for the Wi-Fi medium itself. These are separate
+    // runtime permissions from each other and from location — without requesting all of
+    // them explicitly here, advertising can silently fail with no way to grant them
+    // except via App Settings, which is exactly the bug this whole rewrite fixes.
+    val p2pPermissions = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        )
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> arrayOf(
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        )
+        else -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     }
 
     fun allP2pPermsGranted(): Boolean = p2pPermissions.all {
@@ -607,9 +634,9 @@ private fun SendTab(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
                             Icon(IconWifi, null, tint = Brand, modifier = Modifier.size(d.buttonHeightSm - d.spaceMd))
-                            Text("Location permission needed", color = Color.White,
+                            Text("Nearby access needed", color = Color.White,
                                 fontWeight = FontWeight.Bold, fontSize = d.textLg)
-                            Text("Required to create a Wi-Fi hotspot for direct transfer.",
+                            Text("Bluetooth & Wi-Fi permissions let nearby devices find you instantly.",
                                 color = White60, fontSize = d.textMd, textAlign = TextAlign.Center)
                             BrandButton(
                                 text = "Allow & Generate QR",
@@ -721,14 +748,25 @@ private fun ReceiveTab(
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCam = it }
     var selectedFile by remember { mutableStateOf<DownloadItem?>(null) }
 
-    // Joining the sender's hotspot (WifiNetworkSuggestion) also needs
-    // NEARBY_WIFI_DEVICES on API 33+, same as the sender side. Without asking for
-    // it here, a scan can silently fail to join with no way to grant it except
-    // through App Settings.
-    val joinPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES)
-    } else {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    // Nearby Connections needs Bluetooth (for discovery + the initial handshake before
+    // it upgrades to Wi-Fi) plus NEARBY_WIFI_DEVICES on API 33+ for the Wi-Fi medium.
+    // Without asking for these here, discovery can silently find nothing with no way
+    // to grant them except through App Settings.
+    val joinPermissions = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        )
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        )
+        else -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     }
     fun hasJoinPerms(): Boolean = joinPermissions.all {
         ContextCompat.checkSelfPermission(ctx, it) == PackageManager.PERMISSION_GRANTED
@@ -772,6 +810,23 @@ private fun ReceiveTab(
                 } else {
                     ScannerCard(onScanned = { onQrScanned(it) })
                 }
+
+                // Nearby Connections finds nearby senders over Bluetooth/Wi-Fi radio
+                // scanning regardless of QR — this is a fallback for when camera access
+                // isn't available, or the two devices are just already side by side.
+                Spacer(Modifier.height(d.spaceXs))
+                GhostButton(
+                    "Find nearby devices instead",
+                    onClick = {
+                        if (hasJoinPerms()) {
+                            vm.startDiscoveryAndConnect(ctx)
+                        } else {
+                            pendingQrPayload = "reelzp2p://direct"
+                            joinPermLauncher.launch(joinPermissions)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
 
             // ── Connecting ────────────────────────────────────────────────────

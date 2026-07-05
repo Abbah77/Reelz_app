@@ -191,6 +191,13 @@ dependencies {
     implementation("com.google.ads.interactivemedia.v3:interactivemedia:3.33.0")
     implementation("androidx.media3:media3-exoplayer-ima:1.3.1")
 
+    // Nearby Connections — Google Play Services P2P transfer (Wi-Fi/BT auto-negotiated,
+    // same stack behind Quick Share / Nearby Share). This replaces manual
+    // WifiP2pManager / LocalOnlyHotspot / WifiNetworkSuggestion handling: Play Services
+    // runs with system-level trust our app doesn't have, so it can silently perform the
+    // Wi-Fi upgrade that a normal app is blocked from doing on API 29+.
+    implementation("com.google.android.gms:play-services-nearby:19.3.0")
+
     // QR code
     implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.camera:camera-core:1.3.4")

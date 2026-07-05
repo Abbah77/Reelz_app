@@ -15,15 +15,24 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 /**
- * HotspotManager — replaces Wi-Fi Direct entirely.
+ * ⚠️ LEGACY / UNUSED — kept only as a reference no-Play-Services fallback.
  *
- * Sender  → startHotspot() → gets SSID + passphrase → encode in QR
- * Receiver → joinHotspot(ssid, pass) → joins silently → TCP transfer
+ * As of the Nearby Connections rewrite (see NearbyTransferManager), this class is no
+ * longer wired into TransferViewModel/TransferScreen. It's kept in the tree in case we
+ * ever need a fallback path for devices without Google Play Services (some AOSP/no-GMS
+ * builds), but it is NOT currently instantiated anywhere in the app.
  *
- * Uses WifiManager.LocalOnlyHotspot (API 26+, same as your minSdk).
- * No BUSY errors, no OS restrictions, works on all Android 8+ devices.
- * This is exactly how Xender works.
+ * The core problem with this approach: `joinGroup()`'s silent-join via
+ * WifiNetworkSuggestion is blocked by Android's anti-abuse policy on API 29+ — the OS
+ * requires a manual tap on a system notification no matter what this code does. See
+ * NearbyTransferManager's kdoc for why Play Services can do what this class cannot.
+ *
+ * Original doc (inaccurate — kept for history):
+ * "HotspotManager — replaces Wi-Fi Direct entirely. No BUSY errors, no OS restrictions,
+ * works on all Android 8+ devices. This is exactly how Xender works." — none of this
+ * held up: OS restrictions apply regardless, and Xender does not use this mechanism.
  */
+@Deprecated("Replaced by NearbyTransferManager — not used by TransferViewModel anymore. Kept as a no-Play-Services fallback reference only.")
 @SuppressLint("MissingPermission")
 class WifiDirectManager(private val ctx: Context) {
 
