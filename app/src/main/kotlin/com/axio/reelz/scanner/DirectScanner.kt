@@ -38,12 +38,7 @@ class DirectScanner @Inject constructor() {
                 response.close()
 
                 val m3u8 = M3U8.find(body)?.value
-                // Prefer the HLS master playlist whenever one is present — it's
-                // the ONLY thing that gives us a real quality ladder (multiple
-                // resolutions). A bare .mp4 is a single, non-adaptive file with
-                // no ladder to offer, so only fall back to it if no .m3u8 was
-                // found in the response body at all.
-                val mp4  = if (m3u8 == null) MP4.find(body)?.value else null
+                val mp4  = MP4.find(body)?.value
                 val url  = m3u8 ?: mp4 ?: return@withContext null
 
                 StreamResult(

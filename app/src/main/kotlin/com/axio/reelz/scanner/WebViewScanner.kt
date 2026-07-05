@@ -30,8 +30,6 @@ class WebViewScanner(private val context: Context) {
         )
 
         const val SCAN_TIMEOUT_MS = 20_000L
-        /** How long to hold a bare .mp4 hit before settling for it, in case an .m3u8 manifest follows. */
-        const val M3U8_GRACE_MS = 2_500L
 
         /**
          * Nuke WebView state AFTER result is retrieved or on timeout.
@@ -142,16 +140,6 @@ class WebViewScanner(private val context: Context) {
             var webView: WebView? = null
             val handler = Handler(Looper.getMainLooper())
 
-            // Best URL seen so far. An .m3u8 always wins over an .mp4 even if
-            // the .mp4 arrived first — only .m3u8 gives us a real quality
-            // ladder (multiple resolutions) to show in the download sheet.
-            // An .mp4-only source is held briefly (M3U8_GRACE_MS) in case an
-            // .m3u8 request follows shortly after, which is common: many
-            // players fire a direct preview/poster .mp4 request before the
-            // adaptive manifest loads.
-            var bestUrl: String? = null
-            @Suppress("UNUSED_VARIABLE") var mp4SeenAt = -1L
-
             // NOTE: nukeWebViewState() deliberately NOT called here.
             // Calling it at the start corrupts parallel WebView sessions.
 
@@ -160,42 +148,17 @@ class WebViewScanner(private val context: Context) {
                     resolved = true
                     nukeWebViewState(context)  // nuke AFTER timeout
                     destroy(webView); webView = null
-                    resultCh.trySend(bestUrl)
+                    resultCh.trySend(null)
                 }
-            }
-
-            fun finishWith(url: String) {
-                if (resolved) return
-                resolved = true
-                handler.removeCallbacks(timeout)
-                nukeWebViewState(context)
-                resultCh.trySend(url)
-            }
-
-            val grace = Runnable {
-                // Grace window elapsed with no .m3u8 showing up — go with
-                // whatever .mp4 we already have.
-                bestUrl?.let { finishWith(it) }
             }
 
             try {
                 webView = buildWebView(source) { url ->
-                    if (resolved || !isValidStream(url)) return@buildWebView
-                    val isM3u8 = url.contains(".m3u8", true)
-                    when {
-                        isM3u8 -> {
-                            // Manifest found — always wins immediately.
-                            handler.removeCallbacks(grace)
-                            finishWith(url)
-                        }
-                        bestUrl == null -> {
-                            // First .mp4 seen — hold it and wait a short grace
-                            // window for a possible .m3u8 to follow.
-                            bestUrl = url
-                            mp4SeenAt = System.currentTimeMillis()
-                            handler.postDelayed(grace, M3U8_GRACE_MS)
-                        }
-                        else -> { /* already holding an .mp4 — ignore further .mp4s */ }
+                    if (!resolved && isValidStream(url)) {
+                        resolved = true
+                        handler.removeCallbacks(timeout)
+                        nukeWebViewState(context)  // nuke AFTER result obtained
+                        resultCh.trySend(url)
                     }
                 }
 

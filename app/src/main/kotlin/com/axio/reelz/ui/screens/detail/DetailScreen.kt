@@ -51,9 +51,6 @@ import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.Deferred
 import javax.inject.Inject
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -170,15 +167,6 @@ class DetailViewModel @Inject constructor(
      * Reused in enqueueDownload() to eliminate the duplicate engine.resolve() call.
      */
     private var cachedStreamResult: com.axio.reelz.data.model.StreamResult? = null
-
-    /**
-     * Per-quality-label headers/referer/origin, keyed by the label shown in the
-     * sheet (e.g. "1080p"). Populated by openDownloadSheetInternal() when it
-     * aggregates multiple sources — each quality tier may come from a DIFFERENT
-     * source, so it needs its OWN headers/referer at download time rather than
-     * reusing whichever single stream happened to be cached first.
-     */
-    private val downloadTrackContext = HashMap<String, com.axio.reelz.data.model.StreamResult>()
 
     /**
      * UPGRADE P9: Pre-resolved stream started in background after detail loads.
@@ -354,167 +342,48 @@ class DetailViewModel @Inject constructor(
             try {
                 val key = qualityKey(tmdbId, season, episode)
 
-                // Fast path — qualities already parsed in background, show instantly.
-                // Even on the fast path we kick off a background top-up scan (below)
-                // so a thin pre-resolved list still gets filled out with any missing
-                // tiers without blocking the sheet from opening instantly.
-                val cachedQualities = preResolvedQualities[key]
-                if (cachedQualities != null) {
+                // Fast path — qualities already parsed in background, show instantly
+                val cached = preResolvedQualities[key]
+                if (cached != null) {
                     cachedStreamResult = preResolvedStream
                     _ui.update { it.copy(
-                        downloadQualities    = cachedQualities,
+                        downloadQualities    = cached,
                         isResolvingQualities = false,
                     )}
-                    if (!coversFullLadder(cachedQualities)) {
-                        topUpQualitiesInBackground(tmdbId, mediaType, season, episode, detail, key)
+                    return@launch
+                }
+
+                // Slow path — not yet pre-resolved (user tapped very fast, or episode)
+                val stream = preResolvedStream?.let { s ->
+                    // Only reuse movie pre-resolve for movie (season==0)
+                    if (season == 0) s else null
+                } ?: engine.resolve(tmdbId, mediaType, season, episode)
+
+                cachedStreamResult = stream
+
+                val qualities = when {
+                    stream == null -> emptyList()
+                    stream.qualities.isNotEmpty() -> {
+                        // Pre-resolved qualities may have "Auto" labels or missing sizes —
+                        // normalize them using bandwidth tiers + runtime estimation
+                        normalizeQualities(stream.qualities, detail.runtime)
                     }
-                    return@launch
+                    stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, detail.runtime)
+                    else -> listOf(QualityTrack("Best available", stream.url))
                 }
 
-                // Slow path — nothing pre-resolved yet. Aggregate across MULTIPLE
-                // sources concurrently instead of trusting whichever one source
-                // wins the playback race. Some embeds only ever serve 360p, others
-                // only 1080p — racing for "first" silently caps download quality.
-                val streams = engine.resolveMultiSource(tmdbId, mediaType, season, episode)
+                // Store so next tap is instant
+                if (qualities.isNotEmpty()) preResolvedQualities[key] = qualities
 
-                if (streams.isEmpty()) {
-                    _ui.update { it.copy(downloadQualities = emptyList(), isResolvingQualities = false) }
-                    return@launch
-                }
-
-                cachedStreamResult = streams.first()
-
-                val merged = mergeQualitiesAcrossSources(streams, detail.runtime, key)
-
-                if (merged.isNotEmpty()) preResolvedQualities[key] = merged
-                _ui.update { it.copy(downloadQualities = merged, isResolvingQualities = false) }
+                _ui.update { it.copy(downloadQualities = qualities, isResolvingQualities = false) }
             } catch (e: Exception) {
                 _ui.update { it.copy(isResolvingQualities = false, showDownloadSheet = false) }
             }
         }
     }
 
-    /**
-     * True once the ladder already contains a "high enough" spread of tiers —
-     * used to decide whether a background top-up scan is worth running after
-     * the fast (pre-resolved) path already showed something to the user.
-     * Not exhaustive; just avoids extra network work when we clearly already
-     * have a good spread (e.g. 1080p down to 360p/240p).
-     */
-    private fun coversFullLadder(qualities: List<QualityTrack>): Boolean {
-        val heights = qualities.map { trackHeightPx(it.label) }.filter { it in 1..10_000 }
-        if (heights.isEmpty()) return true // "Best available"/Auto-only — nothing to top up
-        val hasHigh = heights.any { it >= 720 }
-        val hasLow  = heights.any { it <= 480 }
-        return hasHigh && hasLow
-    }
-
-    /**
-     * Runs after the sheet already opened with a thin (fast-path) quality list.
-     * Scans additional sources in the background and silently upgrades the
-     * sheet's quality list in place if it finds tiers that were missing.
-     * Never shows a loading spinner for this — it's a quiet enhancement.
-     */
-    private fun topUpQualitiesInBackground(
-        tmdbId: Int,
-        mediaType: MediaType,
-        season: Int,
-        episode: Int,
-        detail: MediaDetail,
-        key: String,
-    ) {
-        viewModelScope.launch {
-            try {
-                val streams = engine.resolveMultiSource(
-                    tmdbId, mediaType, season, episode,
-                    maxSources = 8, minResults = 3,
-                )
-                if (streams.isEmpty()) return@launch
-
-                val existing = _ui.value.downloadQualities
-                val merged = mergeQualitiesAcrossSources(
-                    streams, detail.runtime, key, seed = existing,
-                )
-                // Only update if we actually gained new tiers — avoid flicker/reorder
-                // for no benefit.
-                if (merged.size > existing.size) {
-                    preResolvedQualities[key] = merged
-                    // Don't clobber the sheet if the user already closed it or moved on.
-                    if (_ui.value.showDownloadSheet) {
-                        _ui.update { it.copy(downloadQualities = merged) }
-                    }
-                }
-            } catch (_: Exception) { /* silent — this is a best-effort enhancement */ }
-        }
-    }
-
-    /**
-     * Merges quality tracks from several resolved [StreamResult]s into one
-     * deduplicated, sorted ladder (1080p → 720p → 480p → 360p → 240p, etc).
-     *
-     * For each source: parses its master playlist (or uses its already-parsed
-     * `qualities`) into tracks, then folds everything together keeping — per
-     * resolution label — the highest-bandwidth (best quality) track found
-     * across ALL sources. This is what lets a 360p-only source and a
-     * 1080p-only source combine into one sheet showing both.
-     *
-     * Also records each track's originating [StreamResult] in
-     * [downloadTrackContext] so enqueueDownload() can use the correct
-     * headers/referer/origin for whichever source actually serves that tier —
-     * critical since different sources have different auth/CDN requirements.
-     */
-    private suspend fun mergeQualitiesAcrossSources(
-        streams: List<com.axio.reelz.data.model.StreamResult>,
-        runtimeMinutes: Int?,
-        @Suppress("UNUSED_PARAMETER") key: String,
-        seed: List<QualityTrack> = emptyList(),
-    ): List<QualityTrack> = coroutineScope {
-        // Parse every source's tracks in parallel — this is the slow part
-        // (each may require an extra HTTP fetch for the master playlist).
-        val jobs: List<Deferred<Pair<com.axio.reelz.data.model.StreamResult, List<QualityTrack>>>> =
-            streams.map { stream ->
-                async {
-                    val tracks: List<QualityTrack> = try {
-                        when {
-                            stream.qualities.isNotEmpty() -> normalizeQualities(stream.qualities, runtimeMinutes)
-                            stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, runtimeMinutes)
-                            else -> listOf(QualityTrack("Best available", stream.url))
-                        }
-                    } catch (_: Exception) { emptyList() }
-                    stream to tracks
-                }
-            }
-        val perSourceTracks: List<Pair<com.axio.reelz.data.model.StreamResult, List<QualityTrack>>> =
-            jobs.map { it.await() }
-
-        // Fold: for each label, keep the highest-bandwidth track + remember its source.
-        val bestPerLabel = LinkedHashMap<String, Pair<QualityTrack, com.axio.reelz.data.model.StreamResult>>()
-
-        // Seed with whatever we already had (from the fast/pre-resolved path) so
-        // a background top-up never loses tiers it previously found.
-        seed.forEach { t -> bestPerLabel[t.label] = t to (downloadTrackContext[t.label] ?: streams.first()) }
-
-        perSourceTracks.forEach { pair ->
-            val stream = pair.first
-            val tracks = pair.second
-            tracks.forEach { track ->
-                val current = bestPerLabel[track.label]
-                if (current == null || track.bandwidth > current.first.bandwidth) {
-                    bestPerLabel[track.label] = track to stream
-                }
-            }
-        }
-
-        bestPerLabel.forEach { entry -> downloadTrackContext[entry.key] = entry.value.second }
-
-        bestPerLabel.values
-            .map { it.first }
-            .sortedByDescending { it.bandwidth }
-    }
-
     fun dismissDownloadSheet() {
         _ui.update { it.copy(showDownloadSheet = false, downloadEnqueued = false) }
-        downloadTrackContext.clear()
     }
 
     fun enqueueDownload(ctx: android.content.Context, track: QualityTrack) {
@@ -534,14 +403,7 @@ class DetailViewModel @Inject constructor(
             // UPGRADE P1: Use CACHED stream result — no second engine.resolve() call.
             // The cachedStreamResult was stored when openDownloadSheet() ran.
             // This eliminates the 10–20 second wait after quality selection.
-            //
-            // IMPORTANT: since qualities are now merged across MULTIPLE sources,
-            // the headers/referer/origin for THIS specific track's source (not
-            // just whichever stream happened to resolve first) must be used —
-            // otherwise a track pulled from Source B's CDN gets Source A's auth
-            // headers and the download fails or gets blocked.
-            val trackSource = downloadTrackContext[track.label] ?: cachedStreamResult
-            val cachedHeaders = trackSource?.headers ?: emptyMap()
+            val cachedHeaders = cachedStreamResult?.headers ?: emptyMap()
             val qualityTracks = _ui.value.downloadQualities
 
             downloadRepo.enqueue(
@@ -911,9 +773,8 @@ fun DownloadQualitySheet(
                         // cap is locked behind Premium with a clear, factual nudge,
                         // matching the subtitle drawer's upsell pattern elsewhere in
                         // the player. trackHeightPx("Auto"/"Best available") resolves
-                        // to 0 (unknown resolution), so an unlabeled/fallback track is
-                        // never wrongly locked as if it were a top-tier resolution —
-                        // only genuinely parsed, above-cap tiers ever show the lock.
+                        // to Int.MAX_VALUE, so an unlabeled "best" track is correctly
+                        // treated as top-tier rather than silently unlocked.
                         val isLocked  = trackHeightPx(track.label) > maxResolutionHeight
 
                         Row(
@@ -1548,21 +1409,8 @@ private fun friendlyDetailError(e: Exception): String {
  * quality, which is exactly what the free tier must NOT be allowed to silently
  * download, so they are treated as the highest tier rather than unlocked.
  */
-/**
- * Parses a leading resolution height (e.g. "1080p" -> 1080) from a quality label.
- *
- * IMPORTANT: when the label has no parseable digits (e.g. "Best available",
- * "Auto", or any other fallback label used when a source's actual resolution
- * couldn't be determined), this returns 0 — NOT Int.MAX_VALUE. An unknown
- * resolution must never be treated as "highest possible" for premium-gating
- * purposes: doing so silently locked every fallback-labeled track behind
- * Premium, even on sources whose real (unparsed) quality was low. Treating
- * unknown as 0 means these tracks are always allowed through the resolution
- * cap, which is the safe default — the actual gate that matters is the
- * genuinely-parsed resolution tiers coming from the HLS ladder.
- */
 fun trackHeightPx(label: String): Int =
-    label.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+    label.takeWhile { it.isDigit() }.toIntOrNull() ?: Int.MAX_VALUE
 
 /** Human label for a tier's cap height, used in lock-sheet copy ("Free plan streams up to 480p"). */
 fun qualityLabelFor(heightPx: Int): String = when {
