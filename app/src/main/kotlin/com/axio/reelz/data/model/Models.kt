@@ -129,8 +129,13 @@ data class QualityTrack(
     val label: String,
     val url: String,
     val bandwidth: Long = 0,
-    /** Estimated file size in bytes — populated during M3U8 parsing */
+    /** File size in bytes. Real measured size when [isSizeExact] is true,
+     *  otherwise a bandwidth-based estimate (fallback only). */
     val estimatedSizeBytes: Long = 0,
+    /** True when [estimatedSizeBytes] came from a real measurement (HTTP
+     *  HEAD Content-Length for MP4, or real segment sampling for HLS) rather
+     *  than a bandwidth×runtime guess. UI should show "≈" when this is false. */
+    val isSizeExact: Boolean = false,
 )
 
 // ── Persistent Download Subtitle ─────────────────────────────────────────────

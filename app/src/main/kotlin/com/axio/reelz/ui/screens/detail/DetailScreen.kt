@@ -342,7 +342,9 @@ class DetailViewModel @Inject constructor(
             try {
                 val key = qualityKey(tmdbId, season, episode)
 
-                // Fast path — qualities already parsed in background, show instantly
+                // ── Step 1: show SOMETHING instantly (no long wait) ──────────────
+                // Fast path — qualities already parsed in background from the single
+                // pre-resolved (race-winner) source, show instantly.
                 val cached = preResolvedQualities[key]
                 if (cached != null) {
                     cachedStreamResult = preResolvedStream
@@ -350,37 +352,61 @@ class DetailViewModel @Inject constructor(
                         downloadQualities    = cached,
                         isResolvingQualities = false,
                     )}
-                    return@launch
-                }
+                } else {
+                    // Slow path — not yet pre-resolved (user tapped very fast, or episode)
+                    val stream = preResolvedStream?.let { s ->
+                        if (season == 0) s else null
+                    } ?: engine.resolve(tmdbId, mediaType, season, episode)
 
-                // Slow path — not yet pre-resolved (user tapped very fast, or episode)
-                val stream = preResolvedStream?.let { s ->
-                    // Only reuse movie pre-resolve for movie (season==0)
-                    if (season == 0) s else null
-                } ?: engine.resolve(tmdbId, mediaType, season, episode)
+                    cachedStreamResult = stream
 
-                cachedStreamResult = stream
-
-                val qualities = when {
-                    stream == null -> emptyList()
-                    stream.qualities.isNotEmpty() -> {
-                        // Pre-resolved qualities may have "Auto" labels or missing sizes —
-                        // normalize them using bandwidth tiers + runtime estimation
-                        normalizeQualities(stream.qualities, detail.runtime)
+                    val qualities = when {
+                        stream == null -> emptyList()
+                        stream.qualities.isNotEmpty() -> normalizeQualities(stream.qualities, detail.runtime)
+                        stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, detail.runtime)
+                        else -> listOf(QualityTrack("Best available", stream.url))
                     }
-                    stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, detail.runtime)
-                    else -> listOf(QualityTrack("Best available", stream.url))
+                    if (qualities.isNotEmpty()) preResolvedQualities[key] = qualities
+                    _ui.update { it.copy(downloadQualities = qualities, isResolvingQualities = false) }
                 }
 
-                // Store so next tap is instant
-                if (qualities.isNotEmpty()) preResolvedQualities[key] = qualities
+                // ── Step 2: upgrade in the background with the REAL, merged,
+                // multi-source resolution list (e.g. one source only has 720p,
+                // another has 1080p — this combines them) with real sizes.
+                // Only replaces the sheet's list if the sheet is still open for
+                // this same title, and only ever ADDS resolutions/accuracy —
+                // never removes or relocks anything (PremiumGate re-checks the
+                // final list the same way it always did, untouched).
+                val merged = engine.resolveAllQualitiesForDownload(tmdbId, mediaType, season, episode)
+                if (merged.isNotEmpty() && _ui.value.showDownloadSheet &&
+                    _ui.value.pendingDownloadSeason == season && _ui.value.pendingDownloadEpisode == episode) {
 
-                _ui.update { it.copy(downloadQualities = qualities, isResolvingQualities = false) }
+                    val mergedTracks = merged.map { (track, _) -> track }
+                    val withSizes = com.axio.reelz.scanner.QualityListParsing.withRealSizes(
+                        tracks = mergedTracks,
+                        headers = cachedHeadersFor(merged),
+                        runtimeMinutes = detail.runtime,
+                    )
+
+                    // Keep whichever headers/referer belong to the source that produced
+                    // the currently-selected/highest track, so enqueueDownload still works.
+                    merged.maxByOrNull { (t, _) -> trackHeightPx(t.label) }?.second?.let {
+                        cachedStreamResult = it
+                    }
+
+                    preResolvedQualities[key] = withSizes
+                    _ui.update { it.copy(downloadQualities = withSizes) }
+                }
             } catch (e: Exception) {
                 _ui.update { it.copy(isResolvingQualities = false, showDownloadSheet = false) }
             }
         }
     }
+
+    /** Best-effort headers to use for size sampling: take the first source's headers. */
+    private fun cachedHeadersFor(
+        merged: List<Pair<QualityTrack, com.axio.reelz.data.model.StreamResult>>,
+    ): Map<String, String> = merged.firstOrNull()?.second?.headers ?: emptyMap()
 
     fun dismissDownloadSheet() {
         _ui.update { it.copy(showDownloadSheet = false, downloadEnqueued = false) }
@@ -895,7 +921,11 @@ fun DownloadQualitySheet(
                                         )
                                     track.estimatedSizeBytes > 0 ->
                                         Text(
-                                            "~${formatSize(track.estimatedSizeBytes)}",
+                                            // Real measured size (HEAD Content-Length for MP4, or
+                                            // real segment sampling for HLS) shows plain — it's exact.
+                                            // Only the bandwidth-based fallback gets the "~" prefix.
+                                            if (track.isSizeExact) formatSize(track.estimatedSizeBytes)
+                                            else "~${formatSize(track.estimatedSizeBytes)}",
                                             color = if (isBest) Brand.copy(.8f) else White60,
                                             fontSize = d.textMd,
                                             fontWeight = if (isBest) FontWeight.SemiBold else FontWeight.Normal,

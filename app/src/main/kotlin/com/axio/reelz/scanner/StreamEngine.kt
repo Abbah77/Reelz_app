@@ -239,4 +239,92 @@ class StreamEngine @Inject constructor(
         _prefetch.value = PrefetchState.Idle
         prefetchKey = ""
     }
+
+    /**
+     * DOWNLOAD-SHEET ONLY quality resolver.
+     *
+     * Unlike [raceAllSources] (used for playback, which wants the single
+     * fastest source and cancels the rest), the download sheet wants the
+     * fullest possible list of real resolutions — because a single source
+     * may only expose 720p while another has 1080p.
+     *
+     * Strategy ("first to find it wins, stop asking for what we already have"):
+     *  - All sources are launched in parallel with the same stagger/timeouts
+     *    used for playback, so this is not slower than a normal resolve.
+     *  - Every time a source responds, we add ONLY the resolutions we don't
+     *    already have to the merged set (dedup by label — e.g. "1080p").
+     *  - As soon as every resolution in [targetLabels] has been found, we
+     *    stop waiting on the remaining sources — no wasted network time.
+     *  - If sources run out before all targets are found, we return whatever
+     *    was found (never blocks forever).
+     *
+     * This does NOT change [resolve] / [prefetch] / playback in any way.
+     */
+    suspend fun resolveAllQualitiesForDownload(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+        targetLabels: Set<String> = setOf("1080p", "720p", "480p", "360p", "240p"),
+    ): List<Pair<com.axio.reelz.data.model.QualityTrack, StreamResult>> = coroutineScope {
+        val sources = sourceRegistry.sorted()
+        if (sources.isEmpty()) return@coroutineScope emptyList()
+
+        // label -> (track, parentStreamResult so headers/referer travel with it)
+        val found = java.util.concurrent.ConcurrentHashMap<String, Pair<com.axio.reelz.data.model.QualityTrack, StreamResult>>()
+        val resultChannel = Channel<Unit>(Channel.CONFLATED)
+
+        fun haveAllTargets() = targetLabels.isNotEmpty() && found.keys.containsAll(targetLabels)
+
+        val jobs = sources.mapIndexed { index, source ->
+            launch {
+                if (haveAllTargets()) return@launch
+                if (index > 0) delay(index * 150L)
+                if (haveAllTargets()) return@launch
+                try {
+                    val url = source.buildUrl(tmdbId, mediaType, season, episode)
+
+                    val stream = withTimeoutOrNull(2_000L) {
+                        withContext(Dispatchers.IO) { directScanner.scan(url, source) }
+                    } ?: (if (source.requiresJs) {
+                        withTimeoutOrNull(18_000L) {
+                            withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source) }
+                        }
+                    } else null)
+
+                    if (stream == null || !isActive) return@launch
+
+                    val tracks: List<com.axio.reelz.data.model.QualityTrack> = when {
+                        stream.qualities.isNotEmpty() -> stream.qualities
+                        stream.isHls -> QualityListParsing.parseVariants(stream.url, stream.headers)
+                        else -> listOf(com.axio.reelz.data.model.QualityTrack("Best available", stream.url))
+                    }
+
+                    var addedNew = false
+                    for (track in tracks) {
+                        // Only take a resolution we don't already have — "first to find it wins".
+                        if (found.putIfAbsent(track.label, track to stream) == null) {
+                            addedNew = true
+                        }
+                    }
+                    if (addedNew) resultChannel.trySend(Unit)
+                } catch (_: Exception) {}
+            }
+        }
+
+        // Wait until either all targets are found or every source has had its turn
+        // (global cap mirrors the playback global timeout, so the sheet never hangs).
+        withTimeoutOrNull(25_000L) {
+            while (isActive && !haveAllTargets() && jobs.any { it.isActive }) {
+                resultChannel.tryReceive()
+                delay(50L)
+            }
+        }
+        jobs.forEach { it.cancel() }
+
+        found.values.sortedByDescending { (track, _) -> trackHeightForSort(track.label) }
+    }
+
+    private fun trackHeightForSort(label: String): Int =
+        Regex("""(\d+)""").find(label)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 }
