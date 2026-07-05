@@ -51,6 +51,9 @@ import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Deferred
 import javax.inject.Inject
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -465,12 +468,12 @@ class DetailViewModel @Inject constructor(
         runtimeMinutes: Int?,
         @Suppress("UNUSED_PARAMETER") key: String,
         seed: List<QualityTrack> = emptyList(),
-    ): List<QualityTrack> = kotlinx.coroutines.coroutineScope thisScope@{
+    ): List<QualityTrack> = coroutineScope {
         // Parse every source's tracks in parallel — this is the slow part
         // (each may require an extra HTTP fetch for the master playlist).
-        val jobs: List<kotlinx.coroutines.Deferred<Pair<com.axio.reelz.data.model.StreamResult, List<QualityTrack>>>> =
+        val jobs: List<Deferred<Pair<com.axio.reelz.data.model.StreamResult, List<QualityTrack>>>> =
             streams.map { stream ->
-                this@thisScope.async {
+                async {
                     val tracks: List<QualityTrack> = try {
                         when {
                             stream.qualities.isNotEmpty() -> normalizeQualities(stream.qualities, runtimeMinutes)
