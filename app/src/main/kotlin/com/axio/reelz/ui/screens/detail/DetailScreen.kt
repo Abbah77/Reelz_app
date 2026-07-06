@@ -147,6 +147,13 @@ class DetailViewModel @Inject constructor(
          * QualityTrack whose parsed height exceeds this.
          */
         val maxDownloadResolutionHeight: Int = Int.MAX_VALUE,
+        /**
+         * Labels we still expect to find (target set minus whatever is
+         * already in [downloadQualities]). Drives skeleton placeholder rows
+         * so the sheet shows the shape of the full list instantly and rows
+         * fill in one at a time as sources respond — no full-sheet spinner.
+         */
+        val pendingQualityLabels: Set<String> = emptySet(),
         // For episode download context
         val pendingDownloadSeason: Int = 0,
         val pendingDownloadEpisode: Int = 0,
@@ -167,6 +174,17 @@ class DetailViewModel @Inject constructor(
      * Reused in enqueueDownload() to eliminate the duplicate engine.resolve() call.
      */
     private var cachedStreamResult: com.axio.reelz.data.model.StreamResult? = null
+
+    /**
+     * Per-label stream mapping (label -> the StreamResult/source that actually
+     * produced that quality). Needed because the live/incremental resolver can
+     * find different labels from DIFFERENT sources with different headers —
+     * using one shared "last found" StreamResult for every download would
+     * silently pair the wrong headers with a track's URL for any label that
+     * wasn't the most recently discovered one. Cleared/rebuilt each time the
+     * sheet opens for a (possibly different) title.
+     */
+    private val streamForLabel = HashMap<String, com.axio.reelz.data.model.StreamResult>()
 
     /**
      * UPGRADE P9: Pre-resolved stream started in background after detail loads.
@@ -252,11 +270,16 @@ class DetailViewModel @Inject constructor(
                                     else -> emptyList()
                                 }
                                 if (qualities.isEmpty()) {
-                                    // No variant ladder — single real quality. Probe its
-                                    // actual resolution instead of an unlockable placeholder.
+                                    // No variant ladder — single real quality. Use the
+                                    // source's own reported quality label if it looks like
+                                    // a real resolution (free — no network call), otherwise
+                                    // fall back to a bandwidth tier / "Best available".
                                     qualities = listOf(
                                         com.axio.reelz.scanner.QualityListParsing.probeSingleQuality(
-                                            stream.url, stream.headers,
+                                            url = stream.url,
+                                            headers = stream.headers,
+                                            runtimeMinutes = _ui.value.detail?.runtime,
+                                            knownLabelHint = stream.quality,
                                         )
                                     )
                                 }
@@ -330,11 +353,18 @@ class DetailViewModel @Inject constructor(
         episodeTitle: String,
         detail: MediaDetail,
     ) {
+        val targetLabels = setOf("1080p", "720p", "480p", "360p", "240p")
+
+        // ── Sheet opens THIS SAME FRAME — no spinner, no wait. ──────────────
+        // isResolvingQualities is no longer used to gate the whole sheet
+        // behind a spinner; it's kept (defaulted false-equivalent below via
+        // skeleton rows) only for the true empty-list case at the very end.
         _ui.update {
             it.copy(
                 showDownloadSheet           = true,
                 downloadQualities           = emptyList(),
-                isResolvingQualities        = true,
+                isResolvingQualities        = false,
+                pendingQualityLabels        = targetLabels,
                 downloadEnqueued             = false,
                 pendingDownloadSeason       = season,
                 pendingDownloadEpisode      = episode,
@@ -347,76 +377,71 @@ class DetailViewModel @Inject constructor(
                     .let { h -> if (h <= 0) Int.MAX_VALUE else h },
             )
         }
+
+        val key = qualityKey(tmdbId, season, episode)
+
+        // ── Instant fast path: if we already parsed this title's qualities in
+        // the background, show them immediately as real rows, skeletons for
+        // the rest — then still let the live flow below top up anything
+        // missing (e.g. a source with a resolution the pre-resolved one
+        // didn't have) exactly like before, just incrementally now.
+        streamForLabel.clear()
+        preResolvedQualities[key]?.let { cached ->
+            cachedStreamResult = preResolvedStream
+            preResolvedStream?.let { s -> cached.forEach { t -> streamForLabel[t.label] = s } }
+            _ui.update {
+                it.copy(
+                    downloadQualities    = cached,
+                    pendingQualityLabels = targetLabels - cached.map { t -> t.label }.toSet(),
+                )
+            }
+        }
+
+        // ── Live, incremental resolution — every quality found from ANY
+        // source (DirectScanner first, WebView fallback kept for JS-only
+        // sources) is shown the instant it's found, not batched. Skeleton
+        // rows for labels not yet found stay visible and simply get replaced
+        // one at a time. This never removes/relocks a quality — only adds.
         viewModelScope.launch {
             try {
-                val key = qualityKey(tmdbId, season, episode)
+                engine.resolveAllQualitiesForDownloadFlow(
+                    tmdbId = tmdbId,
+                    mediaType = mediaType,
+                    season = season,
+                    episode = episode,
+                    targetLabels = targetLabels,
+                ).collect { found ->
+                    // Ignore late results if the sheet moved on to a different title.
+                    if (!_ui.value.showDownloadSheet ||
+                        _ui.value.pendingDownloadSeason != season ||
+                        _ui.value.pendingDownloadEpisode != episode) return@collect
 
-                // ── Step 1: show SOMETHING instantly (no long wait) ──────────────
-                // Fast path — qualities already parsed in background from the single
-                // pre-resolved (race-winner) source, show instantly.
-                val cached = preResolvedQualities[key]
-                if (cached != null) {
-                    cachedStreamResult = preResolvedStream
-                    _ui.update { it.copy(
-                        downloadQualities    = cached,
-                        isResolvingQualities = false,
-                    )}
-                } else {
-                    // Slow path — not yet pre-resolved (user tapped very fast, or episode)
-                    val stream = preResolvedStream?.let { s ->
-                        if (season == 0) s else null
-                    } ?: engine.resolve(tmdbId, mediaType, season, episode)
+                    val current = _ui.value.downloadQualities
+                    if (current.any { it.label == found.track.label }) return@collect // already have it
 
-                    cachedStreamResult = stream
+                    val updated = (current + found.track)
+                        .sortedByDescending { trackHeightPx(it.label) }
 
-                    var qualities = when {
-                        stream == null -> emptyList()
-                        stream.qualities.isNotEmpty() -> normalizeQualities(stream.qualities, detail.runtime)
-                        stream.isHls -> parseMasterPlaylist(stream.url, stream.headers, detail.runtime)
-                        else -> emptyList()
-                    }
-                    if (qualities.isEmpty() && stream != null) {
-                        // No variant ladder — single real quality. Probe its actual
-                        // resolution instead of an unlockable "Best available" placeholder.
-                        qualities = listOf(
-                            com.axio.reelz.scanner.QualityListParsing.probeSingleQuality(
-                                stream.url, stream.headers,
-                            )
+                    cachedStreamResult = found.stream
+                    streamForLabel[found.track.label] = found.stream
+                    preResolvedQualities[key] = updated
+
+                    _ui.update {
+                        it.copy(
+                            downloadQualities    = updated,
+                            pendingQualityLabels = targetLabels - updated.map { t -> t.label }.toSet(),
                         )
                     }
-                    if (qualities.isNotEmpty()) preResolvedQualities[key] = qualities
-                    _ui.update { it.copy(downloadQualities = qualities, isResolvingQualities = false) }
-                }
-
-                // ── Step 2: upgrade in the background with the REAL, merged,
-                // multi-source resolution list (e.g. one source only has 720p,
-                // another has 1080p — this combines them) with real sizes.
-                // Only replaces the sheet's list if the sheet is still open for
-                // this same title, and only ever ADDS resolutions/accuracy —
-                // never removes or relocks anything (PremiumGate re-checks the
-                // final list the same way it always did, untouched).
-                val merged = engine.resolveAllQualitiesForDownload(tmdbId, mediaType, season, episode)
-                if (merged.isNotEmpty() && _ui.value.showDownloadSheet &&
-                    _ui.value.pendingDownloadSeason == season && _ui.value.pendingDownloadEpisode == episode) {
-
-                    val mergedTracks = merged.map { (track, _) -> track }
-                    val withSizes = com.axio.reelz.scanner.QualityListParsing.withRealSizes(
-                        tracks = mergedTracks,
-                        headers = cachedHeadersFor(merged),
-                        runtimeMinutes = detail.runtime,
-                    )
-
-                    // Keep whichever headers/referer belong to the source that produced
-                    // the currently-selected/highest track, so enqueueDownload still works.
-                    merged.maxByOrNull { (t, _) -> trackHeightPx(t.label) }?.second?.let {
-                        cachedStreamResult = it
-                    }
-
-                    preResolvedQualities[key] = withSizes
-                    _ui.update { it.copy(downloadQualities = withSizes) }
                 }
             } catch (e: Exception) {
-                _ui.update { it.copy(isResolvingQualities = false, showDownloadSheet = false) }
+                // A collection error never wipes rows already shown — just stop
+                // waiting for more. Only clear pending skeletons.
+                _ui.update { it.copy(pendingQualityLabels = emptySet()) }
+            } finally {
+                // Whatever the flow found (possibly nothing) is final now —
+                // remaining skeleton labels quietly disappear rather than spin
+                // forever, matching the flow's own hard cap.
+                _ui.update { it.copy(pendingQualityLabels = emptySet()) }
             }
         }
     }
@@ -447,7 +472,12 @@ class DetailViewModel @Inject constructor(
             // UPGRADE P1: Use CACHED stream result — no second engine.resolve() call.
             // The cachedStreamResult was stored when openDownloadSheet() ran.
             // This eliminates the 10–20 second wait after quality selection.
-            val cachedHeaders = cachedStreamResult?.headers ?: emptyMap()
+            // Use the headers belonging to whichever source actually produced
+            // THIS track, not just whichever source responded most recently —
+            // otherwise a download could pair one source's headers/referer
+            // with a different source's stream URL and fail or get blocked.
+            val cachedHeaders = streamForLabel[track.label]?.headers
+                ?: cachedStreamResult?.headers ?: emptyMap()
             val qualityTracks = _ui.value.downloadQualities
 
             downloadRepo.enqueue(
@@ -652,6 +682,7 @@ fun DetailScreen(
             DownloadQualitySheet(
                 title              = ui.pendingDownloadTitle,
                 qualities          = ui.downloadQualities,
+                pendingLabels      = ui.pendingQualityLabels,
                 isLoading          = ui.isResolvingQualities,
                 enqueued           = ui.downloadEnqueued,
                 maxResolutionHeight = ui.maxDownloadResolutionHeight,
@@ -698,6 +729,13 @@ fun DownloadQualitySheet(
     /** Tracks with a parsed height above this are shown locked, not hidden — config-driven via PremiumGate. */
     maxResolutionHeight: Int = Int.MAX_VALUE,
     onLockedQualityTap: () -> Unit = {},
+    /**
+     * Labels still being searched for (e.g. "1080p" while only "720p" has
+     * been found so far). Rendered as skeleton placeholder rows so the sheet
+     * shows the shape of the full list instantly instead of a spinner —
+     * each one quietly disappears or turns into a real row as it's found.
+     */
+    pendingLabels: Set<String> = emptySet(),
 ) {
     val d = LocalDimensions.current
     // Scrim
@@ -751,6 +789,7 @@ fun DownloadQualitySheet(
             }
             Spacer(Modifier.height(d.spaceXl))
 
+            val showList = qualities.isNotEmpty() || pendingLabels.isNotEmpty()
             when {
                 // ── Success state ──────────────────────────────────────────────
                 enqueued -> {
@@ -771,8 +810,11 @@ fun DownloadQualitySheet(
                     BrandButton("Done", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
                 }
 
-                // ── Loading state ──────────────────────────────────────────────
-                isLoading -> {
+                // ── True empty state: nothing found AND nothing pending ─────────
+                // (isLoading kept only as a legacy/manual override hook; the normal
+                // path never blocks here since pendingLabels is set synchronously
+                // when the sheet opens.)
+                !showList && isLoading -> {
                     Spacer(Modifier.height(d.spaceSm + 1.dp))
                     CinematicSpinner(size = d.spinnerMd + 6.dp)
                     Spacer(Modifier.height(d.spaceMd + d.spaceXs))
@@ -781,7 +823,7 @@ fun DownloadQualitySheet(
                 }
 
                 // ── No streams ─────────────────────────────────────────────────
-                qualities.isEmpty() -> {
+                !showList -> {
                     Spacer(Modifier.height(d.spaceSm + 1.dp))
                     Icon(IconError, null, tint = White40, modifier = Modifier.size(d.spinnerMd + 6.dp))
                     Spacer(Modifier.height(d.spaceMd))
@@ -789,7 +831,7 @@ fun DownloadQualitySheet(
                     Spacer(Modifier.height(d.spaceLg))
                 }
 
-                // ── Quality list ───────────────────────────────────────────────
+                // ── Quality list (real rows + skeleton placeholders) ─────────────
                 else -> {
                     Text(
                         "Choose quality",
@@ -966,7 +1008,20 @@ fun DownloadQualitySheet(
                             )
                         }
 
-                        if (index < qualities.lastIndex) Spacer(Modifier.height(d.spaceMd))
+                        if (index < qualities.lastIndex || pendingLabels.isNotEmpty()) Spacer(Modifier.height(d.spaceMd))
+                    }
+
+                    // ── Skeleton placeholder rows for labels still being searched ──
+                    // Sorted by resolution height so they slot into roughly the right
+                    // position (e.g. a pending "1080p" skeleton sits above a found
+                    // "720p" real row), and each one silently disappears — or morphs
+                    // into a real row — the moment its label is found or the search
+                    // gives up on it. No spinner, no blocking; this is what makes the
+                    // sheet feel instant even while sources are still resolving.
+                    val pendingSorted = pendingLabels.sortedByDescending { trackHeightPx(it) }
+                    pendingSorted.forEachIndexed { pIndex, label ->
+                        QualitySkeletonRow(label = label, d = d)
+                        if (pIndex < pendingSorted.lastIndex) Spacer(Modifier.height(d.spaceMd))
                     }
                 }
             }
@@ -974,6 +1029,54 @@ fun DownloadQualitySheet(
             Spacer(Modifier.height(d.spaceMd + d.spaceXs))
             Spacer(Modifier.navigationBarsPadding())
         }
+    }
+}
+
+// ── Skeleton placeholder row for a quality not yet found ─────────────────────
+// Same shape/spacing as a real quality row (badge + two text lines + trailing
+// icon slot) so there is no layout jump when it's replaced. Reuses the app's
+// existing ShimmerCard for the animated fill — no new shimmer logic here.
+@Composable
+private fun QualitySkeletonRow(label: String, d: com.axio.reelz.ui.theme.ReelzDimensions) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXs))
+            .background(BgRaised)
+            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXs))
+            .padding(horizontal = d.spaceLg, vertical = d.spaceLg - d.spaceXs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXs),
+    ) {
+        // Resolution badge — shows the real target label immediately (e.g.
+        // "1080p") even before it's confirmed found, so the user sees the
+        // shape of the full ladder right away, not a mystery placeholder.
+        Box(
+            Modifier
+                .width(d.avatarMd + d.spaceMd - d.spaceXxs)
+                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
+                .background(GlassSm)
+                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
+                .padding(vertical = d.spaceSm + d.spaceXxs),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                label,
+                color = White40,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = (d.textMd.value + 1).sp,
+            )
+        }
+
+        Column(Modifier.weight(1f)) {
+            ShimmerCard(Modifier.fillMaxWidth(0.5f).height(d.textMd.value.dp + 2.dp))
+            Spacer(Modifier.height(d.spaceXxs + 2.dp))
+            ShimmerCard(Modifier.fillMaxWidth(0.3f).height(d.textSm.value.dp))
+        }
+
+        // Trailing icon slot kept empty (no icon) while pending — avoids
+        // implying the row is tappable before it's real.
+        Spacer(Modifier.size(d.iconMd + 2.dp))
     }
 }
 

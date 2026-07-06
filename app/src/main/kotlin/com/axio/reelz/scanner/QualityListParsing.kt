@@ -17,16 +17,19 @@ import java.util.concurrent.TimeUnit
  *  - StreamEngine.resolveAllQualitiesForDownload() (download sheet, multi-source)
  *  - DetailViewModel (single-source pre-resolve, used for the "Play" path)
  *
- * REAL SIZE CALCULATION (replaces the old bandwidth×runtime guess):
- *  - MP4 direct links: one HEAD request → real Content-Length. Exact, instant.
- *  - HLS variants: download the FIRST 2 segments of that variant's media
- *    playlist, measure their real byte size, then multiply by total segment
- *    count. This is a true measurement of the actual encoded stream (not a
- *    guess from declared bandwidth), and only costs the time to fetch ~2
- *    short segments (typically well under a second on a decent connection).
- *    Falls back to the bandwidth estimate ONLY if segment sampling fails
- *    (e.g. source blocks range requests), and that fallback is marked so the
- *    UI can show "≈" instead of an exact size.
+ * DATA-SAVER SIZE STRATEGY (as of the data-saver upgrade):
+ *  - MP4 direct links: one HEAD request → real Content-Length. Exact, instant,
+ *    and cheap (headers only, no video bytes).
+ *  - HLS variants: bandwidth × runtime estimate, computed entirely from the
+ *    manifest text already fetched to build the list. Zero extra network
+ *    calls, zero video bytes. Marked isSizeExact = false so the UI shows "~".
+ *  - The OLD behavior (downloading real HLS segments automatically to
+ *    measure exact size) burned meaningful mobile data just to POPULATE the
+ *    download sheet, before the user picked anything. That auto-download is
+ *    gone. The same real-segment-sampling logic still exists but only runs
+ *    opt-in, per-track, via [probeExactQualityOnDemand] — wire it to an
+ *    explicit "verify exact size" user action if you want it, it is never
+ *    called automatically.
  */
 object QualityListParsing {
 
@@ -67,45 +70,86 @@ object QualityListParsing {
     /**
      * For a stream with NO variant ladder (single quality only — either a
      * plain MP4 or an HLS media playlist with no #EXT-X-STREAM-INF entries),
-     * detects the REAL resolution by probing the actual video with
-     * MediaMetadataRetriever (reads the real frame height, not a guess),
-     * and also gets the real size (HEAD for MP4, segment-sampling for HLS).
+     * estimates the resolution from a bandwidth hint (same tiering used
+     * everywhere else) instead of opening the real video with
+     * MediaMetadataRetriever. Free, instant, zero video bytes downloaded.
      *
-     * This is what makes locking correct: a single 480p stream must show up
-     * and unlock as "480p" for free users, not as an unknown "Best available"
-     * that always locks regardless of the real quality.
+     * PremiumGate only ever reads the resulting LABEL (see trackHeightPx in
+     * DetailScreen.kt), never a probed pixel height directly, so gating
+     * behavior is unaffected by this change.
      */
     suspend fun probeSingleQuality(
         url: String,
         headers: Map<String, String>,
+        bandwidthHint: Long = 0L,
+        runtimeMinutes: Int? = null,
+        /**
+         * Optional label already known from the source itself (e.g.
+         * StreamResult.quality, when a scanner already reports "720p" from
+         * the page/API rather than a guess). Free — zero network cost — and
+         * checked BEFORE falling back to a bandwidth tier or "Best available".
+         */
+        knownLabelHint: String = "",
     ): QualityTrack = withContext(Dispatchers.IO) {
-        val heightPx = try {
-            withTimeoutOrNull(6_000L) { probeRealHeight(url, headers) }
-        } catch (_: Exception) { null } ?: 0
+        // Cheap HEAD only — a few hundred bytes of headers, never the video
+        // body. Works for direct MP4; returns null (no-op) for HLS.
+        val headBytes = try {
+            if (url.substringBefore("?").endsWith(".mp4", ignoreCase = true))
+                headSizeMp4(url, headers)
+            else null
+        } catch (_: Exception) { null }
+
+        val looksLikeRealLabel = Regex("""^\d{3,4}p$|^4K$""").matches(knownLabelHint)
 
         val label = when {
-            heightPx >= 2100 -> "4K"
-            heightPx >= 1000 -> "1080p"
-            heightPx >= 700  -> "720p"
-            heightPx >= 440  -> "480p"
-            heightPx >= 320  -> "360p"
-            heightPx > 0     -> "240p"
-            else -> "Best available" // last resort only if probing truly fails
+            looksLikeRealLabel -> knownLabelHint
+            bandwidthHint >= 4_000_000 -> "1080p"
+            bandwidthHint >= 2_000_000 -> "720p"
+            bandwidthHint >= 1_000_000 -> "480p"
+            bandwidthHint >= 400_000   -> "360p"
+            bandwidthHint >  0         -> "240p"
+            else -> "Best available" // no signal at all — last resort, same as before
         }
 
-        val realSize = try { measureRealSize(url, headers) } catch (_: Exception) { null }
+        val estimatedSize = headBytes ?: estimateFromBandwidth(bandwidthHint, runtimeMinutes)
 
         QualityTrack(
             label = label,
             url = url,
-            bandwidth = 0,
-            estimatedSizeBytes = realSize ?: 0L,
-            isSizeExact = realSize != null,
+            bandwidth = bandwidthHint,
+            estimatedSizeBytes = estimatedSize,
+            // HEAD Content-Length for MP4 is exact AND free (no video bytes
+            // downloaded) — keep isSizeExact true only for that case.
+            isSizeExact = headBytes != null,
         )
     }
 
+    /**
+     * OPT-IN ONLY — real measurement (MediaMetadataRetriever + real segment/
+     * HEAD probing) for exactly one track. Never called automatically while
+     * building the quality list; wire this to an explicit user action (e.g.
+     * a "verify exact size" tap) if you want it available in the UI.
+     */
+    suspend fun probeExactQualityOnDemand(
+        url: String,
+        headers: Map<String, String>,
+    ): Pair<Int, Long?> = withContext(Dispatchers.IO) {
+        val heightPx = try {
+            withTimeoutOrNull(6_000L) { probeRealHeight(url, headers) }
+        } catch (_: Exception) { null } ?: 0
+        // Opt-in path keeps the full real-measurement behavior: exact HEAD
+        // for MP4, real segment sampling for HLS (only ever spends data when
+        // the user explicitly asks for this one track).
+        val isMp4 = url.substringBefore("?").endsWith(".mp4", ignoreCase = true)
+        val realSize = try {
+            if (isMp4) headSizeMp4(url, headers) else sampleHlsVariantSize(url, headers)
+        } catch (_: Exception) { null }
+        heightPx to realSize
+    }
+
     /** Reads the real video height via Android's MediaMetadataRetriever — an
-     *  actual measurement of the stream, not an assumption. */
+     *  actual measurement of the stream, not an assumption. Only called from
+     *  [probeExactQualityOnDemand], never automatically. */
     private fun probeRealHeight(url: String, headers: Map<String, String>): Int {
         val retriever = MediaMetadataRetriever()
         return try {
@@ -167,16 +211,22 @@ object QualityListParsing {
     }
 
     /**
-     * Returns a REAL measured byte size, or null if it couldn't be measured
-     * (caller then falls back to the bandwidth estimate).
+     * Returns a REAL measured byte size, or null if it couldn't be measured.
+     *
+     * DATA-SAVER NOTE: this used to also sample real HLS segments
+     * (sampleHlsVariantSize) to measure exact size, which downloaded actual
+     * video bytes automatically for every quality of every source just to
+     * build the list. That auto-triggered segment download has been removed
+     * — HLS variants now always use the free bandwidth-based estimate (shown
+     * with "~" in the UI, which the UI already does). MP4 direct links still
+     * get an exact size via a HEAD request (headers only, no video bytes).
+     *
+     * The old real-segment-sampling behavior is preserved, opt-in only, in
+     * [probeExactQualityOnDemand] for a single user-selected track.
      */
     private fun measureRealSize(url: String, headers: Map<String, String>): Long? {
         val isMp4 = url.substringBefore("?").endsWith(".mp4", ignoreCase = true)
-        return if (isMp4) {
-            headSizeMp4(url, headers)
-        } else {
-            sampleHlsVariantSize(url, headers)
-        }
+        return if (isMp4) headSizeMp4(url, headers) else null
     }
 
     /** Real exact size for a direct MP4 via HEAD's Content-Length. */

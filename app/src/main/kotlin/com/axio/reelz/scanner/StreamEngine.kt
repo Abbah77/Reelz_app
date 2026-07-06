@@ -303,7 +303,7 @@ class StreamEngine @Inject constructor(
                         // no #EXT-X-STREAM-INF entries) — this is a single real quality.
                         // Probe its REAL resolution instead of using an unknown
                         // "Best available" placeholder that would always lock.
-                        listOf(QualityListParsing.probeSingleQuality(stream.url, stream.headers))
+                        listOf(QualityListParsing.probeSingleQuality(url = stream.url, headers = stream.headers, knownLabelHint = stream.quality))
                     }
 
                     var addedNew = false
@@ -333,4 +333,112 @@ class StreamEngine @Inject constructor(
 
     private fun trackHeightForSort(label: String): Int =
         Regex("""(\d+)""").find(label)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+    /**
+     * One quality found during [resolveAllQualitiesForDownloadFlow] — emitted
+     * the moment a source resolves it, not batched with the rest.
+     */
+    data class QualityFound(
+        val track: com.axio.reelz.data.model.QualityTrack,
+        val stream: StreamResult,
+    )
+
+    /**
+     * DOWNLOAD-SHEET ONLY — LIVE/STREAMING version.
+     *
+     * Same racing strategy as [resolveAllQualitiesForDownload] (kept below,
+     * untouched, in case anything else still calls it), but instead of
+     * blocking until the whole ladder is found (or times out) and returning
+     * one final List, this emits each newly-found quality AS SOON AS a
+     * source resolves it. The download sheet collects this and fills in
+     * rows one at a time — e.g. a fast DirectScanner source can hand back
+     * 720p in ~300ms while a slower WebView-only source is still working
+     * on 1080p, and the user sees 720p immediately instead of waiting for
+     * both.
+     *
+     * DirectScanner is tried first per source (2s timeout, unchanged).
+     * WebView fallback is KEPT — some sources genuinely only resolve via JS
+     * — but its timeout is 10s here instead of playback's 18s, since this
+     * path already has other sources racing in parallel to cover the gap,
+     * and a shorter per-source leash keeps the sheet feeling fast without
+     * dropping WebView-only sources' chance to contribute.
+     *
+     * Stop conditions (whichever first):
+     *  - every [targetLabels] found → cancel remaining jobs immediately.
+     *  - [hardCapMs] elapsed (default 8s) → stop waiting; any source still
+     *    running is cancelled. Whatever was found stays found — nothing is
+     *    un-emitted.
+     *
+     * No automatic real-byte size measurement happens here — quality
+     * discovery only reads manifests/headers (see QualityListParsing changes
+     * for the data-saver rationale). This function performs the SAME work
+     * as [resolveAllQualitiesForDownload], just reshaped to emit
+     * incrementally instead of blocking — it is not a heavier duplicate.
+     */
+    fun resolveAllQualitiesForDownloadFlow(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+        targetLabels: Set<String> = setOf("1080p", "720p", "480p", "360p", "240p"),
+        hardCapMs: Long = 8_000L,
+        webViewTimeoutMs: Long = 10_000L,
+    ): kotlinx.coroutines.flow.Flow<QualityFound> = kotlinx.coroutines.flow.channelFlow {
+        val sources = sourceRegistry.sorted()
+        if (sources.isEmpty()) return@channelFlow
+
+        val foundLabels = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        fun haveAllTargets() = targetLabels.isNotEmpty() && foundLabels.containsAll(targetLabels)
+
+        val jobs = sources.mapIndexed { index, source ->
+            launch {
+                if (haveAllTargets()) return@launch
+                if (index > 0) delay(index * 150L)
+                if (haveAllTargets()) return@launch
+                try {
+                    val url = source.buildUrl(tmdbId, mediaType, season, episode)
+
+                    val stream = withTimeoutOrNull(2_000L) {
+                        withContext(Dispatchers.IO) { directScanner.scan(url, source) }
+                    } ?: (if (source.requiresJs) {
+                        withTimeoutOrNull(webViewTimeoutMs) {
+                            withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source) }
+                        }
+                    } else null)
+
+                    if (stream == null || !isActive) return@launch
+
+                    val tracks: List<com.axio.reelz.data.model.QualityTrack> = when {
+                        stream.qualities.isNotEmpty() -> stream.qualities
+                        stream.isHls -> QualityListParsing.parseVariants(stream.url, stream.headers)
+                        else -> emptyList()
+                    }.ifEmpty {
+                        // No variant ladder — single real quality. Cheap bandwidth-based
+                        // estimate now (see QualityListParsing.probeSingleQuality) — no
+                        // automatic real-byte measurement here.
+                        listOf(QualityListParsing.probeSingleQuality(url = stream.url, headers = stream.headers, knownLabelHint = stream.quality))
+                    }
+
+                    for (track in tracks) {
+                        if (haveAllTargets()) break
+                        // "First to find it wins" — dedup by label so a slower source
+                        // reporting a label we already have is simply ignored.
+                        if (foundLabels.add(track.label)) {
+                            send(QualityFound(track, stream))
+                        }
+                    }
+                } catch (_: Exception) {
+                    // One source failing never blocks the others — just no emission
+                    // from this source. No per-row error state; absence is silent.
+                }
+            }
+        }
+
+        withTimeoutOrNull(hardCapMs) {
+            while (isActive && !haveAllTargets() && jobs.any { it.isActive }) {
+                delay(50L)
+            }
+        }
+        jobs.forEach { it.cancel() }
+    }
 }
