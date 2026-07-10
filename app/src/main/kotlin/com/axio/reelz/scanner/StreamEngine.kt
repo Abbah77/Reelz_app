@@ -164,7 +164,7 @@ class StreamEngine @Inject constructor(
 
                     val result = withTimeoutOrNull(18_000L) {
                         withContext(Dispatchers.Main) {
-                            WebViewScanner(context).scan(url, source)
+                            WebViewScanner(context).scan(url, source, timeoutMs = 18_000L)
                         }
                     }
                     if (result != null && isActive) {
@@ -219,7 +219,7 @@ class StreamEngine @Inject constructor(
                 if (!source.requiresJs) continue
 
                 val result = withTimeoutOrNull(18_000L) {
-                    withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source) }
+                    withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source, timeoutMs = 18_000L) }
                 }
                 if (result != null) {
                     cache.put(key, result)
@@ -288,7 +288,7 @@ class StreamEngine @Inject constructor(
                         withContext(Dispatchers.IO) { directScanner.scan(url, source) }
                     } ?: (if (source.requiresJs) {
                         withTimeoutOrNull(18_000L) {
-                            withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source) }
+                            withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source, timeoutMs = 18_000L) }
                         }
                     } else null)
 
@@ -392,7 +392,17 @@ class StreamEngine @Inject constructor(
         season: Int = 0,
         episode: Int = 0,
         targetLabels: Set<String> = setOf("1080p", "720p", "480p", "360p", "240p"),
-        hardCapMs: Long = 8_000L,
+        // BUG FIX: hardCapMs (previously 8s) was SHORTER than webViewTimeoutMs
+        // (10s) — the outer race would always give up on a WebView-based
+        // source before that source's own timeout could ever fire, cancelling
+        // it mid-scan on every single request. Since most sources default to
+        // requiresJs = true (see StreamSource.kt), this meant WebView sources
+        // essentially never got a fair chance to report success OR failure,
+        // which is what left skeleton rows in the download sheet stuck with
+        // no signal to clear them. The outer cap must always be >= the inner
+        // per-source timeout it's racing against; given a small buffer for
+        // staggered start delays (index * 150ms across sources).
+        hardCapMs: Long = 12_000L,
         webViewTimeoutMs: Long = 10_000L,
     ): kotlinx.coroutines.flow.Flow<QualityFound> = kotlinx.coroutines.flow.channelFlow {
         val sources = sourceRegistry.sorted()
@@ -412,8 +422,23 @@ class StreamEngine @Inject constructor(
                     val stream = withTimeoutOrNull(2_000L) {
                         withContext(Dispatchers.IO) { directScanner.scan(url, source) }
                     } ?: (if (source.requiresJs) {
+                        // BUG FIX: previously scan() ignored webViewTimeoutMs
+                        // entirely and always ran its own fixed 20s internal
+                        // timeout. That meant this outer withTimeoutOrNull
+                        // (10s here) would cancel the coroutine first, but
+                        // the WebView + its Handler callback kept running
+                        // for up to another 10s beyond that on the Main
+                        // thread — and if the embed page itself was slow or
+                        // hung, Main-thread congestion could delay teardown
+                        // further still. This is the mechanism behind the
+                        // download sheet's skeleton rows getting stuck
+                        // indefinitely: the source that owned those labels
+                        // never actually reported success OR failure back
+                        // to the flow within its expected budget.
                         withTimeoutOrNull(webViewTimeoutMs) {
-                            withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source) }
+                            withContext(Dispatchers.Main) {
+                                WebViewScanner(context).scan(url, source, timeoutMs = webViewTimeoutMs)
+                            }
                         }
                     } else null)
 

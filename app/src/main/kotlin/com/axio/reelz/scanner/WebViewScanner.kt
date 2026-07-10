@@ -6,8 +6,10 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.*
 import com.axio.reelz.data.model.StreamResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineContext
 import kotlinx.coroutines.withContext
 
 /**
@@ -133,7 +135,35 @@ class WebViewScanner(private val context: Context) {
 """.trimIndent()
     }
 
-    suspend fun scan(embedUrl: String, source: StreamSource): StreamResult? =
+    /**
+     * BUG FIX (stuck download sheet / stuck skeleton rows): this used to be a
+     * fixed 20s regardless of what the caller asked for. The download sheet's
+     * resolveAllQualitiesForDownloadFlow calls scan() wanting an effective 10s
+     * budget (webViewTimeoutMs), but the WebView's own internal timeout kept
+     * running for a full 20s. When the *outer* flow's 8s hardCapMs fired first
+     * and cancelled the coroutine, the WebView itself — created and driven on
+     * Dispatchers.Main — could still be mid-load with an unresolved Handler
+     * callback still queued. If that source's embed page has a slow/hung
+     * script (ad redirect chains, popup loops — common on unlicensed embed
+     * sources), it can keep the Main looper busy long enough that even the
+     * *cancellation* teardown gets delayed, since the callback removal and
+     * destroy() calls also queue on Main. Net effect: the coroutine says
+     * "cancelled" but the WebView keeps running, ties up a WebView instance,
+     * and — because sourceLadderLabels/foundLabels never receive anything
+     * from that source — the caller's skeleton rows for whatever labels this
+     * source was expected to supply just sit there indefinitely with no
+     * further signal to clear them.
+     *
+     * Kept as a class constant default for anything calling scan() without a
+     * caller-supplied budget, but callers should always pass their own
+     * timeoutMs so the WebView's internal deadline can never outlive the
+     * flow that's waiting on it.
+     */
+    suspend fun scan(
+        embedUrl: String,
+        source: StreamSource,
+        timeoutMs: Long = SCAN_TIMEOUT_MS,
+    ): StreamResult? =
         withContext(Dispatchers.Main) {
             val resultCh = Channel<String?>(Channel.CONFLATED)
             var resolved = false
@@ -152,6 +182,24 @@ class WebViewScanner(private val context: Context) {
                 }
             }
 
+            // BUG FIX: guarantee teardown even if the coroutine is cancelled
+            // (e.g. the outer flow's hardCapMs fires) while we're still
+            // suspended on resultCh.receive(). Without this, a cancellation
+            // that races ahead of the try/catch's own cleanup could leave the
+            // WebView alive and its Handler callback still pending — the
+            // exact "stuck, no error, nothing ever clears it" failure mode.
+            // This runs synchronously on Main the instant cancellation is
+            // requested, rather than waiting for the suspended call to
+            // unwind through the catch block.
+            coroutineContext[kotlinx.coroutines.Job]?.invokeOnCompletion { cause ->
+                if (cause is CancellationException && !resolved) {
+                    resolved = true
+                    handler.removeCallbacks(timeout)
+                    nukeWebViewState(context)
+                    destroy(webView); webView = null
+                }
+            }
+
             try {
                 webView = buildWebView(source) { url ->
                     if (!resolved && isValidStream(url)) {
@@ -162,7 +210,7 @@ class WebViewScanner(private val context: Context) {
                     }
                 }
 
-                handler.postDelayed(timeout, SCAN_TIMEOUT_MS)
+                handler.postDelayed(timeout, timeoutMs)
                 webView!!.loadUrl(embedUrl, source.headers)
 
                 val found = resultCh.receive()
