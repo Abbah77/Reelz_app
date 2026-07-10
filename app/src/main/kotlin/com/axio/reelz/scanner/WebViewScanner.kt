@@ -9,8 +9,8 @@ import com.axio.reelz.data.model.StreamResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineContext
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 /**
  * Per-scan WebView — creates a fresh instance per scan.
