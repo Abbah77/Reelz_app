@@ -148,10 +148,17 @@ class DetailViewModel @Inject constructor(
          */
         val maxDownloadResolutionHeight: Int = Int.MAX_VALUE,
         /**
-         * Labels we still expect to find (target set minus whatever is
-         * already in [downloadQualities]). Drives skeleton placeholder rows
-         * so the sheet shows the shape of the full list instantly and rows
-         * fill in one at a time as sources respond — no full-sheet spinner.
+         * Labels we still plausibly expect to find. Drives skeleton
+         * placeholder rows so the sheet shows the shape of the list that's
+         * still resolving and rows fill in one at a time as sources
+         * respond — no full-sheet spinner.
+         *
+         * IMPORTANT: this is NOT always the full 5-label ladder. Not every
+         * title has all five qualities available (some sources only ever
+         * expose 3 or 4), so we cap how many skeleton rows we show and drop
+         * them as soon as a source's own ladder tells us they won't appear
+         * — see [openDownloadSheetInternal] for how this shrinks as real
+         * sources report their actual variant counts.
          */
         val pendingQualityLabels: Set<String> = emptySet(),
         // For episode download context
@@ -397,6 +404,20 @@ class DetailViewModel @Inject constructor(
             }
         }
 
+        // Labels no source has ruled out yet — starts as "unknown, could be
+        // any of the 5" and narrows down as each responding source reports
+        // its actual ladder. A label only keeps a skeleton row once EVERY
+        // source that has responded so far either found it or hasn't been
+        // heard from yet; the moment every source that HAS responded agrees
+        // a label doesn't exist, its skeleton is retired instead of waiting
+        // out the full timeout. This is what stops the sheet from always
+        // showing 5 rows when a title only ever has 3 or 4.
+        val stillPossible = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        stillPossible.addAll(targetLabels)
+        // The cached/pre-resolved rows above are already confirmed real —
+        // keep them "possible" (they'll just get filtered out of the pending
+        // set by "already have it" below) but nothing needs removing here.
+
         // ── Live, incremental resolution — every quality found from ANY
         // source (DirectScanner first, WebView fallback kept for JS-only
         // sources) is shown the instant it's found, not batched. Skeleton
@@ -417,7 +438,27 @@ class DetailViewModel @Inject constructor(
                         _ui.value.pendingDownloadEpisode != episode) return@collect
 
                     val current = _ui.value.downloadQualities
-                    if (current.any { it.label == found.track.label }) return@collect // already have it
+                    val alreadyHad = current.any { it.label == found.track.label }
+
+                    // A responding source's ladder is real evidence: any target
+                    // label it did NOT include is a label THIS source doesn't
+                    // have. We only drop a label's skeleton once we've narrowed
+                    // it down this way and it's still not found by anyone.
+                    if (found.sourceLadderLabels.isNotEmpty()) {
+                        val missingFromThisSource = targetLabels - found.sourceLadderLabels
+                        // Don't drop labels we already have real rows for.
+                        stillPossible.removeAll(missingFromThisSource - current.map { it.label }.toSet())
+                    }
+
+                    if (alreadyHad) {
+                        // Already have this label as a real row — still apply the
+                        // narrowed pending set below in case this source told us
+                        // about other labels it lacks.
+                        _ui.update {
+                            it.copy(pendingQualityLabels = stillPossible - current.map { t -> t.label }.toSet())
+                        }
+                        return@collect
+                    }
 
                     val updated = (current + found.track)
                         .sortedByDescending { trackHeightPx(it.label) }
@@ -425,11 +466,12 @@ class DetailViewModel @Inject constructor(
                     cachedStreamResult = found.stream
                     streamForLabel[found.track.label] = found.stream
                     preResolvedQualities[key] = updated
+                    stillPossible.add(found.track.label) // confirmed real, not just "possible"
 
                     _ui.update {
                         it.copy(
                             downloadQualities    = updated,
-                            pendingQualityLabels = targetLabels - updated.map { t -> t.label }.toSet(),
+                            pendingQualityLabels = stillPossible - updated.map { t -> t.label }.toSet(),
                         )
                     }
                 }

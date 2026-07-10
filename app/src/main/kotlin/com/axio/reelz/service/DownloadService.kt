@@ -444,12 +444,35 @@ class DownloadService : Service() {
             !segFile.exists() || segFile.length() == 0L
         }
 
+        // BUG FIX (silent-incomplete-download): downloadSegment() returns null
+        // after exhausting its retries on a permanently failing segment. That
+        // was previously swallowed by `?.let { ... }` below — the segment was
+        // just never counted, `done` stayed one short, and nothing else ever
+        // checked for that gap. The merge step only verifies output file SIZE,
+        // not segment COUNT, so a file missing one segment out of hundreds
+        // still passes the ">1024 bytes" check and gets marked DONE. The user
+        // then finds a "completed" download that stutters or hard-fails at
+        // the missing segment — and discovers it offline, the one moment they
+        // can't just fall back to streaming.
+        //
+        // Fix: track every index that permanently failed. If any remain after
+        // all jobs finish, throw instead of proceeding to merge. This routes
+        // into processDownload()'s existing catch block, which marks the item
+        // PAUSED (resolveRequired path) rather than DONE — and because segment
+        // files already on disk are left in place, resuming re-downloads only
+        // the missing indices instead of starting over.
+        val failedIndices = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+
         coroutineScope {
             val jobs = pendingIndices.map { idx ->
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
-                        downloadSegment(segmentUrls[idx], idx, segDir, headers)?.let { bytes ->
-                            synchronized(this@DownloadService) {
+                        val bytes = downloadSegment(segmentUrls[idx], idx, segDir, headers)
+                        if (bytes == null) {
+                            failedIndices.add(idx)
+                            return@withPermit
+                        }
+                        synchronized(this@DownloadService) {
                                 totalDownloadedBytes += bytes
                                 speedWindowBytes += bytes
                                 done++
@@ -503,12 +526,21 @@ class DownloadService : Service() {
                                         done, total,
                                     )
                                 }
-                            }
                         }
                     }
                 }
             }
             jobs.awaitAll()
+        }
+
+        // ── Hard gate: never proceed to merge with missing segments ──────────
+        // A partial file that "looks done" is worse than an explicit retry,
+        // since the gap is invisible until offline playback hits it.
+        if (failedIndices.isNotEmpty()) {
+            throw IOException(
+                "HLS download incomplete: ${failedIndices.size} of $total segment(s) " +
+                "permanently failed (indices: ${failedIndices.sorted().take(10)}${if (failedIndices.size > 10) "…" else ""})"
+            )
         }
 
         // Final flush — ensure all segment progress is persisted before merge
@@ -524,6 +556,22 @@ class DownloadService : Service() {
         if (!output.exists() || output.length() < 1024) {
             updateNotif("Finalising", "Remuxing ${item.title}…", total, total)
             rawConcat(segDir, total, output)
+        }
+
+        // BUG FIX (silent-incomplete): also verify every expected segment file
+        // is actually present on disk before trusting the merge — belt-and-
+        // braces alongside the failedIndices gate above, in case a segment
+        // file was deleted/corrupted between download and merge (e.g. low
+        // storage cleanup, external interference).
+        val missingOnDisk = (0 until total).filter { idx ->
+            val f = File(segDir, "seg_%05d.ts".format(idx))
+            !f.exists() || f.length() == 0L
+        }
+        if (missingOnDisk.isNotEmpty()) {
+            throw IOException(
+                "HLS merge verification failed: ${missingOnDisk.size} of $total segment file(s) " +
+                "missing from disk before merge (indices: ${missingOnDisk.sorted().take(10)}${if (missingOnDisk.size > 10) "…" else ""})"
+            )
         }
 
         // Only clean up segments AFTER output is verified non-empty

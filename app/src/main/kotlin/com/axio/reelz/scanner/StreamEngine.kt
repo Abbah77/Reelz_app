@@ -337,10 +337,21 @@ class StreamEngine @Inject constructor(
     /**
      * One quality found during [resolveAllQualitiesForDownloadFlow] — emitted
      * the moment a source resolves it, not batched with the rest.
+     *
+     * [sourceLadderLabels] is the FULL set of labels this particular source's
+     * manifest actually contains (not just [track]'s label) — e.g. a source
+     * whose master playlist only has 1080p/720p/480p reports that whole set
+     * here the moment it resolves, even though it emits one [QualityFound]
+     * per label. The download sheet uses this to stop showing skeleton rows
+     * for labels a responding source has already proven it doesn't have,
+     * instead of leaving them spinning until the hard timeout. Not every
+     * title has all five qualities available, so the sheet must never
+     * assume a fixed ladder size.
      */
     data class QualityFound(
         val track: com.axio.reelz.data.model.QualityTrack,
         val stream: StreamResult,
+        val sourceLadderLabels: Set<String> = emptySet(),
     )
 
     /**
@@ -419,12 +430,20 @@ class StreamEngine @Inject constructor(
                         listOf(QualityListParsing.probeSingleQuality(url = stream.url, headers = stream.headers, knownLabelHint = stream.quality))
                     }
 
+                    // This source's complete ladder — sent alongside every track it
+                    // produces so the collector can retire skeleton rows for labels
+                    // this source proves it doesn't have, rather than waiting on
+                    // them until the hard timeout. Restricted to targetLabels since
+                    // that's all the sheet cares about (e.g. a source with a 4K
+                    // variant we don't display shouldn't affect anything here).
+                    val ladderLabels = tracks.map { it.label }.filter { it in targetLabels }.toSet()
+
                     for (track in tracks) {
                         if (haveAllTargets()) break
                         // "First to find it wins" — dedup by label so a slower source
                         // reporting a label we already have is simply ignored.
                         if (foundLabels.add(track.label)) {
-                            send(QualityFound(track, stream))
+                            send(QualityFound(track, stream, ladderLabels))
                         }
                     }
                 } catch (_: Exception) {
