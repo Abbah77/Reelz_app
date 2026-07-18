@@ -1,6 +1,7 @@
 package com.axio.reelz.scanner
 
 import android.content.Context
+import android.net.ConnectivityManager
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.StreamResult
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -132,7 +133,78 @@ class StreamEngine @Inject constructor(
      * - Per-source 2s timeout on DirectScanner, 18s on WebView.
      * - Global 25s hard timeout.
      */
+    /**
+     * True when the active connection is metered (mobile data, or a
+     * Wi-Fi hotspot the user has marked as metered). Used to pick a
+     * data-conscious resolution strategy instead of racing every source.
+     */
+    private fun isMetered(): Boolean = try {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        cm.isActiveNetworkMetered
+    } catch (_: Exception) {
+        true // fail safe: assume metered if we can't tell, so we default to the lighter path
+    }
+
+    /**
+     * Entry point used by [prefetch] and [resolve]. Picks the strategy
+     * based on connection type:
+     *  - Metered (mobile data): sequential, best-source-first, stop at
+     *    first success. Skips sources with a recent failure streak
+     *    without even attempting them. Minimizes wasted data — never
+     *    pays for more than one in-flight scan at a time.
+     *  - Unmetered (Wi-Fi): parallel race, as before — favors speed
+     *    since extra data cost from losing sources doesn't matter here.
+     */
     private suspend fun raceAllSources(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int,
+        episode: Int,
+    ): StreamResult? =
+        if (isMetered()) {
+            sequentialBestFirst(tmdbId, mediaType, season, episode)
+        } else {
+            parallelRace(tmdbId, mediaType, season, episode)
+        }
+
+    /**
+     * Sequential resolution: try sources one at a time in priority/health
+     * order, stop at the first success. No wasted parallel data usage.
+     */
+    private suspend fun sequentialBestFirst(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int,
+        episode: Int,
+    ): StreamResult? {
+        val sources = sourceRegistry.sorted()
+        for (source in sources) {
+            try {
+                val url = source.buildUrl(tmdbId, mediaType, season, episode)
+
+                // DirectScanner first — no WebView, ultra fast, near-zero data
+                val directResult = withTimeoutOrNull(2_000L) {
+                    withContext(Dispatchers.IO) { directScanner.scan(url, source) }
+                }
+                if (directResult != null) return directResult
+
+                if (!source.requiresJs) continue
+
+                val result = withTimeoutOrNull(18_000L) {
+                    withContext(Dispatchers.Main) {
+                        WebViewScanner(context).scan(url, source, timeoutMs = 18_000L)
+                    }
+                }
+                if (result != null) return result
+            } catch (_: Exception) {
+                continue
+            }
+        }
+        return null
+    }
+
+    /** Original parallel-race behavior, reserved for unmetered (Wi-Fi) connections. */
+    private suspend fun parallelRace(
         tmdbId: Int,
         mediaType: MediaType,
         season: Int,
