@@ -188,17 +188,40 @@ data class ShortCategory(
 // ── Premium tiers ──────────────────────────────────────────────────────────
 
 data class TiersConfig(
-    val free: TierConfig    = TierConfig(maxResolutionHeight = 480),
+    // NOTE: maxResolutionHeight (streaming) intentionally defaults to
+    // unlimited (-1) for BOTH tiers now. Streaming quality is no longer a
+    // free/premium differentiator — free users see ads while streaming
+    // regardless of resolution, premium users don't. That ad-supported
+    // model is the monetization lever for streaming, not a resolution cap.
+    //
+    // maxDownloadResolutionHeight is the real, separate gate: downloads are
+    // offline, so no ad can be served there, which is why it's the one
+    // place a free/premium quality split still makes business sense. It
+    // defaults to -1 (unlimited) here deliberately — start wide open while
+    // growing the user base, then tighten via config later (e.g. cap free
+    // downloads to 480p/720p) without ever needing an app update.
+    val free: TierConfig    = TierConfig(
+        maxResolutionHeight = -1,
+        maxDownloadResolutionHeight = -1,
+    ),
     val premium: TierConfig = TierConfig(
-        maxResolution = "4K", maxResolutionHeight = 2160, maxDownloads = -1,
+        maxResolution = "4K", maxResolutionHeight = -1, maxDownloads = -1,
+        maxDownloadResolutionHeight = -1,
         adsEnabled = false, subtitlesManualSearch = true, backgroundPlay = true,
         simultaneousStreams = 2,
     ),
 )
 
 data class TierConfig(
-    @SerializedName("max_resolution")          val maxResolution: String         = "480p",
-    @SerializedName("max_resolution_height")   val maxResolutionHeight: Int       = 480,
+    @SerializedName("max_resolution")          val maxResolution: String         = "Unlimited",
+    /** Streaming cap. -1 = unlimited (default for both tiers — see note above). */
+    @SerializedName("max_resolution_height")   val maxResolutionHeight: Int       = -1,
+    /**
+     * Download cap, separate from streaming. -1 = unlimited. This is the
+     * field to tighten later for free users (e.g. set to 480 or 720) via
+     * remote config only — no app update needed, no hardcoded UI change.
+     */
+    @SerializedName("max_download_resolution_height") val maxDownloadResolutionHeight: Int = -1,
     /** -1 is the sentinel for unlimited. Never trips the cap. */
     @SerializedName("max_downloads")           val maxDownloads: Int              = 5,
     @SerializedName("ads_enabled")             val adsEnabled: Boolean            = true,
