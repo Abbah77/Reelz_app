@@ -171,6 +171,10 @@ class PlayerViewModel @Inject constructor(
     private var isFirstPlayThisSession   = true
     private var lastPreRollTimeMinutes   = -30L   // allows pre-roll on very first play
     private var trackSelector: DefaultTrackSelector? = null
+    // Set once in buildPlayer() from the active network state; read by
+    // setQuality() so an explicit user pick can lift the Data Saver
+    // bitrate cap while an "Auto" pick keeps respecting it.
+    private var isOnMeteredConnection: Boolean = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     /** Read by PlayerActivity.onPause() — premium users keep playing when the screen locks. */
@@ -632,6 +636,28 @@ class PlayerViewModel @Inject constructor(
         // unrestricted rather than to 0, which would show a black screen).
         val maxHeight = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
 
+        // ── Data Saver: cap bitrate on metered connections ───────────────────
+        // Uncapped ABR will climb to the highest rendition the network can
+        // sustain, which on mobile data means burning several MB/min more
+        // than necessary for a phone-sized screen. Capping height to 480p
+        // and bitrate to ~1.2Mbps on metered connections (unless the user
+        // has explicitly opted into full quality) is the single biggest
+        // lever for reducing playback data — independent of the scanning/
+        // scraping data cost discussed elsewhere.
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val isMetered = try { cm?.isActiveNetworkMetered == true } catch (_: Exception) { true }
+        // Data Saver only constrains the "Auto" default — if the user has
+        // explicitly picked a specific resolution via setQuality(), that's
+        // an informed choice to burn more data and we respect it (see
+        // setQuality() below, which applies the user's pick without this
+        // cap). This just makes the out-of-the-box behavior on mobile data
+        // sane by default, without ever overriding a deliberate user pick.
+        val dataSaverOn = isMetered
+        isOnMeteredConnection = isMetered
+
+        val effectiveMaxHeight = if (dataSaverOn) minOf(maxHeight, 480) else maxHeight
+        val effectiveMaxBitrate = if (dataSaverOn) 1_200_000 else Int.MAX_VALUE
+
         val ts = DefaultTrackSelector(context).apply {
             setParameters(
                 buildUponParameters()
@@ -640,7 +666,8 @@ class PlayerViewModel @Inject constructor(
                     // then let the bandwidth meter auto-upgrade within 1–2 seconds.
                     .setForceLowestBitrate(false)
                     .setAllowVideoMixedMimeTypeAdaptiveness(true)
-                    .setMaxVideoSize(Int.MAX_VALUE, maxHeight)
+                    .setMaxVideoSize(Int.MAX_VALUE, effectiveMaxHeight)
+                    .setMaxVideoBitrate(effectiveMaxBitrate)
             )
         }
         trackSelector = ts
@@ -874,19 +901,30 @@ class PlayerViewModel @Inject constructor(
         // out and let a free user stream above their tier the moment they tap
         // Auto, which is also the default selected quality on every fresh play.
         val maxHeight = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
+
         if (label == "Auto") {
+            // Auto respects Data Saver: on a metered connection this keeps
+            // playback at a data-conscious default instead of climbing to
+            // whatever the network can sustain.
+            val autoHeight = if (isOnMeteredConnection) minOf(maxHeight, 480) else maxHeight
+            val autoBitrate = if (isOnMeteredConnection) 1_200_000 else Int.MAX_VALUE
             ts.setParameters(
                 ts.buildUponParameters()
                     .clearVideoSizeConstraints()
-                    .setMaxVideoSize(Int.MAX_VALUE, maxHeight)
+                    .setMaxVideoSize(Int.MAX_VALUE, autoHeight)
+                    .setMaxVideoBitrate(autoBitrate)
             )
         } else {
+            // Explicit pick (e.g. user taps "1080p" on mobile data): this is
+            // an informed choice to use more data, so the Data Saver cap is
+            // lifted entirely — only the premium tier ceiling still applies.
             val requestedHeight = label.replace("p", "").toIntOrNull() ?: return
             val height = requestedHeight.coerceAtMost(maxHeight)
             ts.setParameters(
                 ts.buildUponParameters()
                     .setMaxVideoSize(Int.MAX_VALUE, height)
                     .setMinVideoSize(0, (height - 80).coerceAtLeast(0))
+                    .setMaxVideoBitrate(Int.MAX_VALUE)
             )
         }
     }
