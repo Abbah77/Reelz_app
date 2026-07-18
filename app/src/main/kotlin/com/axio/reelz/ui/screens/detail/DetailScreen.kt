@@ -143,7 +143,7 @@ class DetailViewModel @Inject constructor(
         /**
          * The current tier's max download height in px (e.g. 480 for free, 2160
          * for premium), read once when the sheet opens. <= 0 means "no cap" —
-         * see PremiumGate.isResolutionAllowed(). Drives the lock badge on any
+         * see PremiumGate.isDownloadResolutionAllowed(). Drives the lock badge on any
          * QualityTrack whose parsed height exceeds this.
          */
         val maxDownloadResolutionHeight: Int = Int.MAX_VALUE,
@@ -376,11 +376,13 @@ class DetailViewModel @Inject constructor(
                 pendingDownloadSeason       = season,
                 pendingDownloadEpisode      = episode,
                 pendingDownloadTitle        = episodeTitle.ifBlank { detail.title },
-                // Read once per sheet-open — config is the source of truth, and this
-                // mirrors exactly what PlayerViewModel.buildPlayer() applies for
-                // streaming, so "what counts as locked" never disagrees between
-                // watching and downloading the same title.
-                maxDownloadResolutionHeight = premiumGate.maxResolutionHeight()
+                // Read once per sheet-open — config is the source of truth.
+                // This is intentionally the DOWNLOAD-specific cap, separate
+                // from streaming: streaming has no resolution gate (ads are
+                // the monetization lever there), downloads are the one
+                // place a free/premium quality split applies, since no ad
+                // can be served offline.
+                maxDownloadResolutionHeight = premiumGate.maxDownloadResolutionHeight()
                     .let { h -> if (h <= 0) Int.MAX_VALUE else h },
             )
         }
@@ -505,7 +507,7 @@ class DetailViewModel @Inject constructor(
         // UI layer. If this were ever reached for a locked track (stale UI state,
         // future call site, etc.) we still refuse rather than silently honoring a
         // resolution above the user's config-defined tier.
-        if (!premiumGate.isResolutionAllowed(trackHeightPx(track.label))) {
+        if (!premiumGate.isDownloadResolutionAllowed(trackHeightPx(track.label))) {
             _ui.update { it.copy(showResolutionLockSheet = true) }
             return
         }
