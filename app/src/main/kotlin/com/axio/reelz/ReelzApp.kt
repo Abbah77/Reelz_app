@@ -1,5 +1,6 @@
 package com.axio.reelz
 
+import android.app.ActivityManager
 import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
@@ -12,6 +13,7 @@ import com.axio.reelz.data.repository.UserSessionRepository
 import com.axio.reelz.remoteconfig.ConfigSyncWorker
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
 import com.axio.reelz.ads.AdEngine
+import com.axio.reelz.scanner.WebViewScanner
 import com.axio.reelz.service.DownloadService
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import dagger.hilt.android.HiltAndroidApp
@@ -35,6 +37,14 @@ class ReelzApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Cap concurrent WebView scans to 1 on low-RAM devices — this was
+        // previously declared in WebViewScanner but never actually called,
+        // so every device (regardless of RAM) was running the default of
+        // 2 concurrent WebView instances during source resolution.
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+        val isLowRam = activityManager?.isLowRamDevice == true
+        WebViewScanner.setMaxConcurrentScans(if (isLowRam) 1 else 2)
 
         // Crashlytics auto-initializes from google-services.json, but tagging
         // the app version as a custom key makes it possible to tell "which
