@@ -122,6 +122,12 @@
             tools:targetApi="29" />
 
         <!-- ── WorkManager ────────────────────────────────────────────────── -->
+        <!-- tools:node="remove" disables WorkManager's default auto-init.
+             Required because ReelzApp now implements Configuration.Provider
+             to supply a HiltWorkerFactory (see ReelzApp.workManagerConfiguration);
+             leaving auto-init enabled alongside a custom Configuration.Provider
+             throws IllegalStateException at startup ("WorkManager is already
+             initialized"). -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
@@ -129,7 +135,8 @@
             tools:node="merge">
             <meta-data
                 android:name="androidx.work.WorkManagerInitializer"
-                android:value="androidx.startup" />
+                android:value="androidx.startup"
+                tools:node="remove" />
         </provider>
 
         <!-- ── AppLovin MAX SDK ──────────────────────────────────────────── -->
