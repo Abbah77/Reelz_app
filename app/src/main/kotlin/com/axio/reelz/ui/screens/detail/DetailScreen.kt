@@ -462,6 +462,14 @@ class DetailViewModel @Inject constructor(
                         return@collect
                     }
 
+                    // "Best available" (probeSingleQuality's last-resort fallback,
+                    // used only when NO resolution signal exists at all) has no
+                    // confirmed height — it must never be placed into one of the
+                    // 5 fixed resolution slots, since we cannot know which one it
+                    // actually corresponds to. Drop it here rather than risk it
+                    // rendering under the wrong label.
+                    if (found.track.label == "Best available") return@collect
+
                     val updated = (current + found.track)
                         .sortedByDescending { trackHeightPx(it.label) }
 
@@ -485,6 +493,20 @@ class DetailViewModel @Inject constructor(
                 // Whatever the flow found (possibly nothing) is final now —
                 // remaining skeleton labels quietly disappear rather than spin
                 // forever, matching the flow's own hard cap.
+                //
+                // Exception: if the ENTIRE scan finished and confirmed ZERO
+                // real resolutions (every source either failed or only ever
+                // returned the unplaceable "Best available" signal), show a
+                // single fallback row so downloading isn't silently impossible.
+                // This is the ONLY place "Best available" is allowed to reach
+                // the UI — always alone, never alongside a real numbered slot,
+                // so it can never be confused with a specific resolution.
+                val stream = cachedStreamResult
+                if (_ui.value.downloadQualities.isEmpty() && stream != null) {
+                    val fallback = QualityTrack("Best available", "")
+                    streamForLabel["Best available"] = stream
+                    _ui.update { it.copy(downloadQualities = listOf(fallback)) }
+                }
                 _ui.update { it.copy(pendingQualityLabels = emptySet()) }
             }
         }
