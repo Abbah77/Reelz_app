@@ -79,11 +79,22 @@ class WebViewScanner(private val context: Context) {
             RegexOption.IGNORE_CASE
         )
 
-        /** Common ad/analytics/tracker infrastructure — block regardless of extension. */
+        /**
+         * Common ad/analytics/tracker infrastructure — block regardless of
+         * extension. Second block below was added from live traffic
+         * captures against our actual embed sources (vidlink.pro,
+         * vidsrc.to) — confirmed ad/anti-bot/tracking endpoints seen firing
+         * repeatedly per page load and never carrying stream data.
+         */
         private val BLOCKED_HOST_PATTERN = Regex(
             "doubleclick|googlesyndication|google-analytics|googletagmanager|" +
                 "facebook\\.net|adservice|adnxs|taboola|outbrain|scorecardresearch|" +
-                "hotjar|sentry\\.io|mixpanel|amplitude|criteo|pubmatic|rubiconproject",
+                "hotjar|sentry\\.io|mixpanel|amplitude|criteo|pubmatic|rubiconproject|" +
+                "adsco\\.re|popunder|venor\\.php|elmager|suurl\\d*\\.php|" +
+                "rt_ping\\.php|clarity\\.ms|clarity\\.js|/collect(\\?|$)|" +
+                "adsystem|/i\\.php\\?|bidder|prebid|exoclick|" +
+                "juicyads|trafficjunky|propellerads|adcash|hilltopads|" +
+                "popads|onclickmega|adsterra",
             RegexOption.IGNORE_CASE
         )
 
