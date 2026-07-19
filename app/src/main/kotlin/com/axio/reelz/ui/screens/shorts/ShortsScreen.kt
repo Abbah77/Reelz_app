@@ -311,6 +311,86 @@ class ShortsViewModel @Inject constructor(
         return fresh
     }
 
+    // Cache of collection-name -> expanded list of individual item
+    // identifiers, so a config entry can point at either a single archive.org
+    // item OR a whole collection (e.g. "tiktoks", which itself contains
+    // thousands of single-video items) without needing different config
+    // shapes. Expansion only has to happen once per collection per session.
+    private val collectionCache = mutableMapOf<String, List<String>>()
+
+    private companion object {
+        const val COLLECTION_PAGE_ROWS = 200
+    }
+
+    /**
+     * Expands every pool entry into concrete item identifiers. An entry that
+     * is already a playable item passes through untouched; an entry that
+     * turns out to be a collection (mediatype:collection, e.g. "tiktoks")
+     * is expanded via archive.org's advancedsearch.php into up to
+     * COLLECTION_PAGE_ROWS of its member item identifiers, cached for the
+     * rest of the session. This runs once per distinct pool per feed, not
+     * per page, so it doesn't slow down pagination after the first load.
+     */
+    private suspend fun expandPool(pool: List<String>): List<String> = coroutineScope {
+        pool.map { entry -> async { expandEntry(entry.trim()) } }
+            .awaitAll()
+            .flatten()
+    }
+
+    private fun expandEntry(entry: String): List<String> {
+        if (entry.isBlank()) return emptyList()
+        collectionCache[entry]?.let { return it }
+
+        val expanded = fetchCollectionItems(entry)
+        return if (expanded.isNotEmpty()) {
+            dbg("✓ [$entry] is a collection — expanded to ${expanded.size} item(s)")
+            collectionCache[entry] = expanded
+            expanded
+        } else {
+            // Not a collection (or empty) — treat the entry itself as a
+            // single playable item identifier, which resolveIdentifier()
+            // will confirm/deny via its own metadata call.
+            listOf(entry)
+        }
+    }
+
+    /**
+     * Tries to resolve `entry` as an archive.org collection name via the
+     * Advanced Search API. Returns an empty list if it isn't a collection
+     * (which is the normal case for a single-item identifier) — callers
+     * treat that as "use the entry as-is".
+     */
+    private fun fetchCollectionItems(entry: String): List<String> {
+        val encoded = URLEncoder.encode(entry, "UTF-8")
+        val url = "https://archive.org/advancedsearch.php" +
+            "?q=collection:($encoded)" +
+            "&fl[]=identifier" +
+            "&rows=$COLLECTION_PAGE_ROWS" +
+            "&page=1" +
+            "&output=json"
+        return try {
+            val req = Request.Builder().url(url).get().build()
+            okHttp.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return emptyList()
+                val body = resp.body?.string() ?: return emptyList()
+                val docs = JSONObject(body).optJSONObject("response")?.optJSONArray("docs")
+                    ?: return emptyList()
+                buildList {
+                    for (i in 0 until docs.length()) {
+                        val id = docs.getJSONObject(i).optString("identifier")
+                        // A collection can itself list its own identifier as a
+                        // "doc" in some edge cases — skip that self-reference
+                        // to avoid infinite expansion loops.
+                        if (id.isNotBlank() && id != entry) add(id)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            dbg("✗ collection search error for $entry: ${e.message}")
+            emptyList()
+        }
+    }
+
     data class UiState(
         val feedMode: FeedMode = FeedMode.FOR_YOU,
         val searchQuery: String = "",
@@ -463,8 +543,17 @@ class ShortsViewModel @Inject constructor(
             dbg("✗ [$feedKey] identifier pool is empty — nothing configured")
             return emptyList()
         }
+        // Expand any collection entries (e.g. "tiktoks") into their member
+        // item identifiers before paginating — cached, so this is a no-op
+        // network-wise after the very first call for a given entry.
+        val expandedPool = expandPool(pool)
+        if (expandedPool.isEmpty()) {
+            dbg("✗ [$feedKey] pool expanded to zero items")
+            return emptyList()
+        }
+
         val pageSize = shortsConfig.itemsPerPage.coerceAtLeast(1)
-        val cursor   = cursorFor(feedKey, pool)
+        val cursor   = cursorFor(feedKey, expandedPool)
         val slice    = cursor.shuffledItems.drop(cursor.resolvedCount).take(pageSize)
         cursors[feedKey] = cursor.copy(resolvedCount = cursor.resolvedCount + slice.size)
 
