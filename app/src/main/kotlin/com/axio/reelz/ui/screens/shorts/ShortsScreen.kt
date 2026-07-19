@@ -833,12 +833,11 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
 
     val shortsConfig = vm.shortsConfig
     val httpFactory = remember(shortsConfig) {
+        // archive.org direct downloads need no special Referer/Origin spoofing
+        // (that was an ifunny.club anti-hotlinking workaround) — just a
+        // reasonable UA and generous timeouts/redirect handling.
         DefaultHttpDataSource.Factory()
             .setUserAgent(StreamHeaders.UA_CHROME_ANDROID)
-            .setDefaultRequestProperties(mapOf(
-                "Referer" to shortsConfig.feedReferer.ifBlank { "https://ifunny.club/" },
-                "Origin"  to shortsConfig.feedOrigin.ifBlank  { "https://ifunny.club" },
-            ))
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(10_000)
             .setReadTimeoutMs(12_000)
