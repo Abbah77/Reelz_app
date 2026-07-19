@@ -171,18 +171,53 @@ data class FeatureFlags(
 )
 
 // ── Shorts / discovery feed config ────────────────────────────────────────────
+//
+// Source is archive.org directly — no scraping backend involved anymore.
+// Each "item" below is an archive.org identifier (the slug in
+// archive.org/details/<identifier>). One item can itself contain many
+// video files (bulk-upload items commonly have 50-200+ .mp4s inside), so
+// a handful of identifiers is enough to seed a large shuffled feed.
+//
+// Resolution per identifier: GET https://archive.org/metadata/{identifier}
+// returns a `files[]` array; the app filters that down to playable video
+// formats and builds direct download URLs from `server`+`dir`+`file.name`.
+// This whole class is intentionally just data — add/remove identifiers
+// here and the app picks it up on next config sync, no rebuild needed.
 
 data class ShortsConfig(
-    @SerializedName("feed_base_url")     val feedBaseUrl: String             = "",
-    @SerializedName("feed_referer")      val feedReferer: String             = "",
-    @SerializedName("feed_origin")       val feedOrigin: String              = "",
-    @SerializedName("for_you_subs")      val forYouSubs: String              = "",
-    val categories: List<ShortCategory>                                      = emptyList(),
+    /** archive.org access config — base URLs, endpoint templates, timeouts. */
+    @SerializedName("archive_org") val archiveOrg: ArchiveOrgConfig            = ArchiveOrgConfig(),
+    /** For You tab: pool of archive.org item identifiers, fully shuffled every load. */
+    @SerializedName("for_you_items") val forYouItems: List<String>            = emptyList(),
+    /** Discovery tab chips — each one its own pool of item identifiers. Add/remove
+     *  freely; the UI renders exactly what's in this list, nothing hardcoded. */
+    val categories: List<ShortCategory>                                       = emptyList(),
+    /** File extensions treated as playable video, checked against each file's
+     *  name/format from archive.org metadata (case-insensitive). */
+    @SerializedName("video_extensions") val videoExtensions: List<String>     =
+        listOf("mp4", "m4v", "mov", "webm"),
+    /** Filename fragments to always skip (thumbnails, derivative junk, etc.),
+     *  matched case-insensitively as a substring. */
+    @SerializedName("excluded_name_contains") val excludedNameContains: List<String> =
+        listOf("thumb", "sample", ".ia.", "__ia_thumb"),
+    /** How many item identifiers to resolve per feed "page" — keeps each
+     *  loadMore() call cheap instead of resolving the whole pool at once. */
+    @SerializedName("items_per_page") val itemsPerPage: Int                   = 3,
+)
+
+data class ArchiveOrgConfig(
+    @SerializedName("metadata_base_url")  val metadataBaseUrl: String  = "https://archive.org/metadata",
+    @SerializedName("download_base_url")  val downloadBaseUrl: String  = "https://archive.org/download",
+    @SerializedName("thumbnail_base_url") val thumbnailBaseUrl: String = "https://archive.org/services/img",
+    @SerializedName("request_timeout_ms") val requestTimeoutMs: Long   = 12000,
 )
 
 data class ShortCategory(
     val label: String = "",
-    val subs: String  = "",
+    /** Pool of archive.org item identifiers for this category — placeholder
+     *  until specific genre-matching items are found; leave empty and the
+     *  chip simply shows no results rather than crashing. */
+    val items: List<String> = emptyList(),
 )
 
 // ── Premium tiers ──────────────────────────────────────────────────────────
