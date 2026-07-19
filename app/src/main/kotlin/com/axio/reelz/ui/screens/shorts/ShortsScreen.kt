@@ -56,6 +56,9 @@ import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -240,7 +243,38 @@ private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = bu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ViewModel  —  ALL scraping happens server-side via GET /shorts/feed
+// ViewModel  —  videos are resolved directly from archive.org, no backend.
+//
+// HOW SOURCING WORKS NOW
+// ───────────────────────
+// shorts.json config (ShortsConfig) lists archive.org item identifiers —
+// nothing else. Each identifier is a bulk-upload item that can itself
+// contain dozens/hundreds of video files. Resolving one identifier means:
+//
+//   GET {archive_org.metadata_base_url}/{identifier}
+//     → JSON with `server`, `dir`, and a `files[]` array
+//   for each file that matches shorts.video_extensions and isn't excluded:
+//     direct playable URL = https://{server}{dir}/{urlEncode(file.name)}
+//
+// That's it — no auth, no scraping, no JS execution, just one JSON fetch
+// per identifier. A pool of identifiers can yield hundreds of individual
+// videos from a handful of config entries.
+//
+// PAGINATION + RANDOMNESS
+// ────────────────────────
+// Per product decision: fully random shuffle on every load, infinite
+// scroll. Concretely:
+//   • On (re)load, the full identifier pool for the active feed is
+//     shuffled, then resolved `items_per_page` identifiers at a time.
+//   • Each resolved identifier's files are also individually shuffled
+//     before being appended, so even a single big bulk item doesn't
+//     play its videos in upload order.
+//   • loadMore() advances to the next unresolved slice of the shuffled
+//     identifier pool; once the pool is exhausted it reshuffles and
+//     starts again (true infinite scroll — content repeats eventually,
+//     but never in the same order twice).
+//   • Nothing here is hardcoded: pool size, page size, extension
+//     filters, and exclusion rules all come from ShortsConfig.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @HiltViewModel
@@ -252,16 +286,29 @@ class ShortsViewModel @Inject constructor(
 
     val shortsConfig       get() = remoteConfig.shortsConfig()
     private val categories get() = shortsConfig.categories
-    // normalizedUrl auto-adds "https://" if config.json's backend_url is
-    // ever saved without a scheme — see BackendConfig.normalizedUrl for why.
-    private val backendUrl get() = remoteConfig.backendConfig().normalizedUrl
-    private val forYouSubs get() = shortsConfig.forYouSubs.trim()
+    private val archiveCfg get() = shortsConfig.archiveOrg
 
     private val okHttp by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(archiveCfg.requestTimeoutMs, TimeUnit.MILLISECONDS)
+            .readTimeout(archiveCfg.requestTimeoutMs, TimeUnit.MILLISECONDS)
             .build()
+    }
+
+    // Per-feed pagination cursor state: the shuffled identifier order and
+    // how far into it we've resolved. Keyed by a feed key ("for_you" or
+    // "cat_<index>") so switching tabs/categories doesn't clobber cursors.
+    private data class FeedCursor(val shuffledItems: List<String>, val resolvedCount: Int)
+    private val cursors = mutableMapOf<String, FeedCursor>()
+
+    private fun cursorFor(key: String, pool: List<String>): FeedCursor {
+        val existing = cursors[key]
+        if (existing != null && existing.resolvedCount < existing.shuffledItems.size) return existing
+        // Pool exhausted (or first run) — reshuffle so infinite scroll never
+        // repeats the exact same order twice in a row.
+        val fresh = FeedCursor(shuffledItems = pool.shuffled(), resolvedCount = 0)
+        cursors[key] = fresh
+        return fresh
     }
 
     data class UiState(
@@ -363,7 +410,9 @@ class ShortsViewModel @Inject constructor(
         else        _ui.update { it.copy(forYouLoading = true, error = null) }
 
         viewModelScope.launch {
-            val videos = withContext(Dispatchers.IO) { fetchFromBackend(subs = forYouSubs) }
+            val videos = withContext(Dispatchers.IO) {
+                resolveNextPage(feedKey = "for_you", pool = shortsConfig.forYouItems)
+            }
             dbg("forYou total=${videos.size}")
             if (append) {
                 _ui.update { it.copy(forYouVideos = it.forYouVideos + videos, forYouLoadingMore = false) }
@@ -378,19 +427,22 @@ class ShortsViewModel @Inject constructor(
     }
 
     private fun loadDiscovery(categoryIndex: Int, append: Boolean = false) {
-        val slugString = categories.getOrNull(categoryIndex)?.subs ?: return
+        val category = categories.getOrNull(categoryIndex) ?: return
 
         if (!append) _ui.update { it.copy(discLoading = true, error = null) }
         else         _ui.update { it.copy(discLoadingMore = true) }
 
         viewModelScope.launch {
-            val videos = withContext(Dispatchers.IO) { fetchFromBackend(subs = slugString) }
-            dbg("✓ discovery cat=$categoryIndex total=${videos.size}")
+            val videos = withContext(Dispatchers.IO) {
+                resolveNextPage(feedKey = "cat_$categoryIndex", pool = category.items)
+            }
+            dbg("✓ discovery cat=$categoryIndex (${category.label}) total=${videos.size}")
             if (!append) {
                 _ui.update { it.copy(
                     discVideos  = videos,
                     discLoading = false,
-                    error       = if (videos.isEmpty()) "No videos found" else null,
+                    error       = if (videos.isEmpty())
+                        "No videos configured yet for \"${category.label}\"" else null,
                 )}
             } else {
                 _ui.update { it.copy(discVideos = it.discVideos + videos, discLoadingMore = false) }
@@ -398,33 +450,51 @@ class ShortsViewModel @Inject constructor(
         }
     }
 
-    private fun fetchFromBackend(subs: String): List<ShortVideo> {
-        if (backendUrl.isBlank() || subs.isBlank()) {
-            dbg("✗ backend URL or subs blank — skipping")
+    /**
+     * Resolves the next `items_per_page` archive.org identifiers from this
+     * feed's shuffled cursor into playable ShortVideos. Identifiers are
+     * resolved in parallel (they're independent network calls); a failed
+     * identifier (404, malformed, no video files) is simply skipped rather
+     * than failing the whole page — matches the "never stall the feed on
+     * one bad item" rule the player pool already follows.
+     */
+    private suspend fun resolveNextPage(feedKey: String, pool: List<String>): List<ShortVideo> {
+        if (pool.isEmpty()) {
+            dbg("✗ [$feedKey] identifier pool is empty — nothing configured")
             return emptyList()
         }
+        val pageSize = shortsConfig.itemsPerPage.coerceAtLeast(1)
+        val cursor   = cursorFor(feedKey, pool)
+        val slice    = cursor.shuffledItems.drop(cursor.resolvedCount).take(pageSize)
+        cursors[feedKey] = cursor.copy(resolvedCount = cursor.resolvedCount + slice.size)
 
-        val encodedSubs = subs.trim()
-            .split("+")
-            .joinToString("+") { URLEncoder.encode(it.trim(), "UTF-8") }
+        if (slice.isEmpty()) return emptyList()
 
-        val feedUrl = "$backendUrl/shorts/feed?subs=$encodedSubs" +
-                      "&base_url=${URLEncoder.encode(shortsConfig.feedBaseUrl.ifBlank { "https://ifunny.club" }, "UTF-8")}"
+        return coroutineScope {
+            slice.map { identifier -> async { resolveIdentifier(identifier) } }
+                .awaitAll()
+                .flatten()
+                .shuffled() // interleave videos from different identifiers, not grouped by item
+        }
+    }
 
-        dbg("→ backend $feedUrl")
+    private fun resolveIdentifier(identifier: String): List<ShortVideo> {
+        val trimmed = identifier.trim()
+        if (trimmed.isBlank()) return emptyList()
 
+        val url = "${archiveCfg.metadataBaseUrl.trimEnd('/')}/${URLEncoder.encode(trimmed, "UTF-8")}"
         return try {
-            val req = Request.Builder().url(feedUrl).get().build()
+            val req = Request.Builder().url(url).get().build()
             okHttp.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
-                    dbg("✗ backend returned ${resp.code}")
+                    dbg("✗ metadata ${resp.code} for $trimmed")
                     return emptyList()
                 }
                 val body = resp.body?.string() ?: return emptyList()
-                parseShortVideos(body)
+                parseArchiveOrgMetadata(trimmed, body)
             }
         } catch (e: Exception) {
-            dbg("✗ backend error: ${e.message}")
+            dbg("✗ metadata error for $trimmed: ${e.message}")
             emptyList()
         }
     }
@@ -434,36 +504,71 @@ class ShortsViewModel @Inject constructor(
         return if (raw.isBlank() || raw.equals("null", ignoreCase = true)) "" else raw
     }
 
-    private fun parseShortVideos(json: String): List<ShortVideo> {
+    /**
+     * Parses one archive.org /metadata/{id} response into ShortVideos.
+     * Docs: server + dir + "/" + urlEncode(file name) is the stable direct
+     * download URL pattern archive.org guarantees for every file listed.
+     */
+    private fun parseArchiveOrgMetadata(identifier: String, json: String): List<ShortVideo> {
         return try {
-            val root   = JSONObject(json)
-            val arr    = root.getJSONArray("videos")
+            val root = JSONObject(json)
+            val server = root.optUrlString("server").ifBlank {
+                root.optJSONArray("workable_servers")?.optString(0).orEmpty()
+            }
+            val dir   = root.optUrlString("dir")
+            val files = root.optJSONArray("files") ?: return emptyList()
+            if (server.isBlank() || dir.isBlank()) {
+                dbg("✗ [$identifier] no server/dir in metadata")
+                return emptyList()
+            }
+
+            val exts     = shortsConfig.videoExtensions.map { it.lowercase().removePrefix(".") }
+            val excludes = shortsConfig.excludedNameContains.map { it.lowercase() }
+            val itemMeta = root.optJSONObject("metadata")
+            val itemTitle = itemMeta?.optString("title").orEmpty()
+            val itemDesc  = itemMeta?.optString("description").orEmpty()
+
             val result = mutableListOf<ShortVideo>()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val hlsUrl      = o.optUrlString("hlsUrl")
-                val fallbackUrl = o.optUrlString("fallbackUrl")
-                if (hlsUrl.isBlank() && fallbackUrl.isBlank()) continue
+            for (i in 0 until files.length()) {
+                val f = files.getJSONObject(i)
+                val name = f.optString("name")
+                if (name.isBlank()) continue
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (ext !in exts) continue
+                val lowerName = name.lowercase()
+                if (excludes.any { lowerName.contains(it) }) continue
+
+                val encodedName = name.split("/").joinToString("/") { URLEncoder.encode(it, "UTF-8") }
+                    .replace("+", "%20")
+                val videoUrl = "https://$server$dir/$encodedName"
+                // archive.org's per-item auto-thumbnail — cheap and always available,
+                // no need to guess a per-file poster frame.
+                val thumbUrl = "${archiveCfg.thumbnailBaseUrl.trimEnd('/')}/$identifier"
+
+                // Caption in these bulk uploads is baked into the filename
+                // (hashtags etc.) — falls back to the item's own title/description.
+                val caption = name.substringBeforeLast('.').ifBlank { itemTitle.ifBlank { identifier } }
+
                 result += ShortVideo(
-                    id          = o.optString("id").ifBlank { "v_$i" },
-                    title       = o.optString("title"),
-                    author      = o.optString("author"),
-                    community   = o.optString("community"),
-                    hlsUrl      = hlsUrl.ifBlank { fallbackUrl },
-                    audioUrl    = o.optUrlString("audioUrl").ifBlank { null }.takeIf { !it.isNullOrBlank() },
-                    fallbackUrl = fallbackUrl.ifBlank { hlsUrl },
-                    thumbnail   = o.optUrlString("thumbnail"),
-                    ups         = o.optInt("ups", 0),
-                    duration    = o.optInt("duration", 0),
-                    hasAudio    = o.optBoolean("hasAudio", true),
-                    width       = o.optInt("width", 0),
-                    height      = o.optInt("height", 0),
+                    id          = "$identifier/$name",
+                    title       = caption,
+                    author      = itemTitle.ifBlank { identifier },
+                    community   = itemDesc.take(40),
+                    hlsUrl      = videoUrl,
+                    audioUrl    = null,
+                    fallbackUrl = videoUrl,
+                    thumbnail   = thumbUrl,
+                    ups         = 0,
+                    duration    = 0,
+                    hasAudio    = true,
+                    width       = 0,
+                    height      = 0,
                 )
             }
-            dbg("✓ parsed ${result.size} videos from backend")
+            dbg("✓ [$identifier] resolved ${result.size} playable video(s)")
             result
         } catch (e: Exception) {
-            dbg("✗ parse error: ${e.message}")
+            dbg("✗ [$identifier] parse error: ${e.message}")
             emptyList()
         }
     }
