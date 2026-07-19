@@ -115,6 +115,131 @@ val IconHeartFilled: ImageVector get() = ImageVector.Builder("HeartFilled", 24.d
     }, fill = SolidColor(Color(0xFFFF2D55)))
 }.build()
 
+// ── Comment bubble outline (Bootstrap) ────────────────────────────────────────
+val IconComment: ImageVector get() = ImageVector.Builder("Comment", 24.dp, 24.dp, 16f, 16f).apply {
+    addPath(pathData = PathData {
+        moveTo(14f, 1f)
+        arcTo(1f, 1f, 0f, false, true, 15f, 2f)
+        verticalLineToRelative(8f)
+        arcTo(1f, 1f, 0f, false, true, 14f, 11f)
+        horizontalLineTo(4.414f)
+        lineToRelative(-3f, 3f)
+        arcToRelative(0.5f, 0.5f, 0f, false, true, -0.854f, -0.354f)
+        verticalLineTo(2f)
+        arcTo(1f, 1f, 0f, false, true, 1.55f, 1f)
+        close()
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+}.build()
+
+// ── Bookmark outline (used before saved) ──────────────────────────────────────
+val IconBookmark: ImageVector get() = ImageVector.Builder("Bookmark", 24.dp, 24.dp, 16f, 16f).apply {
+    addPath(pathData = PathData {
+        moveTo(2f, 2f)
+        verticalLineToRelative(13.5f)
+        arcToRelative(0.5f, 0.5f, 0f, false, false, 0.79f, 0.407f)
+        lineTo(8f, 12.011f)
+        lineToRelative(5.21f, 3.896f)
+        arcTo(0.5f, 0.5f, 0f, false, false, 14f, 15.5f)
+        verticalLineTo(2f)
+        arcToRelative(2f, 2f, 0f, false, false, -2f, -2f)
+        horizontalLineTo(4f)
+        arcToRelative(2f, 2f, 0f, false, false, -2f, 2f)
+        close()
+    }, fill = SolidColor(Color.Transparent),
+       stroke = SolidColor(Color.White), strokeLineWidth = 1f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)
+}.build()
+
+// ── Bookmark filled (Instagram-blue "saved" state) ─────────────────────────────
+val IconBookmarkFilled: ImageVector get() = ImageVector.Builder("BookmarkFilled", 24.dp, 24.dp, 16f, 16f).apply {
+    addPath(pathData = PathData {
+        moveTo(2f, 15.5f)
+        verticalLineTo(2f)
+        arcToRelative(2f, 2f, 0f, false, true, 2f, -2f)
+        horizontalLineToRelative(8f)
+        arcToRelative(2f, 2f, 0f, false, true, 2f, 2f)
+        verticalLineToRelative(13.5f)
+        arcToRelative(0.5f, 0.5f, 0f, false, true, -0.79f, 0.407f)
+        lineTo(8f, 12.011f)
+        lineToRelative(-5.21f, 3.896f)
+        arcTo(0.5f, 0.5f, 0f, false, true, 2f, 15.5f)
+        close()
+    }, fill = SolidColor(Color(0xFF0A84FF)))
+}.build()
+
+// ── Speaker / volume on (sound audible) ────────────────────────────────────────
+val IconVolumeOn: ImageVector get() = ImageVector.Builder("VolumeOn", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(11f, 5f); lineTo(6f, 9f); lineTo(2f, 9f)
+        lineTo(2f, 15f); lineTo(6f, 15f); lineTo(11f, 19f); close()
+    }, fill = SolidColor(Color.White))
+    addPath(pathData = PathData {
+        moveTo(15.54f, 8.46f)
+        arcTo(5f, 5f, 0f, false, true, 15.54f, 15.54f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
+    addPath(pathData = PathData {
+        moveTo(19.07f, 4.93f)
+        arcTo(10f, 10f, 0f, false, true, 19.07f, 19.07f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
+}.build()
+
+// ── Speaker / volume muted ──────────────────────────────────────────────────────
+val IconVolumeOff: ImageVector get() = ImageVector.Builder("VolumeOff", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(11f, 5f); lineTo(6f, 9f); lineTo(2f, 9f)
+        lineTo(2f, 15f); lineTo(6f, 15f); lineTo(11f, 19f); close()
+    }, fill = SolidColor(Color.White))
+    addPath(pathData = PathData {
+        moveTo(23f, 9f); lineTo(17f, 15f)
+        moveTo(17f, 9f); lineTo(23f, 15f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
+}.build()
+
+// ── Share arrow ────────────────────────────────────────────────────────────────
+val IconShare: ImageVector get() = ImageVector.Builder("Share", 24.dp, 24.dp, 16f, 16f).apply {
+    addPath(pathData = PathData {
+        moveTo(1f, 8f)
+        lineTo(15f, 8f)
+        moveTo(9f, 2f)
+        lineTo(15f, 8f)
+        lineTo(9f, 14f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.4f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
+}.build()
+
+// ── Small lock badge (overlaid on an action icon to mark it unavailable) ───────
+val IconLock: ImageVector get() = ImageVector.Builder("Lock", 24.dp, 24.dp, 16f, 16f).apply {
+    addPath(pathData = PathData {
+        moveTo(8f, 1f)
+        arcToRelative(3f, 3f, 0f, false, false, -3f, 3f)
+        verticalLineToRelative(2f)
+        horizontalLineTo(4f)
+        arcToRelative(1f, 1f, 0f, false, false, -1f, 1f)
+        verticalLineToRelative(6f)
+        arcToRelative(1f, 1f, 0f, false, false, 1f, 1f)
+        horizontalLineToRelative(8f)
+        arcToRelative(1f, 1f, 0f, false, false, 1f, -1f)
+        verticalLineTo(7f)
+        arcToRelative(1f, 1f, 0f, false, false, -1f, -1f)
+        horizontalLineToRelative(-1f)
+        verticalLineTo(4f)
+        arcToRelative(3f, 3f, 0f, false, false, -3f, -3f)
+        close()
+        moveTo(6.5f, 4f)
+        arcToRelative(1.5f, 1.5f, 0f, false, true, 3f, 0f)
+        verticalLineToRelative(2f)
+        horizontalLineToRelative(-3f)
+        close()
+    }, fill = SolidColor(Color.White))
+}.build()
+
+
 // ── Home outline (Fluent UI — Microsoft design system, very clean) ─────────────
 val IconHome: ImageVector get() = ImageVector.Builder("Home", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
