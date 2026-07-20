@@ -135,10 +135,10 @@ fun SettingsScreen(nav: NavController) {
         ) {
             Text(
                 "Your privacy matters:\n\n" +
-                "• Sign-in is handled securely via Google — we never see your password.\n\n" +
-                "• Watchlist, Saved & History live only on your device. Nothing is uploaded.\n\n" +
-                "• Premium status is verified server-side via Paystack webhooks.\n\n" +
-                "• No personal data is sold or shared with third parties.",
+                "• Sign-in is handled securely via Google.\n\n" +
+                "• Watchlist, Saved & History sync to local.\n\n" +
+                "• Premium status is verified.\n\n" +
+                "• We don't collect or process any kind of information.",
                 color = White60, fontSize = d.textMd, lineHeight = (d.textMd.value * 1.5f).sp,
             )
         }
