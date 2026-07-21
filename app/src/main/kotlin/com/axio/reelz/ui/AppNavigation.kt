@@ -170,6 +170,10 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
             composable(Route.Search.path)    { SearchScreen(nav) }
             composable(Route.Premium.path)   { PremiumScreen(nav) }
             composable(Route.Settings.path)  { com.axio.reelz.ui.screens.settings.SettingsScreen(nav) }
+            composable("settings_storage")   { com.axio.reelz.ui.screens.settings.StorageUsageScreen(nav) }
+            composable("settings_terms")     { com.axio.reelz.ui.screens.settings.TermsScreen(nav) }
+            composable("settings_privacy")   { com.axio.reelz.ui.screens.settings.PrivacyPolicyScreen(nav) }
+            composable("settings_about")     { com.axio.reelz.ui.screens.settings.AboutScreen(nav) }
             composable(
                 route     = Route.Detail.path,
                 arguments = listOf(
