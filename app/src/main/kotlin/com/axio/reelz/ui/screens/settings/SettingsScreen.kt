@@ -741,7 +741,7 @@ fun AboutScreen(nav: NavController) {
                         "Reelz",
                         color = Brand2,
                         fontWeight = FontWeight.Black,
-                        fontSize = d.textXl + 6.sp,
+                        fontSize = (d.textXl.value + 6).sp,
                         letterSpacing = (-0.5).sp,
                     )
                     Row(
