@@ -778,7 +778,7 @@ fun AboutScreen(nav: NavController) {
                 ) {
                     Text("❤️", fontSize = 20.sp)
                     Column {
-                        Text("Built with Kotlin & Jetpack Compose", color = White80, fontSize = d.textSm, fontWeight = FontWeight.Medium)
+                        Text("Everything you want", color = White80, fontSize = d.textSm, fontWeight = FontWeight.Medium)
                         Text("Designed and engineered by Axio Studio", color = White40, fontSize = d.textXs)
                     }
                 }
