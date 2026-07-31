@@ -181,15 +181,50 @@ class BackendStreamRepository @Inject constructor(
         season: Int, episode: Int, imdbId: String?, year: Int?,
     ) = buildStreamBody(tmdbId, mediaType, title, season, episode, imdbId, year)
 
-    /** Parse POST /streams response → StreamResult */
+    /** Parse POST /streams response → StreamResult
+     *
+     *  Upgraded to:
+     *  1. Skip non-playable streams (type == "iframe") — the backend marks
+     *     these with playable=false; trying to send an embed URL to ExoPlayer
+     *     fails silently. We pick the first stream where playable=true.
+     *  2. Use the backend's `type` field ("m3u8" / "mp4") to set isHls
+     *     correctly instead of relying solely on URL sniffing. This is needed
+     *     for torrent stream URLs (/api/v1/torrent/stream?magnet=…) and
+     *     debrid links (/api/v1/torrent/http?url=…), which are always MP4
+     *     progressive but don't contain ".m3u8" in the URL.
+     *  3. Collect ALL playable streams as a quality ladder so the player
+     *     can fall back to the next source if the first one fails.
+     */
     private fun parseStreamResponse(json: JSONObject): StreamResult? {
         val streams = json.optJSONArray("streams") ?: return null
         if (streams.length() == 0) return null
 
-        // Backend already sorted best-first
-        val first = streams.getJSONObject(0)
+        // Pick the first playable stream (backend sorted best-first)
+        var first: JSONObject? = null
+        for (i in 0 until streams.length()) {
+            val s = streams.getJSONObject(i)
+            // Skip iframe embeds — ExoPlayer can't play them
+            val streamType = s.optString("type", "m3u8")
+            val playable   = s.optBoolean("playable", streamType != "iframe")
+            if (playable && streamType != "iframe") {
+                first = s
+                break
+            }
+        }
+        first ?: return null  // all streams were iframes — nothing to play
+
         val url = first.optString("url").ifBlank { return null }
-        val isHls = url.contains(".m3u8", ignoreCase = true)
+
+        // Use the backend's explicit type field; fall back to URL sniffing
+        val streamType = first.optString("type", "")
+        val isHls = when {
+            streamType == "m3u8" -> true
+            streamType == "mp4"  -> false
+            // Torrent stream endpoints always return progressive MP4
+            url.contains("/api/v1/torrent/") -> false
+            // Classic URL sniff for all other cases
+            else -> url.contains(".m3u8", ignoreCase = true)
+        }
 
         // Headers
         val headers = mutableMapOf<String, String>()
@@ -199,16 +234,31 @@ class BackendStreamRepository @Inject constructor(
         val referer = first.optString("referer", "")
         val origin  = first.optString("origin",  "")
 
-        // Quality ladder
+        // Quality ladder — include all other playable streams as fallback sources.
+        // The player can cycle through these if the primary URL fails.
         val qualities = mutableListOf<QualityTrack>()
+        for (i in 0 until streams.length()) {
+            val s = streams.getJSONObject(i)
+            val sType    = s.optString("type", "m3u8")
+            val sPlayable = s.optBoolean("playable", sType != "iframe")
+            if (!sPlayable || sType == "iframe") continue
+            val sUrl = s.optString("url").ifBlank { continue }
+            qualities.add(QualityTrack(
+                label     = s.optString("quality", s.optString("name", "Auto")).ifBlank { "Auto" },
+                url       = sUrl,
+                bandwidth = 0L,
+            ))
+        }
+        // Also accept an explicit quality array embedded in the first stream
         first.optJSONArray("qualities")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val q = arr.getJSONObject(i)
-                qualities.add(QualityTrack(
-                    label = q.optString("label", "Auto"),
-                    url   = q.optString("url", url),
-                    bandwidth = q.optLong("bandwidth", 0),
-                ))
+                val qUrl = q.optString("url", url).ifBlank { continue }
+                val label = q.optString("label", "Auto")
+                if (qualities.none { it.url == qUrl }) {
+                    qualities.add(QualityTrack(label = label, url = qUrl,
+                        bandwidth = q.optLong("bandwidth", 0)))
+                }
             }
         }
 
