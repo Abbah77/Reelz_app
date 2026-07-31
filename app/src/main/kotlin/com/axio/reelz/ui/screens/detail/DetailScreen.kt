@@ -704,174 +704,79 @@ fun DownloadQualitySheet(
                     Spacer(Modifier.height(d.spaceMd + d.spaceXs))
 
                     qualities.forEachIndexed { index, track ->
-                        // Human-readable label from resolution code
-                        val descLabel = when {
-                            track.label.startsWith("1080") -> "Full HD"
-                            track.label.startsWith("720")  -> "HD"
-                            track.label.startsWith("480")  -> "Standard"
-                            track.label.startsWith("360")  -> "Low"
-                            track.label.startsWith("240")  -> "Very Low"
-                            track.label == "Best available"-> "Best"
-                            else                           -> "Standard"
-                        }
-                        val isBest    = index == 0
-                        val isSmall   = index == qualities.lastIndex && qualities.size > 1
-                        // Free tier sees every quality (never hidden — hiding makes the
-                        // feature look broken/missing) but anything above the config
-                        // cap is locked behind Premium with a clear, factual nudge,
-                        // matching the subtitle drawer's upsell pattern elsewhere in
-                        // the player. trackHeightPx("Auto"/"Best available") resolves
-                        // to Int.MAX_VALUE, so an unlabeled "best" track is correctly
-                        // treated as top-tier rather than silently unlocked.
-                        val isLocked  = trackHeightPx(track.label) > maxResolutionHeight
+                        // Resolution lock is driven ONLY by config.json via PremiumGate.
+                        // The app has zero authority here — it just reads maxResolutionHeight.
+                        val isLocked = trackHeightPx(track.label) > maxResolutionHeight
 
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(d.radiusLg - d.spaceXs))
-                                .background(if (isLocked) GlassSm else if (isBest) Brand.copy(.07f) else BgRaised)
+                                .background(if (isLocked) GlassSm else BgRaised)
                                 .border(
-                                    width = if (!isLocked && isBest) d.borderMed else d.borderThin,
-                                    color = if (isLocked) GlassBorderMd else if (isBest) Brand.copy(.35f) else GlassBorderMd,
-                                    shape = RoundedCornerShape(d.radiusLg - d.spaceXs),
+                                    d.borderThin,
+                                    GlassBorderMd,
+                                    RoundedCornerShape(d.radiusLg - d.spaceXs),
                                 )
                                 .clickable {
                                     if (isLocked) onLockedQualityTap() else onSelectQuality(track)
                                 }
-                                .padding(horizontal = d.spaceLg, vertical = d.spaceLg - d.spaceXs),
+                                .padding(horizontal = d.spaceLg, vertical = d.spaceLg),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXs),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceLg),
                         ) {
-                            // Resolution badge
-                            Box(
-                                Modifier
-                                    .width(d.avatarMd + d.spaceMd - d.spaceXxs)
-                                    .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                                    .background(if (isLocked) GlassSm else if (isBest) Brand.copy(.18f) else GlassSm)
-                                    .border(
-                                        d.borderThin,
-                                        if (isLocked) GlassBorderMd else if (isBest) Brand.copy(.4f) else GlassBorderMd,
-                                        RoundedCornerShape(d.radiusMd - d.spaceXxs),
-                                    )
-                                    .padding(vertical = d.spaceSm + d.spaceXxs),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    track.label,
-                                    color = if (isLocked) White40 else if (isBest) Brand else White,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = (d.textMd.value + 1).sp,
-                                )
-                            }
+                            // Exact resolution label from the backend — no rewriting
+                            Text(
+                                track.label,
+                                color = if (isLocked) White40 else White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = d.textLg,
+                                modifier = Modifier.weight(1f),
+                            )
 
-                            // Description + size
-                            Column(Modifier.weight(1f)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
-                                ) {
-                                    Text(
-                                        descLabel,
-                                        color = if (isLocked) White40 else White,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = (d.textMd.value + 1).sp,
-                                    )
-                                    when {
-                                        isLocked -> {
-                                            Row(
-                                                Modifier
-                                                    .clip(RoundedCornerShape(d.spaceXs))
-                                                    .background(Brand.copy(.15f))
-                                                    .border(d.borderThin, Brand.copy(.35f), RoundedCornerShape(d.spaceXs))
-                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
-                                            ) {
-                                                Icon(IconLock, null, tint = Brand, modifier = Modifier.size(d.iconXs - 1.dp))
-                                                Text(
-                                                    "PREMIUM",
-                                                    color = Brand,
-                                                    fontSize = d.textXxs,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    letterSpacing = 0.5.sp,
-                                                )
-                                            }
-                                        }
-                                        isBest -> {
-                                            Box(
-                                                Modifier
-                                                    .clip(RoundedCornerShape(d.spaceXs))
-                                                    .background(Brand.copy(.15f))
-                                                    .border(d.borderThin, Brand.copy(.3f), RoundedCornerShape(d.spaceXs))
-                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
-                                            ) {
-                                                Text(
-                                                    "BEST",
-                                                    color = Brand,
-                                                    fontSize = d.textXxs,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    letterSpacing = 0.5.sp,
-                                                )
-                                            }
-                                        }
-                                        isSmall -> {
-                                            Box(
-                                                Modifier
-                                                    .clip(RoundedCornerShape(d.spaceXs))
-                                                    .background(GlassSm)
-                                                    .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.spaceXs))
-                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
-                                            ) {
-                                                Text(
-                                                    "SMALLEST",
-                                                    color = White40,
-                                                    fontSize = d.textXxs,
-                                                    fontWeight = FontWeight.Bold,
-                                                    letterSpacing = 0.5.sp,
-                                                )
-                                            }
-                                        }
+                            // Right side: file size OR premium lock badge
+                            when {
+                                isLocked -> {
+                                    Row(
+                                        Modifier
+                                            .clip(RoundedCornerShape(d.spaceXs))
+                                            .background(Brand.copy(.15f))
+                                            .border(d.borderThin, Brand.copy(.35f), RoundedCornerShape(d.spaceXs))
+                                            .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
+                                    ) {
+                                        Icon(IconLock, null, tint = Brand, modifier = Modifier.size(d.iconXs - 1.dp))
+                                        Text(
+                                            "PREMIUM",
+                                            color = Brand,
+                                            fontSize = d.textXxs,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            letterSpacing = 0.5.sp,
+                                        )
                                     }
                                 }
-                                Spacer(Modifier.height(d.spaceXxs + 1.dp))
-                                when {
-                                    isLocked ->
-                                        Text(
-                                            "Upgrade to download in this quality",
-                                            color = White40,
-                                            fontSize = d.textSm,
-                                        )
-                                    track.estimatedSizeBytes > 0 ->
-                                        Text(
-                                            // Real measured size (HEAD Content-Length for MP4, or
-                                            // real segment sampling for HLS) shows plain — it's exact.
-                                            // Only the bandwidth-based fallback gets the "~" prefix.
-                                            if (track.isSizeExact) formatSize(track.estimatedSizeBytes)
-                                            else "~${formatSize(track.estimatedSizeBytes)}",
-                                            color = if (isBest) Brand.copy(.8f) else White60,
-                                            fontSize = d.textMd,
-                                            fontWeight = if (isBest) FontWeight.SemiBold else FontWeight.Normal,
-                                        )
-                                    track.bandwidth > 0 ->
-                                        Text(
-                                            "${"%.1f".format(track.bandwidth / 1_000_000.0)} Mbps",
-                                            color = White40,
-                                            fontSize = d.textSm,
-                                        )
+                                track.estimatedSizeBytes > 0 -> {
+                                    Text(
+                                        if (track.isSizeExact) formatSize(track.estimatedSizeBytes)
+                                        else "~${formatSize(track.estimatedSizeBytes)}",
+                                        color = White60,
+                                        fontSize = d.textSm,
+                                    )
                                 }
                             }
 
-                            // Download / lock arrow
                             Icon(
                                 if (isLocked) IconLock else IconDownloadCloud,
                                 null,
-                                tint = if (isLocked) White40 else if (isBest) Brand else White40,
-                                modifier = Modifier.size(if (isLocked) d.iconMd - 2.dp else d.iconMd + 2.dp),
+                                tint = if (isLocked) White40 else White60,
+                                modifier = Modifier.size(d.iconMd),
                             )
                         }
 
                         if (index < qualities.lastIndex || pendingLabels.isNotEmpty()) Spacer(Modifier.height(d.spaceMd))
                     }
+
 
                     // ── Skeleton placeholder rows for labels still being searched ──
                     // Sorted by resolution height so they slot into roughly the right

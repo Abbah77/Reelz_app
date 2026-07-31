@@ -48,15 +48,6 @@
 -keep class com.google.android.libraries.identity.** { *; }
 -keep class androidx.credentials.** { *; }
 
-# ── Native JNI ────────────────────────────────────────────────────────────────
--keep class com.axio.reelz.scanner.NativeBridge { *; }
--keepclasseswithmembernames class * { native <methods>; }
-
-# ── WebView JS interfaces ─────────────────────────────────────────────────────
--keepclassmembers class * {
-    @android.webkit.JavascriptInterface <methods>;
-}
-
 # ── Suppress common warnings ──────────────────────────────────────────────────
 -dontwarn com.google.errorprone.**
 -dontwarn sun.misc.**

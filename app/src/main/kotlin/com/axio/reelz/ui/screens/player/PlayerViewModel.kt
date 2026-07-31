@@ -5,8 +5,6 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.webkit.CookieManager
-import android.webkit.WebStorage
 import androidx.annotation.OptIn
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -200,13 +198,13 @@ class PlayerViewModel @Inject constructor(
         tmdbId: Int, mediaType: MediaType,
         season: Int, episode: Int,
         title: String, posterPath: String?,
-        imdbId: String? = null,
-        year: Int? = null,
         streamUrl: String? = null,
         streamIsHls: Boolean = false,
         streamReferer: String = "",
         streamOrigin: String = "",
         downloadId: String? = null,
+        imdbId: String? = null,
+        year: Int? = null,
     ) {
         currentTmdbId     = tmdbId
         currentType       = mediaType
@@ -320,25 +318,43 @@ class PlayerViewModel @Inject constructor(
             subtitlesEnabled = lastEnabled != null) }
     }
 
-    /** User-initiated: search subtitles via backend (premium only). */
-    fun searchOnlineSubtitles(languages: List<String> = emptyList()) {
+    /** User-initiated: search subtitles via backend (premium only).
+     *  [query] is a free-text language hint the user typed (e.g. "French", "fr").
+     *  An empty query defaults to English + the device locale language. */
+    fun searchOnlineSubtitles(query: String = "") {
         if (!premiumGate.canManualSubtitleSearch()) {
             _ui.update { it.copy(subtitleUpsellMessage =
                 "Manual subtitle search is a Premium feature. Upgrade to search any language.") }
             return
+        }
+        // Build language list from the user's query; fall back to en + device locale
+        val langs = if (query.isBlank()) {
+            val locale = java.util.Locale.getDefault().language.ifBlank { "en" }
+            listOf("en", locale).distinct()
+        } else {
+            // Accept comma-separated values like "en, fr" or a single word "French"
+            query.split(",").map { it.trim().lowercase() }.filter { it.isNotBlank() }
         }
         _ui.update { it.copy(isSubtitleSearching = true, subtitleSearchEmpty = false, subtitleUpsellMessage = null) }
         viewModelScope.launch(Dispatchers.IO) {
             val subs = streamRepo.searchSubtitles(
                 tmdbId = currentTmdbId, mediaType = currentType,
                 season = currentSeason, episode = currentEpisode,
-                languages = languages.ifEmpty { listOf("en") },
+                languages = langs,
             )
             if (subs.isNotEmpty()) {
                 val options = subs.map { SubtitleOption(it.language, it.label, it.url) }
-                _ui.update { it.copy(subtitleOptions = options, subtitles = subs,
-                    activeSubtitleLanguage = "off", subtitlesEnabled = false,
-                    isSubtitleSearching = false, subtitleSearchEmpty = false) }
+                _ui.update { it.copy(
+                    subtitleOptions    = options,
+                    subtitles          = subs,
+                    isSubtitleSearching = false,
+                    subtitleSearchEmpty = false,
+                    // Keep active language if one of the results matches, otherwise reset
+                    activeSubtitleLanguage = if (options.any { o -> o.language == _ui.value.activeSubtitleLanguage })
+                        _ui.value.activeSubtitleLanguage else "off",
+                    subtitlesEnabled = _ui.value.subtitlesEnabled &&
+                        options.any { o -> o.language == _ui.value.activeSubtitleLanguage },
+                )}
             } else {
                 _ui.update { it.copy(isSubtitleSearching = false, subtitleSearchEmpty = true) }
             }
@@ -384,19 +400,40 @@ class PlayerViewModel @Inject constructor(
     fun selectSubtitle(language: String) {
         val option = _ui.value.subtitleOptions.firstOrNull { it.language == language }
         val enabled = language != "off" && option != null
-        _ui.update { it.copy(activeSubtitleLanguage = if (enabled) language else "off",
-            subtitlesEnabled = enabled, selectedSubtitle = option?.label ?: "Off") }
+        val resolvedLanguage = if (enabled) language else "off"
+        _ui.update { it.copy(
+            activeSubtitleLanguage = resolvedLanguage,
+            subtitlesEnabled       = enabled,
+            selectedSubtitle       = option?.label ?: "Off",
+        )}
         trackSelector?.let { ts ->
-            if (enabled) ts.setParameters(ts.buildUponParameters().setPreferredTextLanguage(language))
-            else ts.setParameters(ts.buildUponParameters().setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT))
+            val params = ts.buildUponParameters()
+            if (enabled) {
+                // Set preferred language AND clear any forced-off flags so
+                // the track actually renders (fixes "on but nothing shown" bug)
+                ts.setParameters(params
+                    .setPreferredTextLanguage(language)
+                    .setIgnoredTextSelectionFlags(0))
+            } else {
+                // Clear language preference and suppress all text tracks
+                ts.setParameters(params
+                    .setPreferredTextLanguage(null)
+                    .setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED))
+            }
         }
     }
 
     fun toggleSubtitlesOnOff() {
         val cur = _ui.value
-        if (cur.subtitlesEnabled) selectSubtitle("off")
-        else (cur.subtitleOptions.firstOrNull { it.language == cur.activeSubtitleLanguage }
-            ?: cur.subtitleOptions.firstOrNull())?.let { selectSubtitle(it.language) }
+        if (cur.subtitlesEnabled) {
+            selectSubtitle("off")
+        } else {
+            // Try to restore last selected language; if none was ever chosen,
+            // fall back to first available option (fixes toggle doing nothing on first tap)
+            val target = cur.subtitleOptions.firstOrNull { it.language == cur.activeSubtitleLanguage }
+                ?: cur.subtitleOptions.firstOrNull()
+            if (target != null) selectSubtitle(target.language)
+        }
     }
 
     fun setSubtitleOffset(offsetMs: Int) { _ui.update { it.copy(subtitleOffsetMs = offsetMs) } }
@@ -406,14 +443,6 @@ class PlayerViewModel @Inject constructor(
     // ─────────────────────────────────────────────────────────────────────────
     // Player build / lifecycle
     // ─────────────────────────────────────────────────────────────────────────
-
-    private fun wipeCookies() {
-        try {
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
-            WebStorage.getInstance().deleteAllData()
-        } catch (_: Exception) {}
-    }
 
     private fun resetPlayer() {
         exoPlayer?.stop(); exoPlayer?.clearMediaItems(); exoPlayer?.release()
@@ -621,7 +650,6 @@ class PlayerViewModel @Inject constructor(
     fun retry() {
         _ui.update { it.copy(state = PlayerState.Resolving) }
         viewModelScope.launch {
-            withContext(Dispatchers.Main) { wipeCookies() }
             resolveAndPlay(currentTmdbId, currentType, currentTitle,
                 currentSeason, currentEpisode, currentImdbId, currentYear,
                 _ui.value.isOfflinePlayback)
@@ -634,7 +662,6 @@ class PlayerViewModel @Inject constructor(
         stopNetworkMonitor(context)
         exoPlayer?.stop(); exoPlayer?.clearMediaItems(); exoPlayer?.release()
         exoPlayer = null
-        wipeCookies()
     }
 }
 

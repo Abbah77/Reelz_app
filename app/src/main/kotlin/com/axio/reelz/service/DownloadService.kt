@@ -228,23 +228,45 @@ class DownloadService : Service() {
     }
 
     /**
-     * BUG 1 / UPGRADE P11: If resolveRequired is true (CDN token may have expired),
-     * re-resolve the stream to get a fresh URL before starting download.
+     * Re-resolve the download URL from the backend's /download endpoint.
+     *
+     * Critical: we use resolveDownloadLinks() — NOT resolve() — because the
+     * stream endpoint returns an HLS master URL optimised for adaptive playback,
+     * while the download endpoint returns a direct, per-quality MP4/TS link that
+     * the segment downloader can actually fetch. Using the stream URL here was
+     * the root cause of downloads appearing "added" in the queue but never
+     * actually completing: the service received a master playlist, picked the
+     * wrong variant (or fell back to the HLS URL), and the resulting file was
+     * either empty or corrupt.
      */
     private suspend fun resolveIfNeeded(item: DownloadItem): DownloadItem {
         if (!item.resolveRequired) return item
         return try {
             val mediaType = runCatching { MediaType.valueOf(item.mediaType) }.getOrNull()
                 ?: return item
-            val fresh = streamRepo.resolve(item.tmdbId, mediaType, item.title, item.season, item.episode)
-                ?: return item
 
-            // Use quality URL from resolved qualities, or fallback to master URL
-            val freshUrl = fresh.qualities.firstOrNull { it.label == item.quality }?.url ?: fresh.url
+            // Use the /download endpoint — returns direct per-quality links.
+            val links = streamRepo.resolveDownloadLinks(
+                tmdbId    = item.tmdbId,
+                mediaType = mediaType,
+                title     = item.title,
+                season    = item.season,
+                episode   = item.episode,
+            )
 
-            val headersJson = gson.toJson(fresh.headers)
-            downloadDao.updateStreamUrl(item.id, freshUrl, headersJson)
-            item.copy(streamUrl = freshUrl, headers = headersJson, resolveRequired = false)
+            if (links.isEmpty()) return item  // backend found nothing — keep current URL
+
+            // Pick the exact quality the user selected, then fall back to the
+            // highest-bandwidth link available (never the HLS master).
+            val freshTrack = links.firstOrNull { it.label == item.quality }
+                ?: links.maxByOrNull { it.bandwidth }
+                ?: links.first()
+
+            val freshUrl = freshTrack.url
+            if (freshUrl.isBlank()) return item  // guard against empty URL
+
+            downloadDao.updateStreamUrl(item.id, freshUrl, item.headers)  // headers stay the same for direct links
+            item.copy(streamUrl = freshUrl, resolveRequired = false)
         } catch (_: Exception) { item }
     }
 
@@ -371,7 +393,7 @@ class DownloadService : Service() {
     private suspend fun downloadHls(item: DownloadItem, output: File, dlId: String) {
         val headers   = parseHeaders(item.headers)
 
-        // UPGRADE P3: Use NativeBridge (C++) for fast M3U8 parsing
+        // Fetch master or media playlist text (pure Kotlin — NativeBridge C++ removed)
         val m3u8Text  = fetchText(item.streamUrl, headers)
         val baseUrl   = item.streamUrl.substringBeforeLast("/") + "/"
 

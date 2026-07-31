@@ -851,7 +851,7 @@ fun PlayerScreen(
             onToggleOff = { vm.toggleSubtitlesOnOff() },
             onTogglePersistent = { vm.togglePersistentSubtitle(it) },
             onOffsetChange = { vm.setSubtitleOffset(it) },
-            onSearchOnline = { vm.searchOnlineSubtitles() },
+            onSearchOnline = { query -> vm.searchOnlineSubtitles(query) },
             onUpgradeToPremium = {
                 // PlayerActivity is a separate Activity from the main NavHost, so the
                 // only way back to a Compose-navigable screen is to finish this one
@@ -906,7 +906,7 @@ private fun SubtitleDrawer(
     onToggleOff: () -> Unit,
     onTogglePersistent: (SubtitleOption) -> Unit,
     onOffsetChange: (Int) -> Unit,
-    onSearchOnline: () -> Unit,
+    onSearchOnline: (String) -> Unit,   // passes the user's typed query
     onUpgradeToPremium: () -> Unit,
 ) {
     val d = LocalDimensions.current
@@ -1045,18 +1045,24 @@ private fun SubtitleDrawer(
 
                     Spacer(Modifier.height(d.spaceMd - d.spaceXs))
 
-                    // ── Search bar ────────────────────────────────────────
+                    // ── Search / language filter bar ──────────────────────
+                    // Doubles as: (a) filter for already-loaded subtitles,
+                    // (b) language input for the "Search Online" button.
+                    val searchBorderColor = if (searchQuery.isNotEmpty()) AmberBorder else GlassBorderMd
+                    val searchBg          = if (searchQuery.isNotEmpty()) AmberGlass   else GlassSm
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                            .background(GlassSm)
-                            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
+                            .background(searchBg)
+                            .border(d.borderThin, searchBorderColor, RoundedCornerShape(d.radiusMd - d.spaceXxs))
                             .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                     ) {
-                        Icon(IconSearch, null, tint = White40, modifier = Modifier.size(d.iconSm + 2.dp))
+                        Icon(IconSearch, null,
+                            tint     = if (searchQuery.isNotEmpty()) Brand else White40,
+                            modifier = Modifier.size(d.iconSm + 2.dp))
                         BasicTextField(
                             value         = searchQuery,
                             onValueChange = { searchQuery = it },
@@ -1065,12 +1071,16 @@ private fun SubtitleDrawer(
                             decorationBox = { inner ->
                                 Box {
                                     if (searchQuery.isEmpty()) {
-                                        Text("Search language…", color = White40, fontSize = d.textSm)
+                                        Text(
+                                            if (ui.subtitleOptions.isNotEmpty()) "Filter or type a language…"
+                                            else "Type a language (e.g. French)…",
+                                            color = White40, fontSize = d.textSm,
+                                        )
                                     }
                                     inner()
                                 }
                             },
-                            modifier      = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f),
                         )
                         if (searchQuery.isNotEmpty()) {
                             Box(
@@ -1097,52 +1107,70 @@ private fun SubtitleDrawer(
                     verticalArrangement = Arrangement.spacedBy(d.spaceXs),
                 ) {
 
-                    // "Off" option
+                    // "Off" option — always visible
                     item {
                         SubtitleRow(
-                            label     = "Off",
-                            language  = "off",
-                            isActive  = !ui.subtitlesEnabled,
+                            label        = "Off",
+                            language     = "off",
+                            isActive     = !ui.subtitlesEnabled,
                             isPersistent = false,
-                            isEnabled = true,
-                            onClick   = { onSelect("off") },
+                            isEnabled    = true,
+                            onClick      = { onSelect("off") },
                         )
                     }
 
+                    // ── Available / downloaded subtitle tracks ────────────
                     if (ui.subtitleOptions.isNotEmpty()) {
-                        // Section header
-                        item {
-                            Text(
-                                if (ui.isOfflinePlayback) "Downloaded" else "Available",
-                                color    = White40,
-                                fontSize = d.textXxs,
-                                fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 1.sp,
-                                modifier = Modifier.padding(horizontal = d.spaceXs, vertical = d.spaceSm),
-                            )
-                        }
-
                         val filtered = ui.subtitleOptions.filter {
                             searchQuery.isBlank() ||
                             it.label.contains(searchQuery, ignoreCase = true) ||
                             it.language.contains(searchQuery, ignoreCase = true)
                         }
 
-                        items(filtered) { option ->
-                            SubtitleRow(
-                                label        = option.label,
-                                language     = option.language,
-                                isActive     = ui.subtitlesEnabled && ui.activeSubtitleLanguage == option.language,
-                                isPersistent = option.isPersistent,
-                                isEnabled    = option.isEnabled,
-                                onClick      = { onSelect(option.language) },
-                                onToggle     = if (option.isPersistent) ({ onTogglePersistent(option) }) else null,
-                            )
+                        if (filtered.isNotEmpty()) {
+                            item {
+                                Text(
+                                    if (ui.isOfflinePlayback) "DOWNLOADED" else "AVAILABLE",
+                                    color         = White40,
+                                    fontSize      = d.textXxs,
+                                    fontWeight    = FontWeight.SemiBold,
+                                    letterSpacing = 1.sp,
+                                    modifier      = Modifier.padding(horizontal = d.spaceXs, vertical = d.spaceSm),
+                                )
+                            }
+                            items(filtered) { option ->
+                                SubtitleRow(
+                                    label        = option.label,
+                                    language     = option.language,
+                                    isActive     = ui.subtitlesEnabled && ui.activeSubtitleLanguage == option.language,
+                                    isPersistent = option.isPersistent,
+                                    isEnabled    = option.isEnabled,
+                                    onClick      = { onSelect(option.language) },
+                                    onToggle     = if (option.isPersistent) ({ onTogglePersistent(option) }) else null,
+                                )
+                            }
+                        } else if (searchQuery.isNotEmpty()) {
+                            // Local filter found nothing — offer to search online for that language
+                            item {
+                                Spacer(Modifier.height(d.spaceSm))
+                                Text(
+                                    "No match in loaded subtitles",
+                                    color    = White40,
+                                    fontSize = d.textXs,
+                                    modifier = Modifier.padding(horizontal = d.spaceXs),
+                                )
+                            }
                         }
-                    } else if (searchQuery.isEmpty()) {
-                        // No subtitles loaded yet — show Search Online CTA
+                    }
+
+                    // ── Search Online CTA ─────────────────────────────────
+                    // Show whenever: no subtitles at all, OR user has typed a query.
+                    // This lets them search for additional languages even when some
+                    // subtitles already arrived embedded with the stream.
+                    val showSearchCta = ui.subtitleOptions.isEmpty() || searchQuery.isNotEmpty()
+                    if (showSearchCta) {
                         item {
-                            Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
+                            Spacer(Modifier.height(d.spaceMd))
                             Column(
                                 Modifier
                                     .fillMaxWidth()
@@ -1151,34 +1179,50 @@ private fun SubtitleDrawer(
                                 verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                             ) {
                                 when {
+                                    // ── Spinner while searching ──────────
                                     ui.isSubtitleSearching -> {
-                                        // Searching spinner
-                                        androidx.compose.material3.CircularProgressIndicator(
-                                            modifier = Modifier.size(d.iconMd),
-                                            color    = Brand,
+                                        CircularProgressIndicator(
+                                            modifier    = Modifier.size(d.iconMd + d.spaceXxs),
+                                            color       = Brand,
                                             strokeWidth = d.borderMed,
                                         )
                                         Text(
-                                            "Searching…",
+                                            "Searching for subtitles…",
                                             color    = White40,
                                             fontSize = d.textXs,
                                         )
                                     }
+
+                                    // ── Search returned nothing ──────────
                                     ui.subtitleSearchEmpty -> {
-                                        // Search done, nothing found
-                                        Text(
-                                            "No subtitles found",
-                                            color    = White40,
-                                            fontSize = d.textSm,
-                                            fontWeight = FontWeight.Medium,
+                                        Icon(
+                                            Icons.Default.Search,
+                                            contentDescription = null,
+                                            tint     = White40,
+                                            modifier = Modifier.size(d.iconMd),
                                         )
+                                        Text(
+                                            "No subtitles found${if (searchQuery.isNotEmpty()) " for \"$searchQuery\"" else ""}",
+                                            color      = White60,
+                                            fontSize   = d.textSm,
+                                            fontWeight = FontWeight.Medium,
+                                            textAlign  = TextAlign.Center,
+                                        )
+                                        Text(
+                                            "Try a different language name or check the spelling",
+                                            color     = White40,
+                                            fontSize  = d.textXs,
+                                            textAlign = TextAlign.Center,
+                                            lineHeight = (d.textXs.value * 1.5f).sp,
+                                        )
+                                        // Retry with same query
                                         Box(
                                             Modifier
                                                 .fillMaxWidth()
                                                 .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .background(GlassMd)
                                                 .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                                                .clickable { onSearchOnline() }
+                                                .clickable { onSearchOnline(searchQuery) }
                                                 .padding(vertical = d.spaceSm + d.spaceXxs),
                                             Alignment.Center,
                                         ) {
@@ -1190,13 +1234,14 @@ private fun SubtitleDrawer(
                                             )
                                         }
                                     }
+
+                                    // ── Upsell: free tier hit paywall ───
                                     ui.subtitleUpsellMessage != null -> {
-                                        // Free tier tried manual search — show upgrade nudge, never an error
                                         Text(
                                             ui.subtitleUpsellMessage,
                                             color      = White60,
                                             fontSize   = d.textXs,
-                                            textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
+                                            textAlign  = TextAlign.Center,
                                             lineHeight = (d.textXs.value * 1.45f).sp,
                                         )
                                         Box(
@@ -1217,27 +1262,34 @@ private fun SubtitleDrawer(
                                             )
                                         }
                                     }
+
+                                    // ── Default: Search Online button ────
                                     else -> {
-                                        // Default: user hasn't searched yet
-                                        Text(
-                                            if (ui.isOfflinePlayback) "Search for subtitles to download"
-                                            else "Search OpenSubtitles for this title",
-                                            color    = White40,
-                                            fontSize = d.textXs,
-                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                        )
+                                        if (ui.subtitleOptions.isEmpty()) {
+                                            // No subtitles at all yet — explain why
+                                            Text(
+                                                if (ui.isOfflinePlayback)
+                                                    "No subtitles saved for this download"
+                                                else
+                                                    "No subtitles came with this stream",
+                                                color    = White40,
+                                                fontSize = d.textXs,
+                                                textAlign = TextAlign.Center,
+                                            )
+                                        }
+                                        // Search Online CTA — works whether subtitles exist or not
                                         Box(
                                             Modifier
                                                 .fillMaxWidth()
                                                 .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .background(AmberGlass)
                                                 .border(d.borderThin, AmberBorder, RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                                                .clickable { onSearchOnline() }
+                                                .clickable { onSearchOnline(searchQuery) }
                                                 .padding(vertical = d.spaceSm + d.spaceXs),
                                             Alignment.Center,
                                         ) {
                                             Row(
-                                                verticalAlignment = Alignment.CenterVertically,
+                                                verticalAlignment     = Alignment.CenterVertically,
                                                 horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                                             ) {
                                                 Icon(
@@ -1247,12 +1299,21 @@ private fun SubtitleDrawer(
                                                     modifier = Modifier.size(d.iconSm + 2.dp),
                                                 )
                                                 Text(
-                                                    "Search Online",
+                                                    if (searchQuery.isNotEmpty()) "Search for \"$searchQuery\""
+                                                    else "Search Online",
                                                     color      = Brand,
                                                     fontSize   = d.textSm,
                                                     fontWeight = FontWeight.Bold,
                                                 )
                                             }
+                                        }
+                                        if (searchQuery.isEmpty()) {
+                                            Text(
+                                                "Searches for subtitles in your language",
+                                                color    = White40,
+                                                fontSize = d.textXxs,
+                                                textAlign = TextAlign.Center,
+                                            )
                                         }
                                     }
                                 }
@@ -1261,7 +1322,7 @@ private fun SubtitleDrawer(
                         }
                     }
 
-                    // Gap
+                    // Gap at bottom
                     item { Spacer(Modifier.height(d.spaceSm + d.spaceXxs)) }
                 }
 
