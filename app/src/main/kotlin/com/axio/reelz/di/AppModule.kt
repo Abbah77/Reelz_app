@@ -5,21 +5,15 @@ import androidx.room.Room
 import com.google.gson.Gson
 import com.axio.reelz.data.local.*
 import com.axio.reelz.data.remote.api.TmdbApi
-import com.axio.reelz.data.remote.api.OpenSubtitlesApi
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.data.repository.BackendAuthRepository
 import com.axio.reelz.data.repository.BackendSessionSource
-import com.axio.reelz.data.repository.ManualGrantSessionSource
-import com.axio.reelz.data.repository.OpenSubtitlesRepository
 import com.axio.reelz.data.repository.PaymentRepository
 import com.axio.reelz.data.repository.SessionSource
 import com.axio.reelz.data.repository.UserSessionRepository
 import com.axio.reelz.remoteconfig.PremiumGate
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
-import com.axio.reelz.scanner.DirectScanner
-import com.axio.reelz.scanner.SourceRegistry
-import com.axio.reelz.scanner.StreamEngine
-import com.axio.reelz.scanner.StreamResultCache
+import com.axio.reelz.stream.BackendStreamRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -53,16 +47,8 @@ object AppModule {
     fun providePremiumGate(remoteConfig: RemoteConfigRepository): PremiumGate =
         PremiumGate(remoteConfig)
 
-    @Provides @Singleton
-    fun provideSourceRegistry(remoteConfig: RemoteConfigRepository): SourceRegistry =
-        SourceRegistry(remoteConfig)
-
     // ── OkHttp clients ────────────────────────────────────────────────────────
 
-    /**
-     * TMDB client — API key is now resolved dynamically from remote config.
-     * The interceptor reads the live key on every request so key rotation is instant.
-     */
     @Provides @Singleton @Named("tmdb")
     fun provideTmdbOkHttp(remoteConfig: RemoteConfigRepository): OkHttpClient {
         val tmdbAuthInterceptor = Interceptor { chain ->
@@ -132,65 +118,17 @@ object AppModule {
         likedDao: LikedDao,
     ) = MediaRepository(api, cachedMediaDao, watchlistDao, watchHistoryDao, likedDao)
 
-    // ── Stream engine ─────────────────────────────────────────────────────────
+    // ── Backend stream engine (replaces entire scanner package + C++) ─────────
+    // The app now POSTs to the backend and receives stream URL + qualities +
+    // subtitles. No WebView, no C++, no source racing, no scan loop.
 
     @Provides @Singleton
-    fun provideStreamResultCache() = StreamResultCache()
-
-    @Provides @Singleton
-    fun provideStreamEngine(
-        @ApplicationContext ctx: Context,
-        directScanner: DirectScanner,
-        cache: StreamResultCache,
-        sourceRegistry: SourceRegistry,
-    ) = StreamEngine(ctx, directScanner, cache, sourceRegistry)
-
-    // ── OpenSubtitles ─────────────────────────────────────────────────────────
-
-    /**
-     * API key resolved at injection time from remote config.
-     * Falls back to the compile-time key if remote config hasn't loaded yet.
-     */
-    @Provides @Singleton @Named("osApiKey")
-    fun provideOsApiKey(remoteConfig: RemoteConfigRepository): String =
-        remoteConfig.activeOsKey().orEmpty()
-
-    @Provides @Singleton @Named("osUserAgent")
-    fun provideOsUserAgent(): String = "Reelz v2.0"
-
-    @Provides @Singleton @Named("opensubtitles")
-    fun provideOsOkHttp(): OkHttpClient = OkHttpClient.Builder()
-        .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
-
-    @Provides @Singleton
-    fun provideOpenSubtitlesApi(@Named("opensubtitles") client: OkHttpClient): OpenSubtitlesApi =
-        Retrofit.Builder()
-            .baseUrl("https://api.opensubtitles.com/api/v1/")
-            .client(client)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(OpenSubtitlesApi::class.java)
-
-    @Provides @Singleton
-    fun provideOpenSubtitlesRepository(
-        api: OpenSubtitlesApi,
-        @Named("osApiKey") apiKey: String,
-        @Named("osUserAgent") userAgent: String,
-    ) = OpenSubtitlesRepository(api, apiKey, userAgent)
+    fun provideBackendStreamRepository(
+        remoteConfig: RemoteConfigRepository,
+    ): BackendStreamRepository = BackendStreamRepository(remoteConfig)
 
     // ── Premium session ───────────────────────────────────────────────────────
 
-    /**
-     * Production: BackendSessionSource — talks to the FastAPI backend on Render.
-     * Falls back to local cache (24 h TTL). If backend is unreachable, returns
-     * null and PremiumGate defaults to FREE (Rule 6: fail safe).
-     *
-     * To revert to the no-backend flow during development, swap this for:
-     *   ManualGrantSessionSource(remoteConfig)
-     */
     @Provides @Singleton
     fun provideSessionSource(
         remoteConfig: RemoteConfigRepository,

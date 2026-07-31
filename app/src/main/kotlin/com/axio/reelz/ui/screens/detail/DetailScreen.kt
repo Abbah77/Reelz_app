@@ -41,8 +41,7 @@ import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.remoteconfig.PremiumGate
-import com.axio.reelz.scanner.NativeBridge
-import com.axio.reelz.scanner.StreamEngine
+import com.axio.reelz.stream.BackendStreamRepository
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.downloads.formatSize
 import com.axio.reelz.ui.screens.player.PlayerActivity
@@ -120,7 +119,7 @@ class DetailViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val downloadRepo: DownloadRepository,
     private val downloadDao: DownloadDao,
-    private val engine: StreamEngine,
+    private val streamRepo: BackendStreamRepository,
     private val adEngine: com.axio.reelz.ads.AdEngine,
     private val premiumGate: PremiumGate,
     @javax.inject.Named("download") private val httpClient: okhttp3.OkHttpClient,
@@ -143,7 +142,7 @@ class DetailViewModel @Inject constructor(
         /**
          * The current tier's max download height in px (e.g. 480 for free, 2160
          * for premium), read once when the sheet opens. <= 0 means "no cap" —
-         * see PremiumGate.isResolutionAllowed(). Drives the lock badge on any
+         * see PremiumGate.isDownloadResolutionAllowed(). Drives the lock badge on any
          * QualityTrack whose parsed height exceeds this.
          */
         val maxDownloadResolutionHeight: Int = Int.MAX_VALUE,
@@ -180,7 +179,6 @@ class DetailViewModel @Inject constructor(
      * UPGRADE P1: Cached stream result from the first resolve() call in openDownloadSheet().
      * Reused in enqueueDownload() to eliminate the duplicate engine.resolve() call.
      */
-    private var cachedStreamResult: com.axio.reelz.data.model.StreamResult? = null
 
     /**
      * Per-label stream mapping (label -> the StreamResult/source that actually
@@ -191,15 +189,9 @@ class DetailViewModel @Inject constructor(
      * wasn't the most recently discovered one. Cleared/rebuilt each time the
      * sheet opens for a (possibly different) title.
      */
-    private val streamForLabel = HashMap<String, com.axio.reelz.data.model.StreamResult>()
 
-    /**
-     * UPGRADE P9: Pre-resolved stream started in background after detail loads.
-     * Used if available when user taps Play or Download.
-     */
+    /** Pre-resolved stream — set in background after detail loads. */
     internal var preResolvedStream: com.axio.reelz.data.model.StreamResult? = null
-    /** Live prefetch state from the engine — exposed so the composable can read it on tap. */
-    val enginePrefetchState get() = engine.prefetchState
 
     /**
      * Pre-parsed quality list from the master playlist.
@@ -250,49 +242,23 @@ class DetailViewModel @Inject constructor(
                     }
                 }
 
-                // Stage 3 — kick off prefetch via engine (fires the racing resolver in background).
-                // The engine exposes prefetchState: StateFlow so the player subscribes to it
-                // and starts playing the moment the result arrives — no duplicate network call.
-                engine.prefetch(viewModelScope, tmdbId, mediaType)
-
-                // Also subscribe here so we can populate preResolvedStream / preResolvedQualities
-                // for the download sheet (same result, zero extra work).
+                // Stage 3 — pre-resolve stream in background via backend.
+                // Single POST → backend returns URL + qualities immediately.
+                // Result stored in preResolvedStream for instant download sheet and player start.
                 viewModelScope.launch {
-                    engine.prefetchState
-                        .filter { it is com.axio.reelz.scanner.PrefetchState.Ready }
-                        .take(1)
-                        .collect { state ->
-                            val stream = (state as com.axio.reelz.scanner.PrefetchState.Ready).result
+                    try {
+                        val stream = streamRepo.resolve(
+                            tmdbId = tmdbId, mediaType = mediaType,
+                            title = _ui.value.detail?.title ?: "",
+                        )
+                        if (stream != null) {
                             preResolvedStream = stream
-                            try {
-                                var qualities = when {
-                                    stream.qualities.isNotEmpty() -> normalizeQualities(
-                                        stream.qualities,
-                                        _ui.value.detail?.runtime,
-                                    )
-                                    stream.isHls -> parseMasterPlaylist(
-                                        stream.url, stream.headers,
-                                        _ui.value.detail?.runtime,
-                                    )
-                                    else -> emptyList()
-                                }
-                                if (qualities.isEmpty()) {
-                                    // No variant ladder — single real quality. Use the
-                                    // source's own reported quality label if it looks like
-                                    // a real resolution (free — no network call), otherwise
-                                    // fall back to a bandwidth tier / "Best available".
-                                    qualities = listOf(
-                                        com.axio.reelz.scanner.QualityListParsing.probeSingleQuality(
-                                            url = stream.url,
-                                            headers = stream.headers,
-                                            runtimeMinutes = _ui.value.detail?.runtime,
-                                            knownLabelHint = stream.quality,
-                                        )
-                                    )
-                                }
-                                preResolvedQualities[qualityKey(tmdbId)] = qualities
-                            } catch (_: Exception) {}
+                            val qualities = stream.qualities.ifEmpty {
+                                listOf(QualityTrack(stream.quality.ifBlank { "Auto" }, stream.url))
+                            }
+                            preResolvedQualities[qualityKey(tmdbId)] = qualities
                         }
+                    } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
                 _ui.update { it.copy(isLoading = false, error = friendlyDetailError(e)) }
@@ -360,138 +326,56 @@ class DetailViewModel @Inject constructor(
         episodeTitle: String,
         detail: MediaDetail,
     ) {
-        val targetLabels = setOf("1080p", "720p", "480p", "360p", "240p")
-
-        // ── Sheet opens THIS SAME FRAME — no spinner, no wait. ──────────────
-        // isResolvingQualities is no longer used to gate the whole sheet
-        // behind a spinner; it's kept (defaulted false-equivalent below via
-        // skeleton rows) only for the true empty-list case at the very end.
         _ui.update {
             it.copy(
                 showDownloadSheet           = true,
                 downloadQualities           = emptyList(),
                 isResolvingQualities        = false,
-                pendingQualityLabels        = targetLabels,
-                downloadEnqueued             = false,
+                pendingQualityLabels        = emptySet(),
+                downloadEnqueued            = false,
                 pendingDownloadSeason       = season,
                 pendingDownloadEpisode      = episode,
                 pendingDownloadTitle        = episodeTitle.ifBlank { detail.title },
-                // Read once per sheet-open — config is the source of truth, and this
-                // mirrors exactly what PlayerViewModel.buildPlayer() applies for
-                // streaming, so "what counts as locked" never disagrees between
-                // watching and downloading the same title.
-                maxDownloadResolutionHeight = premiumGate.maxResolutionHeight()
+                maxDownloadResolutionHeight = premiumGate.maxDownloadResolutionHeight()
                     .let { h -> if (h <= 0) Int.MAX_VALUE else h },
             )
         }
 
         val key = qualityKey(tmdbId, season, episode)
 
-        // ── Instant fast path: if we already parsed this title's qualities in
-        // the background, show them immediately as real rows, skeletons for
-        // the rest — then still let the live flow below top up anything
-        // missing (e.g. a source with a resolution the pre-resolved one
-        // didn't have) exactly like before, just incrementally now.
-        streamForLabel.clear()
+        // Fast path: use qualities resolved in background when detail loaded
         preResolvedQualities[key]?.let { cached ->
-            cachedStreamResult = preResolvedStream
-            preResolvedStream?.let { s -> cached.forEach { t -> streamForLabel[t.label] = s } }
-            _ui.update {
-                it.copy(
-                    downloadQualities    = cached,
-                    pendingQualityLabels = targetLabels - cached.map { t -> t.label }.toSet(),
-                )
+            if (cached.isNotEmpty()) {
+                _ui.update { it.copy(downloadQualities = cached) }
+                return
             }
         }
 
-        // Labels no source has ruled out yet — starts as "unknown, could be
-        // any of the 5" and narrows down as each responding source reports
-        // its actual ladder. A label only keeps a skeleton row once EVERY
-        // source that has responded so far either found it or hasn't been
-        // heard from yet; the moment every source that HAS responded agrees
-        // a label doesn't exist, its skeleton is retired instead of waiting
-        // out the full timeout. This is what stops the sheet from always
-        // showing 5 rows when a title only ever has 3 or 4.
-        val stillPossible = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-        stillPossible.addAll(targetLabels)
-        // The cached/pre-resolved rows above are already confirmed real —
-        // keep them "possible" (they'll just get filtered out of the pending
-        // set by "already have it" below) but nothing needs removing here.
-
-        // ── Live, incremental resolution — every quality found from ANY
-        // source (DirectScanner first, WebView fallback kept for JS-only
-        // sources) is shown the instant it's found, not batched. Skeleton
-        // rows for labels not yet found stay visible and simply get replaced
-        // one at a time. This never removes/relocks a quality — only adds.
+        // Single POST to backend — returns all quality links immediately.
+        // No scan loop, no skeleton rows, no racing sources.
         viewModelScope.launch {
             try {
-                engine.resolveAllQualitiesForDownloadFlow(
-                    tmdbId = tmdbId,
+                val links = streamRepo.resolveDownloadLinks(
+                    tmdbId    = tmdbId,
                     mediaType = mediaType,
-                    season = season,
-                    episode = episode,
-                    targetLabels = targetLabels,
-                ).collect { found ->
-                    // Ignore late results if the sheet moved on to a different title.
-                    if (!_ui.value.showDownloadSheet ||
-                        _ui.value.pendingDownloadSeason != season ||
-                        _ui.value.pendingDownloadEpisode != episode) return@collect
-
-                    val current = _ui.value.downloadQualities
-                    val alreadyHad = current.any { it.label == found.track.label }
-
-                    // A responding source's ladder is real evidence: any target
-                    // label it did NOT include is a label THIS source doesn't
-                    // have. We only drop a label's skeleton once we've narrowed
-                    // it down this way and it's still not found by anyone.
-                    if (found.sourceLadderLabels.isNotEmpty()) {
-                        val missingFromThisSource = targetLabels - found.sourceLadderLabels
-                        // Don't drop labels we already have real rows for.
-                        stillPossible.removeAll(missingFromThisSource - current.map { it.label }.toSet())
-                    }
-
-                    if (alreadyHad) {
-                        // Already have this label as a real row — still apply the
-                        // narrowed pending set below in case this source told us
-                        // about other labels it lacks.
-                        _ui.update {
-                            it.copy(pendingQualityLabels = stillPossible - current.map { t -> t.label }.toSet())
-                        }
-                        return@collect
-                    }
-
-                    val updated = (current + found.track)
-                        .sortedByDescending { trackHeightPx(it.label) }
-
-                    cachedStreamResult = found.stream
-                    streamForLabel[found.track.label] = found.stream
-                    preResolvedQualities[key] = updated
-                    stillPossible.add(found.track.label) // confirmed real, not just "possible"
-
-                    _ui.update {
-                        it.copy(
-                            downloadQualities    = updated,
-                            pendingQualityLabels = stillPossible - updated.map { t -> t.label }.toSet(),
-                        )
-                    }
+                    title     = _ui.value.detail?.title ?: "",
+                    season    = season,
+                    episode   = episode,
+                )
+                val qualities = if (links.isNotEmpty()) {
+                    normalizeQualities(links, _ui.value.detail?.runtime)
+                } else {
+                    val fallbackUrl = preResolvedStream?.url ?: ""
+                    listOf(QualityTrack("Best available", fallbackUrl))
                 }
-            } catch (e: Exception) {
-                // A collection error never wipes rows already shown — just stop
-                // waiting for more. Only clear pending skeletons.
-                _ui.update { it.copy(pendingQualityLabels = emptySet()) }
-            } finally {
-                // Whatever the flow found (possibly nothing) is final now —
-                // remaining skeleton labels quietly disappear rather than spin
-                // forever, matching the flow's own hard cap.
+                preResolvedQualities[key] = qualities
+                _ui.update { it.copy(downloadQualities = qualities, pendingQualityLabels = emptySet()) }
+            } catch (_: Exception) {
                 _ui.update { it.copy(pendingQualityLabels = emptySet()) }
             }
         }
     }
 
-    /** Best-effort headers to use for size sampling: take the first source's headers. */
-    private fun cachedHeadersFor(
-        merged: List<Pair<QualityTrack, com.axio.reelz.data.model.StreamResult>>,
-    ): Map<String, String> = merged.firstOrNull()?.second?.headers ?: emptyMap()
 
     fun dismissDownloadSheet() {
         _ui.update { it.copy(showDownloadSheet = false, downloadEnqueued = false) }
@@ -505,21 +389,14 @@ class DetailViewModel @Inject constructor(
         // UI layer. If this were ever reached for a locked track (stale UI state,
         // future call site, etc.) we still refuse rather than silently honoring a
         // resolution above the user's config-defined tier.
-        if (!premiumGate.isResolutionAllowed(trackHeightPx(track.label))) {
+        if (!premiumGate.isDownloadResolutionAllowed(trackHeightPx(track.label))) {
             _ui.update { it.copy(showResolutionLockSheet = true) }
             return
         }
 
         viewModelScope.launch {
-            // UPGRADE P1: Use CACHED stream result — no second engine.resolve() call.
-            // The cachedStreamResult was stored when openDownloadSheet() ran.
-            // This eliminates the 10–20 second wait after quality selection.
-            // Use the headers belonging to whichever source actually produced
-            // THIS track, not just whichever source responded most recently —
-            // otherwise a download could pair one source's headers/referer
-            // with a different source's stream URL and fail or get blocked.
-            val cachedHeaders = streamForLabel[track.label]?.headers
-                ?: cachedStreamResult?.headers ?: emptyMap()
+            // Use headers from the pre-resolved stream (set when detail loaded).
+            val cachedHeaders = preResolvedStream?.headers ?: emptyMap()
             val qualityTracks = _ui.value.downloadQualities
 
             downloadRepo.enqueue(
@@ -540,16 +417,6 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    /**
-     * UPGRADE P2 + P3 + P14: Fast M3U8 master playlist parser.
-     *
-     * Uses NativeBridge (C++) for single-pass parsing — 10–50x faster than Kotlin loop.
-     * Uses bandwidth × runtime for size estimation — ZERO extra network calls.
-     * Falls back to a 2-hour estimate when runtime is unavailable.
-     * Uses the injected shared OkHttpClient — warm connections, DNS cache, HTTP/2.
-     *
-     * Result: quality list appears in < 200ms after master playlist is fetched.
-     */
     /**
      * Normalizes a pre-resolved quality list:
      *  - Assigns bandwidth-tier labels when label is "Auto" or blank.
@@ -587,53 +454,8 @@ class DetailViewModel @Inject constructor(
         .sortedByDescending { it.bandwidth }
     }
 
-    private suspend fun parseMasterPlaylist(
-        masterUrl: String,
-        headers: Map<String, String>,
-        runtimeMinutes: Int? = null,
-    ): List<QualityTrack> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        try {
-            val req = okhttp3.Request.Builder().url(masterUrl).apply {
-                headers.forEach { (k, v) -> addHeader(k, v) }
-            }.build()
-            val body = httpClient.newCall(req).execute().use { it.body?.string() } ?: return@withContext emptyList()
-
-            // UPGRADE P3: NativeBridge C++ parsing — single linear pass
-            val rawVariants = com.axio.reelz.scanner.NativeBridge.variants(body, masterUrl)
-            if (rawVariants.isEmpty()) return@withContext emptyList()
-
-            // UPGRADE P2: Bandwidth-based size estimation — ZERO extra network calls.
-            // estimatedBytes = (bandwidth_bps × runtime_seconds × 0.55) / 8
-            // Apply 0.55 correction: declared HLS bandwidth is peak/theoretical;
-            // real encoded streams average ~55% of declared.
-            // Fallback to 2-hour runtime (7200s) when TMDB doesn't supply one.
-            val runtimeSec = when {
-                runtimeMinutes != null && runtimeMinutes > 0 -> runtimeMinutes * 60L
-                else -> 7200L  // 2-hour fallback so size is always shown
-            }
-
-            rawVariants.map { variant ->
-                // Fix "Auto" labels using bandwidth tiers when no resolution was parsed
-                val fixedLabel = when {
-                    variant.label != "Auto" && variant.label.isNotBlank() -> variant.label
-                    variant.bandwidth >= 8_000_000 -> "1080p"
-                    variant.bandwidth >= 4_000_000 -> "1080p"
-                    variant.bandwidth >= 2_000_000 -> "720p"
-                    variant.bandwidth >= 1_000_000 -> "480p"
-                    variant.bandwidth >= 400_000   -> "360p"
-                    variant.bandwidth >  0          -> "240p"
-                    else -> "Auto"
-                }
-                val estimatedSize = if (variant.bandwidth > 0) {
-                    ((variant.bandwidth * runtimeSec) / 8L * 55L) / 100L
-                } else 0L
-                variant.copy(label = fixedLabel, estimatedSizeBytes = estimatedSize)
-            }
-            .groupBy { it.label }
-            .map { (_, v) -> v.maxByOrNull { it.bandwidth }!! }
-            .sortedByDescending { it.bandwidth }
-        } catch (_: Exception) { emptyList() }
-    }
+    // parseMasterPlaylist removed — quality ladder now comes from the backend
+    // in the resolve/download response. No HLS fetch needed client-side.
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -656,11 +478,9 @@ fun DetailScreen(
 
         // Helper so both the ad-dismissed path and the direct path share one call-site
         fun startPlayerActivity() {
-            // Check engine's live prefetchState first — handles the race where the
-            // subscriber coroutine has not updated preResolvedStream yet but the engine
-            // already finished. Either path avoids a second resolve() in the player.
+            // Use pre-resolved stream if background resolve finished; otherwise
+            // PlayerViewModel will call the backend on init (one POST, milliseconds).
             val readyStream = vm.preResolvedStream
-                ?: (vm.enginePrefetchState.value as? com.axio.reelz.scanner.PrefetchState.Ready)?.result
             ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
                 putExtra("tmdbId",     d.tmdbId)
                 putExtra("mediaType",  d.mediaType.name)

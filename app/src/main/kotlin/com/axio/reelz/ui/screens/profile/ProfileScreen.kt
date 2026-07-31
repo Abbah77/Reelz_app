@@ -339,7 +339,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                         Text("Sync your watchlist", color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
                         Spacer(Modifier.height(d.spaceXs))
                         Text(
-                            "Your likes, saves & history are always saved locally",
+                            "Login to save your favorites",
                             color = White60, fontSize = d.textSm, textAlign = TextAlign.Center, lineHeight = (d.textSm.value * 1.5f).sp,
                         )
                         Spacer(Modifier.height(d.spaceLg))
@@ -374,7 +374,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                                 else "Premium active" to "Unlimited downloads, 4K, no ads"
                             com.axio.reelz.remoteconfig.UserState.PREMIUM_EXPIRED ->
                                 "Premium expired" to "Renew to get your benefits back"
-                            else -> "Go Premium" to "4K streaming, unlimited downloads, no ads"
+                            else -> "Go Premium" to "Upto 4K streaming, unlimited downloads, no ads"
                         }
                         Text(title, color = White, fontWeight = FontWeight.Bold, fontSize = (d.textMd.value + 1).sp)
                         Text(subtitle, color = White60, fontSize = d.textXs)
@@ -424,7 +424,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                 // Subtle hint about auto-removal
                 item {
                     Text(
-                        "Items auto-remove after you watch 90% of them",
+                        "Temporary save the movies to watch",
                         color = White30,
                         fontSize = d.textXs,
                         textAlign = TextAlign.Center,

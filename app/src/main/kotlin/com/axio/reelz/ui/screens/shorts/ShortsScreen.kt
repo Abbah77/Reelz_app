@@ -1,6 +1,7 @@
 package com.axio.reelz.ui.screens.shorts
 
 import android.content.Context
+import java.io.File
 import android.view.ViewGroup
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
@@ -35,7 +36,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -50,12 +55,24 @@ import com.axio.reelz.data.model.ShortVideo
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
 import com.axio.reelz.remoteconfig.ShortCategory
-import com.axio.reelz.scanner.StreamHeaders
+// StreamHeaders removed — using inline UA constant below
 import com.axio.reelz.ui.components.CinematicSpinner
+import com.axio.reelz.ui.components.IconBookmark
+import com.axio.reelz.ui.components.IconBookmarkFilled
+import com.axio.reelz.ui.components.IconComment
+import com.axio.reelz.ui.components.IconHeart
+import com.axio.reelz.ui.components.IconHeartFilled
+import com.axio.reelz.ui.components.IconLock
+import com.axio.reelz.ui.components.IconSearch
+import com.axio.reelz.ui.components.IconVolumeOff
+import com.axio.reelz.ui.components.IconVolumeOn
 import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -125,95 +142,48 @@ private const val LOOKAHEAD_PAGES = PLAYER_POOL_SIZE - 2
 private const val LOAD_MORE_THRESHOLD = 5
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Feed mode
+// Disk playback cache — the actual fix for "scroll back re-downloads".
+//
+// Media3's SimpleCache persists downloaded byte ranges to disk keyed by URL.
+// Wrapping the HTTP data source in CacheDataSource.Factory means:
+//   • A video played once stays on disk (LRU-evicted at CACHE_MAX_BYTES) —
+//     scrolling back to it re-reads from disk instantly, no network at all,
+//     matching TikTok's own "already seen this session" behavior.
+//   • A partially-buffered video that gets interrupted (fast scroll away
+//     mid-download) resumes from where it left off instead of restarting,
+//     because the cache stores whatever byte ranges were actually written.
+//   • SimpleCache MUST be a single process-wide instance — Media3 throws
+//     IllegalStateException if the same cache directory is opened twice
+//     concurrently, which is exactly what would happen if this were
+//     `remember`'d per-composable instead of held in a singleton.
 // ─────────────────────────────────────────────────────────────────────────────
+
+private const val SHORTS_CACHE_MAX_BYTES = 300L * 1024 * 1024 // 300MB on-disk budget
+
+private object ShortsDiskCache {
+    @Volatile private var instance: SimpleCache? = null
+
+    fun get(context: Context): SimpleCache {
+        return instance ?: synchronized(this) {
+            instance ?: SimpleCache(
+                File(context.cacheDir, "shorts_media_cache"),
+                LeastRecentlyUsedCacheEvictor(SHORTS_CACHE_MAX_BYTES),
+                StandaloneDatabaseProvider(context),
+            ).also { instance = it }
+        }
+    }
+}
+
+
 
 enum class FeedMode { FOR_YOU, DISCOVERY }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Icons (unchanged)
+// Icons — Heart / Bookmark / Comment / Share / Volume / Search all now come
+// from CommonComponents.kt (shared, higher-fidelity Bootstrap-style vectors)
+// instead of the crude hand-drawn arcs that used to live here. Only IconClose
+// stays local since there's no shared equivalent yet.
 // ─────────────────────────────────────────────────────────────────────────────
-
-private val IconHeart: ImageVector get() = ImageVector.Builder("Heart", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(20.84f, 4.61f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 8.5f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 3.16f, 4.61f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 20f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 20.84f, 4.61f); close()
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconHeartFilled: ImageVector get() = ImageVector.Builder("HeartFilled", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(20.84f, 4.61f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 8.5f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 3.16f, 4.61f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 12f, 20f)
-        arcTo(5.5f, 5.5f, 0f, false, false, 20.84f, 4.61f); close()
-    }, fill = SolidColor(Color(0xFFFF2D55)))
-}.build()
-
-private val IconBookmark: ImageVector get() = ImageVector.Builder("Bookmark", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(5f, 3f); lineTo(19f, 3f); lineTo(19f, 21f); lineTo(12f, 16f); lineTo(5f, 21f); close()
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f, fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconBookmarkFilled: ImageVector get() = ImageVector.Builder("BookmarkFilled", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(5f, 3f); lineTo(19f, 3f); lineTo(19f, 21f); lineTo(12f, 16f); lineTo(5f, 21f); close()
-    }, fill = SolidColor(Color(0xFF0A84FF)))
-}.build()
-
-private val IconShare: ImageVector get() = ImageVector.Builder("Share", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(4f, 12f); lineTo(20f, 12f)
-        moveTo(13f, 5f); lineTo(20f, 12f); lineTo(13f, 19f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
-       fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconComment: ImageVector get() = ImageVector.Builder("Comment", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(21f, 15f)
-        arcTo(2f, 2f, 0f, false, true, 19f, 17f); lineTo(7f, 17f)
-        lineTo(3f, 21f); lineTo(3f, 5f)
-        arcTo(2f, 2f, 0f, false, true, 5f, 3f); lineTo(19f, 3f)
-        arcTo(2f, 2f, 0f, false, true, 21f, 5f); close()
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
-       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconVolumeOff: ImageVector get() = ImageVector.Builder("VolOff", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(11f, 5f); lineTo(6f, 9f); lineTo(2f, 9f)
-        lineTo(2f, 15f); lineTo(6f, 15f); lineTo(11f, 19f); close()
-        moveTo(23f, 9f); lineTo(17f, 15f)
-        moveTo(17f, 9f); lineTo(23f, 15f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconVolumeOn: ImageVector get() = ImageVector.Builder("VolOn", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(11f, 5f); lineTo(6f, 9f); lineTo(2f, 9f)
-        lineTo(2f, 15f); lineTo(6f, 15f); lineTo(11f, 19f); close()
-        moveTo(15.54f, 8.46f); arcTo(5f, 5f, 0f, false, true, 15.54f, 15.54f)
-        moveTo(19.07f, 4.93f); arcTo(10f, 10f, 0f, false, true, 19.07f, 19.07f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
-       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
-}.build()
-
-private val IconSearch: ImageVector get() = ImageVector.Builder("Search", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(11f, 11f); arcTo(7f, 7f, 0f, false, true, 4f, 11f); arcTo(7f, 7f, 0f, false, true, 11f, 4f)
-        arcTo(7f, 7f, 0f, false, true, 18f, 11f); arcTo(7f, 7f, 0f, false, true, 11f, 11f)
-        moveTo(16f, 16f); lineTo(20f, 20f)
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
-       strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
-}.build()
 
 private val IconClose: ImageVector get() = ImageVector.Builder("Close", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
@@ -240,7 +210,38 @@ private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = bu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ViewModel  —  ALL scraping happens server-side via GET /shorts/feed
+// ViewModel  —  videos are resolved directly from archive.org, no backend.
+//
+// HOW SOURCING WORKS NOW
+// ───────────────────────
+// shorts.json config (ShortsConfig) lists archive.org item identifiers —
+// nothing else. Each identifier is a bulk-upload item that can itself
+// contain dozens/hundreds of video files. Resolving one identifier means:
+//
+//   GET {archive_org.metadata_base_url}/{identifier}
+//     → JSON with `server`, `dir`, and a `files[]` array
+//   for each file that matches shorts.video_extensions and isn't excluded:
+//     direct playable URL = https://{server}{dir}/{urlEncode(file.name)}
+//
+// That's it — no auth, no scraping, no JS execution, just one JSON fetch
+// per identifier. A pool of identifiers can yield hundreds of individual
+// videos from a handful of config entries.
+//
+// PAGINATION + RANDOMNESS
+// ────────────────────────
+// Per product decision: fully random shuffle on every load, infinite
+// scroll. Concretely:
+//   • On (re)load, the full identifier pool for the active feed is
+//     shuffled, then resolved `items_per_page` identifiers at a time.
+//   • Each resolved identifier's files are also individually shuffled
+//     before being appended, so even a single big bulk item doesn't
+//     play its videos in upload order.
+//   • loadMore() advances to the next unresolved slice of the shuffled
+//     identifier pool; once the pool is exhausted it reshuffles and
+//     starts again (true infinite scroll — content repeats eventually,
+//     but never in the same order twice).
+//   • Nothing here is hardcoded: pool size, page size, extension
+//     filters, and exclusion rules all come from ShortsConfig.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @HiltViewModel
@@ -252,16 +253,109 @@ class ShortsViewModel @Inject constructor(
 
     val shortsConfig       get() = remoteConfig.shortsConfig()
     private val categories get() = shortsConfig.categories
-    // normalizedUrl auto-adds "https://" if config.json's backend_url is
-    // ever saved without a scheme — see BackendConfig.normalizedUrl for why.
-    private val backendUrl get() = remoteConfig.backendConfig().normalizedUrl
-    private val forYouSubs get() = shortsConfig.forYouSubs.trim()
+    private val archiveCfg get() = shortsConfig.archiveOrg
 
     private val okHttp by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(archiveCfg.requestTimeoutMs, TimeUnit.MILLISECONDS)
+            .readTimeout(archiveCfg.requestTimeoutMs, TimeUnit.MILLISECONDS)
             .build()
+    }
+
+    // Per-feed pagination cursor state: the shuffled identifier order and
+    // how far into it we've resolved. Keyed by a feed key ("for_you" or
+    // "cat_<index>") so switching tabs/categories doesn't clobber cursors.
+    private data class FeedCursor(val shuffledItems: List<String>, val resolvedCount: Int)
+    private val cursors = mutableMapOf<String, FeedCursor>()
+
+    private fun cursorFor(key: String, pool: List<String>): FeedCursor {
+        val existing = cursors[key]
+        if (existing != null && existing.resolvedCount < existing.shuffledItems.size) return existing
+        // Pool exhausted (or first run) — reshuffle so infinite scroll never
+        // repeats the exact same order twice in a row.
+        val fresh = FeedCursor(shuffledItems = pool.shuffled(), resolvedCount = 0)
+        cursors[key] = fresh
+        return fresh
+    }
+
+    // Cache of collection-name -> expanded list of individual item
+    // identifiers, so a config entry can point at either a single archive.org
+    // item OR a whole collection (e.g. "tiktoks", which itself contains
+    // thousands of single-video items) without needing different config
+    // shapes. Expansion only has to happen once per collection per session.
+    private val collectionCache = mutableMapOf<String, List<String>>()
+
+    private companion object {
+        const val COLLECTION_PAGE_ROWS = 200
+    }
+
+    /**
+     * Expands every pool entry into concrete item identifiers. An entry that
+     * is already a playable item passes through untouched; an entry that
+     * turns out to be a collection (mediatype:collection, e.g. "tiktoks")
+     * is expanded via archive.org's advancedsearch.php into up to
+     * COLLECTION_PAGE_ROWS of its member item identifiers, cached for the
+     * rest of the session. This runs once per distinct pool per feed, not
+     * per page, so it doesn't slow down pagination after the first load.
+     */
+    private suspend fun expandPool(pool: List<String>): List<String> = coroutineScope {
+        pool.map { entry -> async { expandEntry(entry.trim()) } }
+            .awaitAll()
+            .flatten()
+    }
+
+    private fun expandEntry(entry: String): List<String> {
+        if (entry.isBlank()) return emptyList()
+        collectionCache[entry]?.let { return it }
+
+        val expanded = fetchCollectionItems(entry)
+        return if (expanded.isNotEmpty()) {
+            dbg("✓ [$entry] is a collection — expanded to ${expanded.size} item(s)")
+            collectionCache[entry] = expanded
+            expanded
+        } else {
+            // Not a collection (or empty) — treat the entry itself as a
+            // single playable item identifier, which resolveIdentifier()
+            // will confirm/deny via its own metadata call.
+            listOf(entry)
+        }
+    }
+
+    /**
+     * Tries to resolve `entry` as an archive.org collection name via the
+     * Advanced Search API. Returns an empty list if it isn't a collection
+     * (which is the normal case for a single-item identifier) — callers
+     * treat that as "use the entry as-is".
+     */
+    private fun fetchCollectionItems(entry: String): List<String> {
+        val encoded = URLEncoder.encode(entry, "UTF-8")
+        val url = "https://archive.org/advancedsearch.php" +
+            "?q=collection:($encoded)" +
+            "&fl[]=identifier" +
+            "&rows=$COLLECTION_PAGE_ROWS" +
+            "&page=1" +
+            "&output=json"
+        return try {
+            val req = Request.Builder().url(url).get().build()
+            okHttp.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return emptyList()
+                val body = resp.body?.string() ?: return emptyList()
+                val docs = JSONObject(body).optJSONObject("response")?.optJSONArray("docs")
+                    ?: return emptyList()
+                buildList {
+                    for (i in 0 until docs.length()) {
+                        val id = docs.getJSONObject(i).optString("identifier")
+                        // A collection can itself list its own identifier as a
+                        // "doc" in some edge cases — skip that self-reference
+                        // to avoid infinite expansion loops.
+                        if (id.isNotBlank() && id != entry) add(id)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            dbg("✗ collection search error for $entry: ${e.message}")
+            emptyList()
+        }
     }
 
     data class UiState(
@@ -363,7 +457,9 @@ class ShortsViewModel @Inject constructor(
         else        _ui.update { it.copy(forYouLoading = true, error = null) }
 
         viewModelScope.launch {
-            val videos = withContext(Dispatchers.IO) { fetchFromBackend(subs = forYouSubs) }
+            val videos = withContext(Dispatchers.IO) {
+                resolveNextPage(feedKey = "for_you", pool = shortsConfig.forYouItems)
+            }
             dbg("forYou total=${videos.size}")
             if (append) {
                 _ui.update { it.copy(forYouVideos = it.forYouVideos + videos, forYouLoadingMore = false) }
@@ -378,19 +474,22 @@ class ShortsViewModel @Inject constructor(
     }
 
     private fun loadDiscovery(categoryIndex: Int, append: Boolean = false) {
-        val slugString = categories.getOrNull(categoryIndex)?.subs ?: return
+        val category = categories.getOrNull(categoryIndex) ?: return
 
         if (!append) _ui.update { it.copy(discLoading = true, error = null) }
         else         _ui.update { it.copy(discLoadingMore = true) }
 
         viewModelScope.launch {
-            val videos = withContext(Dispatchers.IO) { fetchFromBackend(subs = slugString) }
-            dbg("✓ discovery cat=$categoryIndex total=${videos.size}")
+            val videos = withContext(Dispatchers.IO) {
+                resolveNextPage(feedKey = "cat_$categoryIndex", pool = category.items)
+            }
+            dbg("✓ discovery cat=$categoryIndex (${category.label}) total=${videos.size}")
             if (!append) {
                 _ui.update { it.copy(
                     discVideos  = videos,
                     discLoading = false,
-                    error       = if (videos.isEmpty()) "No videos found" else null,
+                    error       = if (videos.isEmpty())
+                        "No videos configured yet for \"${category.label}\"" else null,
                 )}
             } else {
                 _ui.update { it.copy(discVideos = it.discVideos + videos, discLoadingMore = false) }
@@ -398,33 +497,60 @@ class ShortsViewModel @Inject constructor(
         }
     }
 
-    private fun fetchFromBackend(subs: String): List<ShortVideo> {
-        if (backendUrl.isBlank() || subs.isBlank()) {
-            dbg("✗ backend URL or subs blank — skipping")
+    /**
+     * Resolves the next `items_per_page` archive.org identifiers from this
+     * feed's shuffled cursor into playable ShortVideos. Identifiers are
+     * resolved in parallel (they're independent network calls); a failed
+     * identifier (404, malformed, no video files) is simply skipped rather
+     * than failing the whole page — matches the "never stall the feed on
+     * one bad item" rule the player pool already follows.
+     */
+    private suspend fun resolveNextPage(feedKey: String, pool: List<String>): List<ShortVideo> {
+        if (pool.isEmpty()) {
+            dbg("✗ [$feedKey] identifier pool is empty — nothing configured")
+            return emptyList()
+        }
+        // Expand any collection entries (e.g. "tiktoks") into their member
+        // item identifiers before paginating — cached, so this is a no-op
+        // network-wise after the very first call for a given entry.
+        val expandedPool = expandPool(pool)
+        if (expandedPool.isEmpty()) {
+            dbg("✗ [$feedKey] pool expanded to zero items")
             return emptyList()
         }
 
-        val encodedSubs = subs.trim()
-            .split("+")
-            .joinToString("+") { URLEncoder.encode(it.trim(), "UTF-8") }
+        val pageSize = shortsConfig.itemsPerPage.coerceAtLeast(1)
+        val cursor   = cursorFor(feedKey, expandedPool)
+        val slice    = cursor.shuffledItems.drop(cursor.resolvedCount).take(pageSize)
+        cursors[feedKey] = cursor.copy(resolvedCount = cursor.resolvedCount + slice.size)
 
-        val feedUrl = "$backendUrl/shorts/feed?subs=$encodedSubs" +
-                      "&base_url=${URLEncoder.encode(shortsConfig.feedBaseUrl.ifBlank { "https://ifunny.club" }, "UTF-8")}"
+        if (slice.isEmpty()) return emptyList()
 
-        dbg("→ backend $feedUrl")
+        return coroutineScope {
+            slice.map { identifier -> async { resolveIdentifier(identifier) } }
+                .awaitAll()
+                .flatten()
+                .shuffled() // interleave videos from different identifiers, not grouped by item
+        }
+    }
 
+    private fun resolveIdentifier(identifier: String): List<ShortVideo> {
+        val trimmed = identifier.trim()
+        if (trimmed.isBlank()) return emptyList()
+
+        val url = "${archiveCfg.metadataBaseUrl.trimEnd('/')}/${URLEncoder.encode(trimmed, "UTF-8")}"
         return try {
-            val req = Request.Builder().url(feedUrl).get().build()
+            val req = Request.Builder().url(url).get().build()
             okHttp.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
-                    dbg("✗ backend returned ${resp.code}")
+                    dbg("✗ metadata ${resp.code} for $trimmed")
                     return emptyList()
                 }
                 val body = resp.body?.string() ?: return emptyList()
-                parseShortVideos(body)
+                parseArchiveOrgMetadata(trimmed, body)
             }
         } catch (e: Exception) {
-            dbg("✗ backend error: ${e.message}")
+            dbg("✗ metadata error for $trimmed: ${e.message}")
             emptyList()
         }
     }
@@ -434,36 +560,71 @@ class ShortsViewModel @Inject constructor(
         return if (raw.isBlank() || raw.equals("null", ignoreCase = true)) "" else raw
     }
 
-    private fun parseShortVideos(json: String): List<ShortVideo> {
+    /**
+     * Parses one archive.org /metadata/{id} response into ShortVideos.
+     * Docs: server + dir + "/" + urlEncode(file name) is the stable direct
+     * download URL pattern archive.org guarantees for every file listed.
+     */
+    private fun parseArchiveOrgMetadata(identifier: String, json: String): List<ShortVideo> {
         return try {
-            val root   = JSONObject(json)
-            val arr    = root.getJSONArray("videos")
+            val root = JSONObject(json)
+            val server = root.optUrlString("server").ifBlank {
+                root.optJSONArray("workable_servers")?.optString(0).orEmpty()
+            }
+            val dir   = root.optUrlString("dir")
+            val files = root.optJSONArray("files") ?: return emptyList()
+            if (server.isBlank() || dir.isBlank()) {
+                dbg("✗ [$identifier] no server/dir in metadata")
+                return emptyList()
+            }
+
+            val exts     = shortsConfig.videoExtensions.map { it.lowercase().removePrefix(".") }
+            val excludes = shortsConfig.excludedNameContains.map { it.lowercase() }
+            val itemMeta = root.optJSONObject("metadata")
+            val itemTitle = itemMeta?.optString("title").orEmpty()
+            val itemDesc  = itemMeta?.optString("description").orEmpty()
+
             val result = mutableListOf<ShortVideo>()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val hlsUrl      = o.optUrlString("hlsUrl")
-                val fallbackUrl = o.optUrlString("fallbackUrl")
-                if (hlsUrl.isBlank() && fallbackUrl.isBlank()) continue
+            for (i in 0 until files.length()) {
+                val f = files.getJSONObject(i)
+                val name = f.optString("name")
+                if (name.isBlank()) continue
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (ext !in exts) continue
+                val lowerName = name.lowercase()
+                if (excludes.any { lowerName.contains(it) }) continue
+
+                val encodedName = name.split("/").joinToString("/") { URLEncoder.encode(it, "UTF-8") }
+                    .replace("+", "%20")
+                val videoUrl = "https://$server$dir/$encodedName"
+                // archive.org's per-item auto-thumbnail — cheap and always available,
+                // no need to guess a per-file poster frame.
+                val thumbUrl = "${archiveCfg.thumbnailBaseUrl.trimEnd('/')}/$identifier"
+
+                // Caption in these bulk uploads is baked into the filename
+                // (hashtags etc.) — falls back to the item's own title/description.
+                val caption = name.substringBeforeLast('.').ifBlank { itemTitle.ifBlank { identifier } }
+
                 result += ShortVideo(
-                    id          = o.optString("id").ifBlank { "v_$i" },
-                    title       = o.optString("title"),
-                    author      = o.optString("author"),
-                    community   = o.optString("community"),
-                    hlsUrl      = hlsUrl.ifBlank { fallbackUrl },
-                    audioUrl    = o.optUrlString("audioUrl").ifBlank { null }.takeIf { !it.isNullOrBlank() },
-                    fallbackUrl = fallbackUrl.ifBlank { hlsUrl },
-                    thumbnail   = o.optUrlString("thumbnail"),
-                    ups         = o.optInt("ups", 0),
-                    duration    = o.optInt("duration", 0),
-                    hasAudio    = o.optBoolean("hasAudio", true),
-                    width       = o.optInt("width", 0),
-                    height      = o.optInt("height", 0),
+                    id          = "$identifier/$name",
+                    title       = caption,
+                    author      = itemTitle.ifBlank { identifier },
+                    community   = itemDesc.take(40),
+                    hlsUrl      = videoUrl,
+                    audioUrl    = null,
+                    fallbackUrl = videoUrl,
+                    thumbnail   = thumbUrl,
+                    ups         = 0,
+                    duration    = 0,
+                    hasAudio    = true,
+                    width       = 0,
+                    height      = 0,
                 )
             }
-            dbg("✓ parsed ${result.size} videos from backend")
+            dbg("✓ [$identifier] resolved ${result.size} playable video(s)")
             result
         } catch (e: Exception) {
-            dbg("✗ parse error: ${e.message}")
+            dbg("✗ [$identifier] parse error: ${e.message}")
             emptyList()
         }
     }
@@ -654,16 +815,28 @@ private fun rememberShortsPlayerPool(
     }
     DisposableEffect(Unit) { onDispose { players.forEach { it.release() } } }
 
+    // Cache-backed factory: reads/writes through disk cache first, only
+    // hits the network (httpFactory) for bytes not already on disk.
+    val cacheDataSourceFactory = remember(httpFactory) {
+        CacheDataSource.Factory()
+            .setCache(ShortsDiskCache.get(ctx))
+            .setUpstreamDataSourceFactory(httpFactory)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    }
+
     fun buildMediaSource(video: ShortVideo): androidx.media3.exoplayer.source.MediaSource {
         val primaryUrl = video.hlsUrl.ifBlank { video.fallbackUrl }
         val isRealHls  = primaryUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
         val videoSrc = if (isRealHls) {
+            // HLS segments are already chunked/cached by the HLS stack itself;
+            // caching wrapper is unnecessary (and unsupported for live-style
+            // manifests) so this path keeps using the plain http factory.
             HlsMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(primaryUrl))
         } else {
-            ProgressiveMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(primaryUrl))
+            ProgressiveMediaSource.Factory(cacheDataSourceFactory).createMediaSource(MediaItem.fromUri(primaryUrl))
         }
         return if (video.audioUrl != null) {
-            val audioSrc = ProgressiveMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(video.audioUrl))
+            val audioSrc = ProgressiveMediaSource.Factory(cacheDataSourceFactory).createMediaSource(MediaItem.fromUri(video.audioUrl))
             MergingMediaSource(videoSrc, audioSrc)
         } else videoSrc
     }
@@ -677,15 +850,15 @@ private fun rememberShortsPlayerPool(
 
 @Composable
 private fun FeedToggle(feedMode: FeedMode, onSwitch: (FeedMode) -> Unit) {
+    val d = LocalDimensions.current
     Row(
         Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(RoundedCornerShape(d.radiusPill))
             .background(Color(0x88000000))
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(50))
-            .padding(2.dp),
+            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusPill))
+            .padding(d.spaceXxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val d = LocalDimensions.current
         FeedTab("For You",   feedMode == FeedMode.FOR_YOU)   { onSwitch(FeedMode.FOR_YOU) }
         FeedTab("Discovery", feedMode == FeedMode.DISCOVERY) { onSwitch(FeedMode.DISCOVERY) }
     }
@@ -698,11 +871,11 @@ private fun FeedTab(label: String, selected: Boolean, onClick: () -> Unit) {
     val txt   by animateColorAsState(if (selected) Color.Black else White60, tween(200), label = "tabTxt")
     val scale by animateFloatAsState(if (selected) 1f else 0.95f, spring(0.7f, 600f), label = "tabS")
     Box(
-        Modifier.scale(scale).clip(RoundedCornerShape(50)).background(bg)
+        Modifier.scale(scale).clip(RoundedCornerShape(d.radiusPill)).background(bg)
             .clickable(indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                 onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 7.dp),
+            .padding(horizontal = d.spaceLg + d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
         Alignment.Center,
     ) {
         Text(label, color = txt, fontSize = d.textMd, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
@@ -728,12 +901,11 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
 
     val shortsConfig = vm.shortsConfig
     val httpFactory = remember(shortsConfig) {
+        // archive.org direct downloads need no special Referer/Origin spoofing
+        // (that was an ifunny.club anti-hotlinking workaround) — just a
+        // reasonable UA and generous timeouts/redirect handling.
         DefaultHttpDataSource.Factory()
-            .setUserAgent(StreamHeaders.UA_CHROME_ANDROID)
-            .setDefaultRequestProperties(mapOf(
-                "Referer" to shortsConfig.feedReferer.ifBlank { "https://ifunny.club/" },
-                "Origin"  to shortsConfig.feedOrigin.ifBlank  { "https://ifunny.club" },
-            ))
+            .setUserAgent("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(10_000)
             .setReadTimeoutMs(12_000)
@@ -858,7 +1030,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             .nestedScroll(nestedScroll)
     ) {
         when {
-            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = 52.dp) }
+            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerLg) }
 
             !ui.error.isNullOrEmpty() || ui.videos.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -867,7 +1039,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                         color     = White40,
                         fontSize = d.textLg,
                         textAlign = TextAlign.Center,
-                        modifier  = Modifier.padding(horizontal = 32.dp),
+                        modifier  = Modifier.padding(horizontal = d.spaceXxl),
                     )
                 }
             }
@@ -901,14 +1073,14 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         }
 
         // Top overlay
-        Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 6.dp)) {
+        Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = d.spaceSm)) {
             AnimatedVisibility(
                 visible = showSearch,
                 enter   = fadeIn(tween(180)) + slideInVertically(tween(200)) { -it },
                 exit    = fadeOut(tween(140)) + slideOutVertically(tween(160)) { -it },
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = d.spaceLg, vertical = d.spaceSm),
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
                 ) {
@@ -952,15 +1124,15 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                     horizontalArrangement = Arrangement.Center,
                 ) {
                     Box(
-                        Modifier.padding(start = 14.dp).size(34.dp).clip(CircleShape)
-                            .background(Color(0x88000000)).border(1.dp, GlassBorderMd, CircleShape)
+                        Modifier.padding(start = d.screenHorizPad).size(d.avatarSm + d.spaceXs).clip(CircleShape)
+                            .background(Color(0x88000000)).border(d.borderThin, GlassBorderMd, CircleShape)
                             .clickable { showSearch = true },
                         Alignment.Center,
                     ) { Icon(IconSearch, null, tint = White, modifier = Modifier.size(d.iconMd - 4.dp)) }
                     Spacer(Modifier.weight(1f))
                     FeedToggle(feedMode = ui.feedMode, onSwitch = { vm.switchMode(it) })
                     Spacer(Modifier.weight(1f))
-                    Spacer(Modifier.size(d.iconXl).padding(end = 14.dp))
+                    Spacer(Modifier.size(d.iconXl).padding(end = d.screenHorizPad))
                 }
             }
 
@@ -970,7 +1142,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                 exit    = fadeOut(tween(150)) + shrinkVertically(tween(170)),
             ) {
                 androidx.compose.foundation.lazy.LazyRow(
-                    modifier              = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    modifier              = Modifier.fillMaxWidth().padding(top = d.spaceMd - d.spaceXxs),
                     contentPadding        = PaddingValues(horizontal = d.screenHorizPad - d.spaceXxs),
                     horizontalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
                 ) {
@@ -985,9 +1157,9 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                                     if (selected) Brush.horizontalGradient(listOf(Brand, Brand2))
                                     else          Brush.horizontalGradient(listOf(Color(0xAA000000), Color(0xAA000000)))
                                 )
-                                .border(1.dp, if (selected) Color.Transparent else GlassBorderMd, RoundedCornerShape(d.radiusLg))
+                                .border(d.borderThin, if (selected) Color.Transparent else GlassBorderMd, RoundedCornerShape(d.radiusLg))
                                 .clickable { vm.selectCategory(i) }
-                                .padding(horizontal = 14.dp, vertical = 7.dp),
+                                .padding(horizontal = d.spaceLg - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
                             Alignment.Center,
                         ) {
                             Text(
@@ -1005,17 +1177,17 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         // Pull-to-refresh indicator
         AnimatedVisibility(
             visible  = pullOverscrollPx > 4f || ui.isRefreshing,
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 64.dp),
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = d.appBarHorizPad * 4),
             enter    = fadeIn(tween(120)) + scaleIn(tween(150), 0.6f),
             exit     = fadeOut(tween(100)) + scaleOut(tween(120), 0.6f),
         ) {
             Box(
                 Modifier.size(d.buttonHeightSm - d.spaceMd)
                     .scale(if (ui.isRefreshing) 1f else pullIndicatorScale)
-                    .clip(CircleShape).background(Color(0xCC000000)).border(1.dp, GlassBorderMd, CircleShape),
+                    .clip(CircleShape).background(Color(0xCC000000)).border(d.borderThin, GlassBorderMd, CircleShape),
                 Alignment.Center,
             ) {
-                if (ui.isRefreshing) CinematicSpinner(size = 20.dp)
+                if (ui.isRefreshing) CinematicSpinner(size = d.spinnerSm)
                 else Icon(
                     Icons.Default.Refresh, null, tint = White,
                     modifier = Modifier.size(d.iconMd - 2.dp).graphicsLayer { rotationZ = pullIndicatorScale * 180f },
@@ -1024,7 +1196,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         }
 
         if (ui.isLoadingMore) {
-            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 100.dp)) {
+            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = d.spaceXxl * 3)) {
                 CinematicSpinner(size = d.spinnerMd)
             }
         }
@@ -1079,6 +1251,9 @@ fun ShortVideoPage(
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                         useController = false
+                        // ZOOM crops to fill — matches TikTok's fill-the-frame
+                        // behavior for vertical video regardless of the
+                        // source clip's exact aspect ratio.
                         resizeMode    = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                         player        = activePlayer
                         setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
@@ -1099,78 +1274,106 @@ fun ShortVideoPage(
             )
         )
 
+        // Right action rail — sized and positioned entirely from
+        // LocalDimensions (screen-width-derived tokens), never fixed dp, so
+        // it lands in the same relative spot on a compact phone, a large
+        // phone, or a tablet.
         Column(
-            Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 110.dp),
+            Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = d.screenHorizPad, bottom = d.spaceXxl * 3),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(22.dp),
+            verticalArrangement = Arrangement.spacedBy(d.spaceXl - d.spaceXxs),
         ) {
             TikTokAction(
-                icon  = if (isLiked) IconHeartFilled else IconHeart,
-                label = formatCount(video.ups + if (isLiked) 1 else 0),
-                tint  = if (isLiked) Color(0xFFFF2D55) else Color.White,
-                onClick = onLike,
+                icon     = if (isLiked) IconHeartFilled else IconHeart,
+                tint     = if (isLiked) Color(0xFFFF2D55) else Color.White,
+                locked   = true,
+                onClick  = onLike,
             )
-            TikTokAction(IconComment, formatCount(video.ups / 10), Color.White) {}
             TikTokAction(
-                icon  = if (isSaved) IconBookmarkFilled else IconBookmark,
-                label = if (isSaved) "Saved" else "Save",
-                tint  = if (isSaved) Brand else Color.White,
+                icon    = IconComment,
+                tint    = Color.White,
+                locked  = true,
+                onClick = {},
+            )
+            TikTokAction(
+                icon    = if (isSaved) IconBookmarkFilled else IconBookmark,
+                tint    = if (isSaved) Color(0xFF0A84FF) else Color.White,
+                locked  = true,
                 onClick = onSave,
             )
-            TikTokAction(IconShare, "Share", Color.White) {}
             TikTokAction(
-                icon  = if (isMuted) IconVolumeOff else IconVolumeOn,
-                label = if (isMuted) "Muted" else "Sound",
-                tint  = if (isMuted) Color(0xFFFF9A00) else Color.White,
+                icon    = if (isMuted) IconVolumeOff else IconVolumeOn,
+                tint    = if (isMuted) Color(0xFFFF9A00) else Color.White,
+                locked  = false,
                 onClick = onMute,
             )
         }
 
-        Column(
-            Modifier.align(Alignment.BottomStart).padding(start = 16.dp, end = 80.dp, bottom = 108.dp),
-            verticalArrangement = Arrangement.spacedBy(d.spaceSm),
+        // Bottom-left label — just a static "TikTok" source badge, no raw
+        // id/filename, no avatar placeholder, no caption text pulled from
+        // archive.org filenames (those are frequently just hashtag soup and
+        // don't read as a real caption).
+        Row(
+            Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = d.screenHorizPad, end = d.avatarLg + d.spaceLg, bottom = d.spaceXxl * 3),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                Modifier.clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                    .background(Brand.copy(alpha = 0.18f))
-                    .border(1.dp, Brand.copy(0.35f), RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                    .padding(horizontal = 10.dp, vertical = 3.dp),
-            ) { Text(video.community, color = Brand2, fontSize = d.textXs, fontWeight = FontWeight.SemiBold) }
-            Text(video.author, color = White80, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
-            Text(video.title, color = White, fontSize = d.textMd, fontWeight = FontWeight.Medium,
-                maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = (d.textMd.value * 1.5f).sp)
+            Text(
+                "TikTok",
+                color      = White,
+                fontSize   = d.textMd,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TikTok action button
+// TikTok-style action button — icon + optional small lock badge to mark an
+// action as unavailable (no comment/like/save backend yet) without hiding
+// the button entirely, matching how TikTok itself greys out actions that
+// require sign-in rather than removing them from the rail.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun TikTokAction(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
+private fun TikTokAction(icon: ImageVector, tint: Color, locked: Boolean, onClick: () -> Unit) {
     val d = LocalDimensions.current
     var pressed by remember { mutableStateOf(false) }
-    val scale   by animateFloatAsState(if (pressed) 1.3f else 1f, spring(0.3f, 700f), label = "s")
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
+    val scale   by animateFloatAsState(if (pressed) 1.2f else 1f, spring(0.4f, 700f), label = "s")
+
+    Box(
+        modifier = Modifier.size(d.avatarSm + d.spaceMd),
+        contentAlignment = Alignment.Center,
+    ) {
         Icon(
-            icon, null, tint = tint,
-            modifier = Modifier.size(d.avatarSm).scale(scale).clickable(
-                indication = null,
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-            ) { pressed = true; onClick() },
+            icon, null,
+            tint     = if (locked) tint.copy(alpha = 0.55f) else tint,
+            modifier = Modifier
+                .size(d.avatarSm)
+                .scale(scale)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                ) { pressed = true; onClick() },
         )
-        Text(label, color = White.copy(.85f), fontSize = d.textXs, fontWeight = FontWeight.Medium)
+        if (locked) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(d.iconXs + d.spaceXxs)
+                    .clip(CircleShape)
+                    .background(Color(0xCC1C1C1E))
+                    .border(d.borderThin, Color.White.copy(alpha = 0.25f), CircleShape),
+                Alignment.Center,
+            ) {
+                Icon(IconLock, null, tint = White.copy(alpha = 0.85f), modifier = Modifier.size(d.iconXs - 1.dp))
+            }
+        }
     }
     LaunchedEffect(pressed) { if (pressed) { kotlinx.coroutines.delay(200); pressed = false } }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-private fun formatCount(n: Int): String = when {
-    n >= 1_000_000 -> "${"%.1f".format(n / 1_000_000f)}M"
-    n >= 1_000     -> "${"%.1f".format(n / 1_000f)}K"
-    else           -> n.toString()
-}

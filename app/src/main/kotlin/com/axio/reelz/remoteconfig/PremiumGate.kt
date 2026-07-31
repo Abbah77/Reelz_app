@@ -73,21 +73,37 @@ class PremiumGate @Inject constructor(
     private fun activeTier() = if (isPremium()) remoteConfig.tiersConfig().premium else remoteConfig.tiersConfig().free
 
     fun maxResolutionHeight(): Int = activeTier().maxResolutionHeight
+    fun maxDownloadResolutionHeight(): Int = activeTier().maxDownloadResolutionHeight
     fun maxDownloads(): Int = activeTier().maxDownloads
     fun adsEnabled(): Boolean = activeTier().adsEnabled
     fun canManualSubtitleSearch(): Boolean = activeTier().subtitlesManualSearch
     fun canBackgroundPlay(): Boolean = activeTier().backgroundPlay
 
     /**
-     * Whether a track of this pixel height may be streamed OR downloaded by the
-     * current tier. Mirrors the sentinel handling already used at the ExoPlayer
-     * level in PlayerViewModel.buildPlayer() (maxResolutionHeight <= 0 means "no
-     * cap" rather than "cap at 0 = nothing plays"), so streaming and downloads
-     * always agree on what counts as "above the user's tier".
+     * Whether a track of this pixel height may be STREAMED by the current
+     * tier. -1 (or any <= 0) means unlimited — streaming quality is not a
+     * free/premium differentiator in this app; the ad-supported model is
+     * the monetization lever for streaming instead. Kept as a real check
+     * (not just removed) so a future config change re-introducing a
+     * streaming cap doesn't require another code change, only a config
+     * value change.
      */
-    fun isResolutionAllowed(heightPx: Int): Boolean {
+    fun isStreamResolutionAllowed(heightPx: Int): Boolean {
         val cap = maxResolutionHeight()
-        if (cap <= 0) return true // misconfigured/unset tier -> fail open, never black-screen everything
+        if (cap <= 0) return true
+        return heightPx <= cap
+    }
+
+    /**
+     * Whether a track of this pixel height may be DOWNLOADED by the current
+     * tier. This is the real free/premium gate — downloads are offline, so
+     * no ad can be served there. Driven entirely by remote config
+     * (max_download_resolution_height); defaults to -1 (unlimited) so you
+     * can loosen or tighten this remotely without an app update.
+     */
+    fun isDownloadResolutionAllowed(heightPx: Int): Boolean {
+        val cap = maxDownloadResolutionHeight()
+        if (cap <= 0) return true // unlimited — including "movie only has 1-2 renditions" cases
         return heightPx <= cap
     }
 

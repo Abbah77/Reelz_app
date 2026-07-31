@@ -1,6 +1,9 @@
 package com.axio.reelz
 
+import android.app.ActivityManager
 import android.app.Application
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
@@ -12,6 +15,7 @@ import com.axio.reelz.data.repository.UserSessionRepository
 import com.axio.reelz.remoteconfig.ConfigSyncWorker
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
 import com.axio.reelz.ads.AdEngine
+// WebViewScanner removed
 import com.axio.reelz.service.DownloadService
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import dagger.hilt.android.HiltAndroidApp
@@ -24,17 +28,34 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 @HiltAndroidApp
-class ReelzApp : Application(), ImageLoaderFactory {
+class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
 
     @Inject lateinit var downloadDao: DownloadDao
     @Inject lateinit var remoteConfig: RemoteConfigRepository
     @Inject lateinit var adEngine: AdEngine
     @Inject lateinit var userSessionRepository: UserSessionRepository
+    // Required for WorkManager to construct @HiltWorker classes (e.g.
+    // ConfigSyncWorker) with their injected dependencies. Without this,
+    // WorkManager falls back to its own default factory, which cannot
+    // call an @AssistedInject constructor — every scheduled/one-shot run
+    // of ConfigSyncWorker was crashing with a NoSuchMethodException on
+    // ConfigSyncWorker.<init>, meaning remote config was never actually
+    // refreshing in the background, only loading once from local cache
+    // at cold start.
+    @Inject lateinit var workerFactory: HiltWorkerFactory
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(workerFactory)
+            .build()
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
+
+        // WebView scanner removed — stream resolution is now server-side.
+        // No concurrent WebView management needed.
 
         // Crashlytics auto-initializes from google-services.json, but tagging
         // the app version as a custom key makes it possible to tell "which

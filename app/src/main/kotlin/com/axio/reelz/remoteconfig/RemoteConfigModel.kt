@@ -5,26 +5,33 @@ import com.google.gson.annotations.SerializedName
 // ── Fully decoded config ──────────────────────────────────────────────────────
 
 data class RemoteConfig(
-    val meta: MetaConfig                                        = MetaConfig(),
-    val tmdb: TmdbConfig?                                       = null,
-    val subtitles: SubtitlesConfig?                             = null,
-    val ads: AdsConfig?                                         = null,
-    @SerializedName("stream_sources") val streamSources: List<StreamSourceConfig> = emptyList(),
-    @SerializedName("user_agents")    val userAgents: UserAgentsConfig             = UserAgentsConfig(),
-    val scanner: ScannerConfig                                  = ScannerConfig(),
-    @SerializedName("feature_flags") val featureFlags: FeatureFlags               = FeatureFlags(),
-    val shorts: ShortsConfig                                    = ShortsConfig(),
-    val tiers: TiersConfig                                      = TiersConfig(),
-    val premium: PremiumConfig                                  = PremiumConfig(),
-    val backend: BackendConfig                                  = BackendConfig(),
+    val meta: MetaConfig                                         = MetaConfig(),
+    val tmdb: TmdbConfig?                                        = null,
+    val ads: AdsConfig?                                          = null,
+    @SerializedName("feature_flags") val featureFlags: FeatureFlags = FeatureFlags(),
+    val shorts: ShortsConfig                                     = ShortsConfig(),
+    val tiers: TiersConfig                                       = TiersConfig(),
+    val premium: PremiumConfig                                   = PremiumConfig(),
+    val backend: BackendConfig                                   = BackendConfig(),
+    // stream_sources, subtitles, user_agents, scanner removed —
+    // all source/subtitle/UA config lives on the backend now.
 )
 
 /**
  * Backend connection config — comes from config.json, never hardcoded in the app.
- * The app reads only backend_url from here; all secrets live server-side only.
+ *
+ * Three backend URLs, each serving a separate concern:
+ *   backend_url  → auth / subscription (already live)
+ *   stream_url   → stream / download / subtitle engine (new backend)
+ *   shorts_url   → shorts feed backend (new backend, future)
+ *
+ * All secrets live server-side. The app only holds these URLs.
+ * Edit config.json to point to new deployments — no app update needed.
  */
 data class BackendConfig(
     @SerializedName("backend_url") val backendUrl: String = "",
+    @SerializedName("stream_url")  val streamUrl: String  = "",
+    @SerializedName("shorts_url")  val shortsUrl: String  = "",
 ) {
     // config.json sometimes ends up with backend_url missing its scheme
     // (e.g. "tt-b577.onrender.com" instead of "https://tt-b577.onrender.com")
@@ -69,19 +76,6 @@ data class ApiKey(
     val enabled: Boolean = true,
 )
 
-data class SubtitlesConfig(
-    val providers: List<SubtitleProvider> = emptyList(),
-)
-
-data class SubtitleProvider(
-    val id: String        = "",
-    val name: String      = "",
-    val enabled: Boolean  = false,
-    val keys: List<ApiKey> = emptyList(),
-    @SerializedName("base_url")    val baseUrl: String   = "",
-    @SerializedName("user_agent")  val userAgent: String = "",
-    @SerializedName("daily_limit") val dailyLimit: Int   = 20,
-)
 
 data class AdsConfig(
     val enabled: Boolean = false,
@@ -128,37 +122,8 @@ data class AdNetwork(
     @SerializedName("vast_tag_url")    val vastTagUrl: String     = "",
 )
 
-data class StreamSourceConfig(
-    val id: String       = "",
-    val name: String     = "",
-    val enabled: Boolean = false,
-    val priority: Int    = 99,
-    @SerializedName("requires_js")  val requiresJs: Boolean  = false,
-    @SerializedName("url_patterns") val urlPatterns: UrlPatterns = UrlPatterns(),
-    val headers: Map<String, String> = emptyMap(),
-    val referer: String = "",
-    val origin: String  = "",
-)
 
-data class UrlPatterns(
-    val movie: String = "",
-    val tv: String    = "",
-)
 
-data class UserAgentsConfig(
-    @SerializedName("chrome_android")  val chromeAndroid: String  = "",
-    @SerializedName("chrome_desktop")  val chromeDesktop: String  = "",
-    @SerializedName("firefox_android") val firefoxAndroid: String = "",
-)
-
-data class ScannerConfig(
-    @SerializedName("direct_timeout_ms")  val directTimeoutMs: Long  = 2000,
-    @SerializedName("webview_timeout_ms") val webviewTimeoutMs: Long = 18000,
-    @SerializedName("global_timeout_ms")  val globalTimeoutMs: Long  = 25000,
-    @SerializedName("stagger_ms")         val staggerMs: Long        = 150,
-    @SerializedName("m3u8_pattern")       val m3u8Pattern: String    = "",
-    @SerializedName("mp4_pattern")        val mp4Pattern: String     = "",
-)
 
 data class FeatureFlags(
     @SerializedName("subtitles_enabled")   val subtitlesEnabled: Boolean   = true,
@@ -171,34 +136,92 @@ data class FeatureFlags(
 )
 
 // ── Shorts / discovery feed config ────────────────────────────────────────────
+//
+// Source is archive.org directly — no scraping backend involved anymore.
+// Each "item" below is an archive.org identifier (the slug in
+// archive.org/details/<identifier>). One item can itself contain many
+// video files (bulk-upload items commonly have 50-200+ .mp4s inside), so
+// a handful of identifiers is enough to seed a large shuffled feed.
+//
+// Resolution per identifier: GET https://archive.org/metadata/{identifier}
+// returns a `files[]` array; the app filters that down to playable video
+// formats and builds direct download URLs from `server`+`dir`+`file.name`.
+// This whole class is intentionally just data — add/remove identifiers
+// here and the app picks it up on next config sync, no rebuild needed.
 
 data class ShortsConfig(
-    @SerializedName("feed_base_url")     val feedBaseUrl: String             = "",
-    @SerializedName("feed_referer")      val feedReferer: String             = "",
-    @SerializedName("feed_origin")       val feedOrigin: String              = "",
-    @SerializedName("for_you_subs")      val forYouSubs: String              = "",
-    val categories: List<ShortCategory>                                      = emptyList(),
+    /** archive.org access config — base URLs, endpoint templates, timeouts. */
+    @SerializedName("archive_org") val archiveOrg: ArchiveOrgConfig            = ArchiveOrgConfig(),
+    /** For You tab: pool of archive.org item identifiers, fully shuffled every load. */
+    @SerializedName("for_you_items") val forYouItems: List<String>            = emptyList(),
+    /** Discovery tab chips — each one its own pool of item identifiers. Add/remove
+     *  freely; the UI renders exactly what's in this list, nothing hardcoded. */
+    val categories: List<ShortCategory>                                       = emptyList(),
+    /** File extensions treated as playable video, checked against each file's
+     *  name/format from archive.org metadata (case-insensitive). */
+    @SerializedName("video_extensions") val videoExtensions: List<String>     =
+        listOf("mp4", "m4v", "mov", "webm"),
+    /** Filename fragments to always skip (thumbnails, derivative junk, etc.),
+     *  matched case-insensitively as a substring. */
+    @SerializedName("excluded_name_contains") val excludedNameContains: List<String> =
+        listOf("thumb", "sample", ".ia.", "__ia_thumb"),
+    /** How many item identifiers to resolve per feed "page" — keeps each
+     *  loadMore() call cheap instead of resolving the whole pool at once. */
+    @SerializedName("items_per_page") val itemsPerPage: Int                   = 3,
+)
+
+data class ArchiveOrgConfig(
+    @SerializedName("metadata_base_url")  val metadataBaseUrl: String  = "https://archive.org/metadata",
+    @SerializedName("download_base_url")  val downloadBaseUrl: String  = "https://archive.org/download",
+    @SerializedName("thumbnail_base_url") val thumbnailBaseUrl: String = "https://archive.org/services/img",
+    @SerializedName("request_timeout_ms") val requestTimeoutMs: Long   = 12000,
 )
 
 data class ShortCategory(
     val label: String = "",
-    val subs: String  = "",
+    /** Pool of archive.org item identifiers for this category — placeholder
+     *  until specific genre-matching items are found; leave empty and the
+     *  chip simply shows no results rather than crashing. */
+    val items: List<String> = emptyList(),
 )
 
 // ── Premium tiers ──────────────────────────────────────────────────────────
 
 data class TiersConfig(
-    val free: TierConfig    = TierConfig(maxResolutionHeight = 480),
+    // NOTE: maxResolutionHeight (streaming) intentionally defaults to
+    // unlimited (-1) for BOTH tiers now. Streaming quality is no longer a
+    // free/premium differentiator — free users see ads while streaming
+    // regardless of resolution, premium users don't. That ad-supported
+    // model is the monetization lever for streaming, not a resolution cap.
+    //
+    // maxDownloadResolutionHeight is the real, separate gate: downloads are
+    // offline, so no ad can be served there, which is why it's the one
+    // place a free/premium quality split still makes business sense. It
+    // defaults to -1 (unlimited) here deliberately — start wide open while
+    // growing the user base, then tighten via config later (e.g. cap free
+    // downloads to 480p/720p) without ever needing an app update.
+    val free: TierConfig    = TierConfig(
+        maxResolutionHeight = -1,
+        maxDownloadResolutionHeight = -1,
+    ),
     val premium: TierConfig = TierConfig(
-        maxResolution = "4K", maxResolutionHeight = 2160, maxDownloads = -1,
+        maxResolution = "4K", maxResolutionHeight = -1, maxDownloads = -1,
+        maxDownloadResolutionHeight = -1,
         adsEnabled = false, subtitlesManualSearch = true, backgroundPlay = true,
         simultaneousStreams = 2,
     ),
 )
 
 data class TierConfig(
-    @SerializedName("max_resolution")          val maxResolution: String         = "480p",
-    @SerializedName("max_resolution_height")   val maxResolutionHeight: Int       = 480,
+    @SerializedName("max_resolution")          val maxResolution: String         = "Unlimited",
+    /** Streaming cap. -1 = unlimited (default for both tiers — see note above). */
+    @SerializedName("max_resolution_height")   val maxResolutionHeight: Int       = -1,
+    /**
+     * Download cap, separate from streaming. -1 = unlimited. This is the
+     * field to tighten later for free users (e.g. set to 480 or 720) via
+     * remote config only — no app update needed, no hardcoded UI change.
+     */
+    @SerializedName("max_download_resolution_height") val maxDownloadResolutionHeight: Int = -1,
     /** -1 is the sentinel for unlimited. Never trips the cap. */
     @SerializedName("max_downloads")           val maxDownloads: Int              = 5,
     @SerializedName("ads_enabled")             val adsEnabled: Boolean            = true,
