@@ -242,21 +242,32 @@ class DetailViewModel @Inject constructor(
                     }
                 }
 
-                // Stage 3 — pre-resolve stream in background via backend.
-                // Single POST → backend returns URL + qualities immediately.
-                // Result stored in preResolvedStream for instant download sheet and player start.
+                // Stage 3 — pre-resolve stream in background via SSE.
+                // resolveFirst() returns on the first stream event so preResolvedStream
+                // is available quickly. Download qualities and subtitles are collected
+                // into preResolvedQualities as they arrive on the same connection.
                 viewModelScope.launch {
                     try {
-                        val stream = streamRepo.resolve(
-                            tmdbId = tmdbId, mediaType = mediaType,
-                            title = _ui.value.detail?.title ?: "",
+                        val key = qualityKey(tmdbId)
+                        val stream = streamRepo.resolveFirst(
+                            tmdbId    = tmdbId,
+                            mediaType = mediaType,
+                            title     = _ui.value.detail?.title ?: "",
+                            onDownload = { track ->
+                                val current = (preResolvedQualities[key] ?: emptyList()).toMutableList()
+                                if (current.none { it.url == track.url }) {
+                                    current.add(track)
+                                    preResolvedQualities[key] = current
+                                }
+                            },
                         )
                         if (stream != null) {
                             preResolvedStream = stream
-                            val qualities = stream.qualities.ifEmpty {
-                                listOf(QualityTrack(stream.quality.ifBlank { "Auto" }, stream.url))
+                            if (preResolvedQualities[key].isNullOrEmpty()) {
+                                preResolvedQualities[key] = stream.qualities.ifEmpty {
+                                    listOf(QualityTrack(stream.quality.ifBlank { "Auto" }, stream.url))
+                                }
                             }
-                            preResolvedQualities[qualityKey(tmdbId)] = qualities
                         }
                     } catch (_: Exception) {}
                 }
@@ -351,25 +362,46 @@ class DetailViewModel @Inject constructor(
             }
         }
 
-        // Single POST to backend — returns all quality links immediately.
-        // No scan loop, no skeleton rows, no racing sources.
+        // SSE — download qualities arrive live as each provider resolves.
+        // The sheet populates incrementally; no waiting for the slowest provider.
         viewModelScope.launch {
+            val accumulated = mutableListOf<QualityTrack>()
             try {
-                val links = streamRepo.resolveDownloadLinks(
+                streamRepo.openEventStream(
                     tmdbId    = tmdbId,
                     mediaType = mediaType,
                     title     = _ui.value.detail?.title ?: "",
                     season    = season,
                     episode   = episode,
-                )
-                val qualities = if (links.isNotEmpty()) {
-                    normalizeQualities(links, _ui.value.detail?.runtime)
-                } else {
-                    val fallbackUrl = preResolvedStream?.url ?: ""
-                    listOf(QualityTrack("Best available", fallbackUrl))
+                ).collect { event ->
+                    when (event) {
+                        is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.DownloadAvailable -> {
+                            val track = QualityTrack(
+                                label              = event.quality,
+                                url                = event.url,
+                                estimatedSizeBytes = event.sizeBytes,
+                            )
+                            if (accumulated.none { it.url == track.url }) {
+                                accumulated.add(track)
+                                // Update the sheet live as each quality arrives
+                                val normalized = normalizeQualities(accumulated, _ui.value.detail?.runtime)
+                                preResolvedQualities[key] = normalized
+                                _ui.update { it.copy(downloadQualities = normalized, pendingQualityLabels = emptySet()) }
+                            }
+                        }
+                        is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.Done,
+                        is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.ConnectionError -> {
+                            // Stream finished or failed — show fallback if nothing came through
+                            if (accumulated.isEmpty()) {
+                                val fallbackUrl = preResolvedStream?.url ?: ""
+                                val fallback = listOf(QualityTrack("Best available", fallbackUrl))
+                                _ui.update { it.copy(downloadQualities = fallback, pendingQualityLabels = emptySet()) }
+                            }
+                            return@collect
+                        }
+                        else -> { /* stream/subtitle/provider events — not relevant here */ }
+                    }
                 }
-                preResolvedQualities[key] = qualities
-                _ui.update { it.copy(downloadQualities = qualities, pendingQualityLabels = emptySet()) }
             } catch (_: Exception) {
                 _ui.update { it.copy(pendingQualityLabels = emptySet()) }
             }
