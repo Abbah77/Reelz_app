@@ -257,10 +257,15 @@ class DownloadService : Service() {
 
             if (links.isEmpty()) return item  // backend found nothing — keep current URL
 
-            // Pick the exact quality the user selected, then fall back to the
-            // highest-bandwidth link available (never the HLS master).
+            // Pick the exact quality the user selected.
+            // Match on plain label ("1080p") or label-with-language ("1080p · Hindi").
+            // Fall back to highest resolution by parsing the quality prefix.
+            val resOrder = listOf("2160p", "1080p", "720p", "480p", "360p", "240p")
             val freshTrack = links.firstOrNull { it.label == item.quality }
-                ?: links.maxByOrNull { it.bandwidth }
+                ?: links.firstOrNull { it.label.startsWith(item.quality) }
+                ?: links.minByOrNull { track ->
+                    resOrder.indexOfFirst { track.label.startsWith(it) }.takeIf { it >= 0 } ?: 99
+                }
                 ?: links.first()
 
             val freshUrl = freshTrack.url

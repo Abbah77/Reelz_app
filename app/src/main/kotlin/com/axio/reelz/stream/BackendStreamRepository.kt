@@ -18,39 +18,65 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * BackendStreamRepository — POST edition
- * ────────────────────────────────────────
- * Three independent POST calls replace the old unified SSE connection:
+ * BackendStreamRepository — POST edition with URL caching + bulletproof error handling
+ * ──────────────────────────────────────────────────────────────────────────────────────
  *
- *   POST /api/v1/streams    → first valid stream URL (m3u8 preferred) + full
- *                             fallback ladder. Returns as soon as the backend
- *                             finds the FIRST valid source — typically 300-800 ms
- *                             vs the old SSE first-event latency of 1-3 s.
+ * WHAT CHANGED vs the original:
  *
- *   POST /api/v1/download   → deduplicated per-resolution download links.
- *                             m3u8 masters are expanded server-side into
- *                             individual quality variants (1080p, 720p, …).
- *                             No duplicate qualities.
+ * 1. URL CACHING (StreamUrlCache, 4-minute TTL)
+ *    resolveFirst() checks the cache FIRST. If a valid (non-expired) entry exists it
+ *    returns immediately — no backend round-trip. This covers the common pattern of:
+ *      • User pauses → replies on WhatsApp → comes back
+ *      • User navigates to cast screen → returns
+ *      • User locks screen and unlocks (free tier pauses, then resumes)
+ *    The 4-minute TTL is conservative: most CDN-signed URLs live 5-30 min, so the
+ *    cache window ends before the URL is at risk of expiring. The error handler
+ *    (in PlayerViewModel) is the safety net for the rare case a cached URL dies early.
  *
- *   POST /api/v1/subtitles  → OpenSubtitles results.
+ * 2. AGGRESSIVE HTTP-LAYER ERROR HANDLING
+ *    post() now detects fatal HTTP errors immediately and classifies them:
+ *      • 403 / Cloudflare block (CF-RAY header, 1xxx codes in body) → StreamError.Blocked
+ *      • 404 → StreamError.NotFound  (only error shown to user as friendly message)
+ *      • 5xx / timeouts / network errors → StreamError.Transient  (silent retry)
+ *    resolveFirst() propagates the error type so PlayerViewModel can decide:
+ *      → Transient: invisible to the user, instant re-fetch
+ *      → Blocked:   invisible, instant re-fetch (backend may have a different source)
+ *      → NotFound:  friendly message ("Reelz doesn't have this yet…")
  *
- * All three fire in parallel (coroutineScope + async). The stream call is
- * awaited first so playback starts immediately; download and subtitle results
- * populate their UI as they arrive.
+ * 3. CACHE INVALIDATION ON ERROR
+ *    When the ViewModel exhausts the fallback ladder, it calls invalidateCache() so
+ *    the next resolve hits the backend fresh rather than returning a dead cached URL.
  *
- * Public surface (identical to SSE version — no ViewModel changes needed):
- *   resolveFirst(...)  → StreamResult?   (PlayerViewModel)
- *   searchSubtitles(…) → List<Subtitle>  (PlayerViewModel subtitle search)
+ * Public surface (identical to original — no ViewModel signature changes):
+ *   resolveFirst(...)      → StreamResult?
+ *   resolveDownloadLinks() → List<QualityTrack>
+ *   searchSubtitles(…)    → List<Subtitle>
+ *   invalidateCache(…)     → Unit   ← new, called by ViewModel on ladder exhaustion
+ *   lastErrorType          → StreamError  ← read by ViewModel for error routing
  */
 @Singleton
 class BackendStreamRepository @Inject constructor(
     private val remoteConfig: RemoteConfigRepository,
+    private val urlCache: StreamUrlCache,
 ) {
+
+    // ── Error classification ───────────────────────────────────────────────────
+    enum class StreamError {
+        NONE,       // success
+        TRANSIENT,  // timeout, 5xx, connection reset — retry silently
+        BLOCKED,    // 403, Cloudflare — retry silently (backend may have alt source)
+        NOT_FOUND,  // 404, backend ok=false with no streams — show friendly message
+    }
+
+    @Volatile var lastErrorType: StreamError = StreamError.NONE
+        private set
+
     // ── HTTP client ───────────────────────────────────────────────────────────
     // connectTimeout: 5 s — aggressive but fair for a home/VPS backend.
     // readTimeout: 60 s  — stream resolve can take up to 45 s on cold backend.
@@ -65,7 +91,7 @@ class BackendStreamRepository @Inject constructor(
 
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
-    // ── Sealed event types (kept identical to SSE version for compat) ─────────
+    // ── Sealed event types (kept identical to original for compat) ─────────────
     sealed class MediaEvent {
         data class StreamAvailable(
             val url:      String,
@@ -102,9 +128,18 @@ class BackendStreamRepository @Inject constructor(
         data class ConnectionError(val reason: String) : MediaEvent()
     }
 
-    // ── Low-level POST helper ─────────────────────────────────────────────────
+    // ── POST result wrapper — carries error type ───────────────────────────────
+    private sealed class PostResult {
+        data class Ok(val json: JSONObject) : PostResult()
+        data class Err(val error: StreamError) : PostResult()
+    }
 
-    private suspend fun post(url: String, body: JSONObject): JSONObject? =
+    // ── Low-level POST helper with aggressive error classification ────────────
+    //
+    // Returns PostResult.Ok on success, PostResult.Err with classified StreamError
+    // on any failure. Never throws — all exceptions are caught and mapped.
+
+    private suspend fun postClassified(url: String, body: JSONObject): PostResult =
         withContext(Dispatchers.IO) {
             try {
                 val req = Request.Builder()
@@ -112,16 +147,65 @@ class BackendStreamRepository @Inject constructor(
                     .post(body.toString().toRequestBody(JSON_MEDIA))
                     .build()
                 val resp = client.newCall(req).execute()
-                if (!resp.isSuccessful) {
-                    Log.w("BackendPOST", "HTTP ${resp.code} from $url")
-                    return@withContext null
+
+                when {
+                    resp.isSuccessful -> {
+                        val text = resp.body?.string()
+                        if (text.isNullOrBlank()) {
+                            Log.w("BackendPOST", "Empty body from $url")
+                            return@withContext PostResult.Err(StreamError.TRANSIENT)
+                        }
+                        try {
+                            PostResult.Ok(JSONObject(text))
+                        } catch (e: Exception) {
+                            Log.e("BackendPOST", "JSON parse failed from $url: ${e.message}")
+                            PostResult.Err(StreamError.TRANSIENT)
+                        }
+                    }
+                    resp.code == 404 -> {
+                        Log.w("BackendPOST", "404 from $url — content not found")
+                        PostResult.Err(StreamError.NOT_FOUND)
+                    }
+                    resp.code == 403 || isCloudflareBlock(resp) -> {
+                        Log.w("BackendPOST", "403/CF block from $url (code=${resp.code})")
+                        PostResult.Err(StreamError.BLOCKED)
+                    }
+                    resp.code in 500..599 -> {
+                        Log.w("BackendPOST", "5xx ${resp.code} from $url")
+                        PostResult.Err(StreamError.TRANSIENT)
+                    }
+                    resp.code == 429 -> {
+                        Log.w("BackendPOST", "429 rate-limited from $url")
+                        PostResult.Err(StreamError.TRANSIENT)
+                    }
+                    else -> {
+                        Log.w("BackendPOST", "HTTP ${resp.code} from $url")
+                        PostResult.Err(StreamError.TRANSIENT)
+                    }
                 }
-                val text = resp.body?.string() ?: return@withContext null
-                JSONObject(text)
+            } catch (e: IOException) {
+                // Network-level failure: timeout, connection reset, DNS failure, etc.
+                Log.e("BackendPOST", "IO error for $url: ${e.message}")
+                PostResult.Err(StreamError.TRANSIENT)
             } catch (e: Exception) {
-                Log.e("BackendPOST", "POST $url failed: ${e.message}")
-                null
+                Log.e("BackendPOST", "Unexpected error for $url: ${e.message}")
+                PostResult.Err(StreamError.TRANSIENT)
             }
+        }
+
+    /** Detect Cloudflare blocks: CF-RAY header present, or body contains CF error codes */
+    private fun isCloudflareBlock(resp: okhttp3.Response): Boolean {
+        if (resp.header("CF-RAY") != null || resp.header("cf-ray") != null) return true
+        // CF returns 1xxx error codes in JSON body for some block types
+        val bodyPeek = try { resp.peekBody(512).string() } catch (_: Exception) { "" }
+        return bodyPeek.contains("\"code\":1") || bodyPeek.contains("Cloudflare", ignoreCase = true)
+    }
+
+    // Convenience wrapper that returns JSONObject? (for callers that don't need error type)
+    private suspend fun post(url: String, body: JSONObject): JSONObject? =
+        when (val r = postClassified(url, body)) {
+            is PostResult.Ok  -> r.json
+            is PostResult.Err -> null
         }
 
     // ── Build the shared request body ─────────────────────────────────────────
@@ -138,10 +222,10 @@ class BackendStreamRepository @Inject constructor(
         put("tmdb_id", tmdbId)
         put("type", if (mediaType == MediaType.MOVIE) "movie" else "tv")
         put("title", title)
-        if (imdbId != null)          put("imdb_id", imdbId)
-        if (year   != null)          put("year", year)
-        if (season  > 0)             put("season", season)
-        if (episode > 0)             put("episode", episode)
+        if (imdbId != null)  put("imdb_id", imdbId)
+        if (year   != null)  put("year", year)
+        if (season  > 0)     put("season", season)
+        if (episode > 0)     put("episode", episode)
     }
 
     // ── Parse helpers ─────────────────────────────────────────────────────────
@@ -189,11 +273,22 @@ class BackendStreamRepository @Inject constructor(
         )
     }
 
+    // ── Cache helpers ─────────────────────────────────────────────────────────
+
+    private fun cacheTypeString(mediaType: MediaType) =
+        if (mediaType == MediaType.MOVIE) "movie" else "tv"
+
+    /** Called by PlayerViewModel when the fallback ladder is fully exhausted. */
+    fun invalidateCache(tmdbId: Int, mediaType: MediaType, season: Int, episode: Int) {
+        urlCache.invalidate(tmdbId, cacheTypeString(mediaType), season, episode)
+    }
+
     // ── resolveFirst — the main entry point ───────────────────────────────────
     //
-    // Fires all three POST calls in parallel.
-    // Returns immediately once /streams responds (playback can start).
-    // Download and subtitle callbacks fire as their responses arrive.
+    // 1. Check the 4-minute URL cache — return immediately if valid.
+    // 2. Fire all three POST calls in parallel.
+    // 3. Cache the result before returning.
+    // 4. Set lastErrorType for the ViewModel to route errors correctly.
 
     suspend fun resolveFirst(
         tmdbId:    Int,
@@ -209,37 +304,64 @@ class BackendStreamRepository @Inject constructor(
         onSubtitle: (Subtitle) -> Unit     = {},
     ): StreamResult? = coroutineScope {
 
+        lastErrorType = StreamError.NONE
+
+        // ── 1. Cache check — instant return if valid ───────────────────────
+        val cached = urlCache.get(tmdbId, cacheTypeString(mediaType), season, episode)
+        if (cached != null) {
+            Log.d("BackendPOST", "Serving cached stream for tmdb=$tmdbId")
+            // Still fire download/subtitle in background so the pickers populate
+            val base = streamBaseUrl()
+            if (base != null) {
+                val body = buildBody(tmdbId, mediaType, title, season, episode, imdbId, year)
+                async(Dispatchers.IO) {
+                    post("$base/api/v1/download", body)?.let { handleDownloads(it, onDownload) }
+                }
+                async(Dispatchers.IO) {
+                    val subBody = buildSubtitleBody(tmdbId, mediaType, imdbId, season, episode, languages)
+                    post("$base/api/v1/subtitles", subBody)?.let { handleSubtitles(it, onSubtitle) }
+                }
+            }
+            return@coroutineScope cached
+        }
+
+        // ── 2. No cache — fetch from backend ──────────────────────────────
         val base = streamBaseUrl() ?: run {
             Log.e("BackendPOST", "No backend URL configured")
+            lastErrorType = StreamError.TRANSIENT
             return@coroutineScope null
         }
 
         val body = buildBody(tmdbId, mediaType, title, season, episode, imdbId, year)
 
-        // ── Fire all three in parallel ─────────────────────────────────────
+        // Fire all three in parallel
         val streamDeferred = async(Dispatchers.IO) {
-            post("$base/api/v1/streams", body)
+            postClassified("$base/api/v1/streams", body)
         }
         val downloadDeferred = async(Dispatchers.IO) {
             post("$base/api/v1/download", body)
         }
         val subtitleDeferred = async(Dispatchers.IO) {
-            val subBody = JSONObject().apply {
-                put("tmdb_id", tmdbId)
-                put("type", if (mediaType == MediaType.MOVIE) "movie" else "tv")
-                if (imdbId != null) put("imdb_id", imdbId)
-                if (season  > 0)   put("season", season)
-                if (episode > 0)   put("episode", episode)
-                put("languages", JSONArray(languages))
-            }
+            val subBody = buildSubtitleBody(tmdbId, mediaType, imdbId, season, episode, languages)
             post("$base/api/v1/subtitles", subBody)
         }
 
         // ── Await streams first — this is the critical path ───────────────
-        val streamsJson = streamDeferred.await()
-        if (streamsJson == null || !streamsJson.optBoolean("ok", false)) {
-            Log.w("BackendPOST", "Streams response: ok=false or null")
-            // Still drain the other two so their callbacks fire
+        val streamPostResult = streamDeferred.await()
+
+        if (streamPostResult is PostResult.Err) {
+            lastErrorType = streamPostResult.error
+            Log.w("BackendPOST", "Stream fetch failed: ${streamPostResult.error}")
+            // Drain the others so we don't leak coroutines
+            downloadDeferred.await()?.let { handleDownloads(it, onDownload) }
+            subtitleDeferred.await()?.let { handleSubtitles(it, onSubtitle) }
+            return@coroutineScope null
+        }
+
+        val streamsJson = (streamPostResult as PostResult.Ok).json
+        if (!streamsJson.optBoolean("ok", false)) {
+            Log.w("BackendPOST", "Streams response: ok=false")
+            lastErrorType = StreamError.NOT_FOUND
             downloadDeferred.await()?.let { handleDownloads(it, onDownload) }
             subtitleDeferred.await()?.let { handleSubtitles(it, onSubtitle) }
             return@coroutineScope null
@@ -249,12 +371,13 @@ class BackendStreamRepository @Inject constructor(
         val bestJson = streamsJson.optJSONObject("stream")
         val best     = bestJson?.let { parseStreamEntry(it) }
         if (best == null) {
+            lastErrorType = StreamError.NOT_FOUND
             downloadDeferred.await()?.let { handleDownloads(it, onDownload) }
             subtitleDeferred.await()?.let { handleSubtitles(it, onSubtitle) }
             return@coroutineScope null
         }
 
-        // Build the full fallback ladder from "streams" array
+        // Build full fallback ladder from "streams" array
         val fallbackLadder = mutableListOf<QualityTrack>()
         val streamsArr = streamsJson.optJSONArray("streams")
         if (streamsArr != null) {
@@ -263,11 +386,10 @@ class BackendStreamRepository @Inject constructor(
                 val track = QualityTrack(label = e.quality, url = e.url)
                 if (fallbackLadder.none { it.url == track.url }) {
                     fallbackLadder.add(track)
-                    if (e.url != best.url) onStream(track)  // notify extras
+                    if (e.url != best.url) onStream(track)
                 }
             }
         }
-        // Ensure the winner is at index 0
         if (fallbackLadder.none { it.url == best.url }) {
             fallbackLadder.add(0, QualityTrack(label = best.quality, url = best.url))
         }
@@ -283,9 +405,10 @@ class BackendStreamRepository @Inject constructor(
             qualities  = fallbackLadder,
         )
 
-        // ── Drain downloads and subtitles in the background ───────────────
-        // Both are already in-flight (fired above). We just await and call
-        // the callbacks — these do NOT block playback from starting.
+        // ── 3. Store in cache ──────────────────────────────────────────────
+        urlCache.put(tmdbId, cacheTypeString(mediaType), season, episode, result)
+
+        // Drain downloads and subtitles in background — do NOT block playback
         async(Dispatchers.IO) {
             downloadDeferred.await()?.let { handleDownloads(it, onDownload) }
         }
@@ -318,11 +441,23 @@ class BackendStreamRepository @Inject constructor(
         }
     }
 
+    private fun buildSubtitleBody(
+        tmdbId:    Int,
+        mediaType: MediaType,
+        imdbId:    String?,
+        season:    Int,
+        episode:   Int,
+        languages: List<String>,
+    ) = JSONObject().apply {
+        put("tmdb_id", tmdbId)
+        put("type", if (mediaType == MediaType.MOVIE) "movie" else "tv")
+        if (imdbId != null) put("imdb_id", imdbId)
+        if (season  > 0)   put("season", season)
+        if (episode > 0)   put("episode", episode)
+        put("languages", JSONArray(languages))
+    }
+
     // ── resolveDownloadLinks — used by DetailScreen + DownloadService ─────────
-    //
-    // Calls POST /api/v1/download and returns a flat list of QualityTrack entries,
-    // one per available resolution. The backend deduplicates by quality so there
-    // are never two 1080p entries for the same language.
 
     suspend fun resolveDownloadLinks(
         tmdbId:    Int,
@@ -337,15 +472,37 @@ class BackendStreamRepository @Inject constructor(
         val body = buildBody(tmdbId, mediaType, title, season, episode, imdbId, year)
         val json = post("$base/api/v1/download", body) ?: return@withContext emptyList()
         val arr  = json.optJSONArray("links") ?: return@withContext emptyList()
-        val out  = mutableListOf<QualityTrack>()
+
+        data class RawEntry(val quality: String, val language: String, val url: String, val sizeBytes: Long)
+        val raw = mutableListOf<RawEntry>()
         for (i in 0 until arr.length()) {
             val e = parseDownloadEntry(arr.getJSONObject(i)) ?: continue
-            out.add(QualityTrack(
-                label              = "${e.quality} (${e.language})",
-                url                = e.url,
-                estimatedSizeBytes = e.sizeBytes,
-            ))
+            raw.add(RawEntry(e.quality, e.language, e.url, e.sizeBytes))
         }
+
+        val qualityLanguageCounts = raw.groupBy { it.quality }.mapValues { (_, v) ->
+            v.map { it.language }.toSet().size
+        }
+
+        val out = mutableListOf<QualityTrack>()
+        val seen = mutableSetOf<String>()
+        for (e in raw) {
+            val key = "${e.quality}|${e.language}"
+            if (key in seen) continue
+            seen.add(key)
+            val label = if ((qualityLanguageCounts[e.quality] ?: 1) > 1 && e.language != "English") {
+                "${e.quality} · ${e.language}"
+            } else {
+                e.quality
+            }
+            out.add(QualityTrack(label = label, url = e.url, estimatedSizeBytes = e.sizeBytes))
+        }
+
+        val resOrder = listOf("2160p", "1080p", "720p", "480p", "360p", "240p", "Auto")
+        out.sortWith(compareBy(
+            { resOrder.indexOf(it.label.substringBefore(" ·")).takeIf { idx -> idx >= 0 } ?: 99 },
+            { if (it.label.contains("·")) 1 else 0 }
+        ))
         out
     }
 
@@ -359,13 +516,7 @@ class BackendStreamRepository @Inject constructor(
         languages: List<String> = listOf("en"),
     ): List<Subtitle> = withContext(Dispatchers.IO) {
         val base = streamBaseUrl() ?: return@withContext emptyList()
-        val body = JSONObject().apply {
-            put("tmdb_id", tmdbId)
-            put("type", if (mediaType == MediaType.MOVIE) "movie" else "tv")
-            if (season  > 0) put("season", season)
-            if (episode > 0) put("episode", episode)
-            put("languages", JSONArray(languages))
-        }
+        val body = buildSubtitleBody(tmdbId, mediaType, null, season, episode, languages)
         val json = post("$base/api/v1/subtitles", body) ?: return@withContext emptyList()
         val arr  = json.optJSONArray("subtitles") ?: return@withContext emptyList()
         val out  = mutableListOf<Subtitle>()

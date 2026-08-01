@@ -14,6 +14,7 @@ import com.axio.reelz.data.repository.UserSessionRepository
 import com.axio.reelz.remoteconfig.PremiumGate
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
 import com.axio.reelz.stream.BackendStreamRepository
+import com.axio.reelz.stream.StreamUrlCache
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -123,9 +124,13 @@ object AppModule {
     // subtitles. No WebView, no C++, no source racing, no scan loop.
 
     @Provides @Singleton
+    fun provideStreamUrlCache(): StreamUrlCache = StreamUrlCache()
+
+    @Provides @Singleton
     fun provideBackendStreamRepository(
         remoteConfig: RemoteConfigRepository,
-    ): BackendStreamRepository = BackendStreamRepository(remoteConfig)
+        urlCache: StreamUrlCache,
+    ): BackendStreamRepository = BackendStreamRepository(remoteConfig, urlCache)
 
     // ── Premium session ───────────────────────────────────────────────────────
 

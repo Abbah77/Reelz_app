@@ -34,6 +34,8 @@ import com.axio.reelz.stream.BackendStreamRepository
 import com.axio.reelz.stream.searchSubtitles
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -101,13 +103,13 @@ data class PlayerUiState(
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ViewModel — thin client: calls backend, plays result
+// ViewModel — thin client with bulletproof error handling + URL cache
 // ─────────────────────────────────────────────────────────────────────────────
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
-    private val streamRepo: BackendStreamRepository,   // ← replaces StreamEngine
+    private val streamRepo: BackendStreamRepository,
     private val repo: MediaRepository,
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val adEngine: AdEngine,
@@ -133,12 +135,23 @@ class PlayerViewModel @Inject constructor(
     private var currentPoster: String? = null
     private var currentDownloadId: String? = null
     private var lastResult: StreamResult? = null
-    private var fallbackIndex = 0        // tracks which URL in the ladder we last tried
+    private var fallbackIndex = 0
     private var isFirstPlayThisSession = true
     private var lastPreRollTimeMinutes = -30L
     private var trackSelector: DefaultTrackSelector? = null
     private var isOnMeteredConnection = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    // ── Silent-retry state ────────────────────────────────────────────────────
+    // When a URL or fetch fails with a transient/blocked error the app retries
+    // invisibly. We cap silent retries to avoid an infinite loop if the backend
+    // is genuinely down — after MAX_SILENT_RETRIES we show a friendly message.
+    private var silentRetryCount = 0
+    private val MAX_SILENT_RETRIES = 3
+
+    // Debounce job so rapid errors (e.g. during HLS segment load) don't spawn
+    // multiple parallel re-fetch coroutines.
+    private var errorHandlerJob: Job? = null
 
     fun canBackgroundPlay(): Boolean = premiumGate.canBackgroundPlay()
 
@@ -219,6 +232,11 @@ class PlayerViewModel @Inject constructor(
         currentPoster     = posterPath
         currentDownloadId = downloadId
 
+        // Reset retry counters on every fresh init
+        silentRetryCount = 0
+        fallbackIndex    = 0
+        errorHandlerJob?.cancel()
+
         val isOffline = downloadId != null
         val epLabel   = if (season > 0) "S${season} E${episode}" else ""
 
@@ -237,7 +255,7 @@ class PlayerViewModel @Inject constructor(
             if (isOffline && downloadId != null) loadDownloadedSubtitles(tmdbId, season, episode)
 
             if (streamUrl != null) {
-                // Offline/pre-resolved URL — play immediately
+                // Offline/pre-resolved URL — play immediately, no cache needed
                 val result = StreamResult(
                     url = streamUrl, isHls = streamIsHls,
                     headers = emptyMap(), referer = streamReferer, origin = streamOrigin,
@@ -253,8 +271,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ── Core resolve — SSE: starts playing on first stream event,
-    //    downloads and subtitles arrive in the background via the same connection
+    // Core resolve — cache-first, then backend
     // ─────────────────────────────────────────────────────────────────────────
 
     private suspend fun resolveAndPlay(
@@ -283,12 +300,9 @@ class PlayerViewModel @Inject constructor(
         }
         isFirstPlayThisSession = false
 
-        // Reset fallback index every fresh backend resolve
+        // Reset fallback index on every fresh backend call
         fallbackIndex = 0
 
-        // SSE call — resolveFirst() returns as soon as the FIRST stream event
-        // arrives. Downloads and subtitles keep flowing into their callbacks
-        // on the same connection until the backend sends 'done'.
         val result = streamRepo.resolveFirst(
             tmdbId    = tmdbId,
             mediaType = type,
@@ -298,13 +312,9 @@ class PlayerViewModel @Inject constructor(
             imdbId    = imdbId,
             year      = year,
             onStream = { track ->
-                // Additional stream URLs go into the live fallback ladder inside
-                // the StreamResult — no UI update needed; handleError reads it.
                 Log.d("PlayerVM", "Fallback URL ready: [${track.label}]")
             },
             onDownload = { track ->
-                // Each download quality arrives here as it resolves.
-                // Accumulate into the UI so the download sheet populates live.
                 val current = _ui.value.availableQualities.toMutableList()
                 if (current.none { it.url == track.url }) {
                     current.add(track)
@@ -312,7 +322,6 @@ class PlayerViewModel @Inject constructor(
                 }
             },
             onSubtitle = { sub ->
-                // Each subtitle arrives here; add to the picker.
                 val option = SubtitleOption(sub.language, sub.label, sub.url)
                 val current = _ui.value.subtitleOptions.toMutableList()
                 if (current.none { it.url == sub.url }) {
@@ -325,15 +334,46 @@ class PlayerViewModel @Inject constructor(
         )
 
         if (result == null) {
+            val errType = streamRepo.lastErrorType
+
+            // 404 / NOT_FOUND is the only case we show to the user — everything
+            // else we retry silently (or fall through to network-error UI).
+            if (errType == BackendStreamRepository.StreamError.NOT_FOUND) {
+                _ui.update { it.copy(state = PlayerState.Error(
+                    "Reelz doesn't have this title yet. Try again later.",
+                    isNetworkError = false,
+                ))}
+                return
+            }
+
             val netOk = _ui.value.networkState is NetworkState.Connected
-            _ui.update { it.copy(state = PlayerState.Error(
-                msg = if (!netOk) "No internet connection. Connect and try again."
-                      else "No stream found. Try again shortly.",
-                isNetworkError = !netOk,
-            ))}
+            if (!netOk) {
+                _ui.update { it.copy(state = PlayerState.Error(
+                    "No internet connection. Connect and try again.",
+                    isNetworkError = true,
+                ))}
+                return
+            }
+
+            // Transient / blocked error — retry silently up to MAX_SILENT_RETRIES
+            if (silentRetryCount < MAX_SILENT_RETRIES) {
+                silentRetryCount++
+                Log.d("PlayerVM", "Silent retry #$silentRetryCount (errType=$errType)")
+                // Brief pause to avoid hammering the backend instantly
+                delay(300L * silentRetryCount)
+                resolveAndPlay(tmdbId, type, title, season, episode, imdbId, year, isOffline)
+            } else {
+                // Give up silently — show a vague "try again" without revealing internals
+                _ui.update { it.copy(state = PlayerState.Error(
+                    "Couldn't load stream. Tap to try again.",
+                    isNetworkError = false,
+                ))}
+            }
             return
         }
 
+        // Success — reset retry counter
+        silentRetryCount = 0
         lastResult = result
         playStream(result)
     }
@@ -359,21 +399,16 @@ class PlayerViewModel @Inject constructor(
             subtitlesEnabled = lastEnabled != null) }
     }
 
-    /** User-initiated: search subtitles via backend (premium only).
-     *  [query] is a free-text language hint the user typed (e.g. "French", "fr").
-     *  An empty query defaults to English + the device locale language. */
     fun searchOnlineSubtitles(query: String = "") {
         if (!premiumGate.canManualSubtitleSearch()) {
             _ui.update { it.copy(subtitleUpsellMessage =
                 "Manual subtitle search is a Premium feature. Upgrade to search any language.") }
             return
         }
-        // Build language list from the user's query; fall back to en + device locale
         val langs = if (query.isBlank()) {
             val locale = java.util.Locale.getDefault().language.ifBlank { "en" }
             listOf("en", locale).distinct()
         } else {
-            // Accept comma-separated values like "en, fr" or a single word "French"
             query.split(",").map { it.trim().lowercase() }.filter { it.isNotBlank() }
         }
         _ui.update { it.copy(isSubtitleSearching = true, subtitleSearchEmpty = false, subtitleUpsellMessage = null) }
@@ -452,13 +487,10 @@ class PlayerViewModel @Inject constructor(
         trackSelector?.let { ts ->
             val params = ts.buildUponParameters()
             if (enabled) {
-                // Set preferred language AND clear any forced-off flags so
-                // the track actually renders (fixes "on but nothing shown" bug)
                 ts.setParameters(params
                     .setPreferredTextLanguage(language)
                     .setIgnoredTextSelectionFlags(0))
             } else {
-                // Clear language preference and suppress all text tracks
                 ts.setParameters(params
                     .setPreferredTextLanguage(null)
                     .setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED))
@@ -471,8 +503,6 @@ class PlayerViewModel @Inject constructor(
         if (cur.subtitlesEnabled) {
             selectSubtitle("off")
         } else {
-            // Try to restore last selected language; if none was ever chosen,
-            // fall back to first available option (fixes toggle doing nothing on first tap)
             val target = cur.subtitleOptions.firstOrNull { it.language == cur.activeSubtitleLanguage }
                 ?: cur.subtitleOptions.firstOrNull()
             if (target != null) selectSubtitle(target.language)
@@ -525,13 +555,6 @@ class PlayerViewModel @Inject constructor(
         trackSelector = ts
 
         val bandwidthMeter = DefaultBandwidthMeter.Builder(context).setResetOnNetworkTypeChange(true).build()
-        // Buffer tuning for near-instant start:
-        //   minBufferMs     = 1_500  — only 1.5 s needed before playback starts
-        //   maxBufferMs     = 60_000 — keep up to 60 s buffered when idle
-        //   bufferForPlayMs = 500    — resume after rebuffer with just 0.5 s
-        //   bufferForPlayAfterRebufferMs = 1_000 — 1 s to recover from stall
-        // Old values (800/60000/300/500) caused visible buffering pauses because
-        // 800 ms min buffer is too tight on variable-bitrate HLS segments.
         val loadCtrl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(1_500, 60_000, 500, 1_000)
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -540,8 +563,8 @@ class PlayerViewModel @Inject constructor(
 
         val videoCache  = getVideoCache(context)
         val upstreamDsf = DefaultHttpDataSource.Factory()
-            .setConnectTimeoutMs(4_000)    // 4 s — fail fast, fallback fast
-            .setReadTimeoutMs(20_000)      // 20 s read — CDN segment servers can be slow
+            .setConnectTimeoutMs(4_000)
+            .setReadTimeoutMs(20_000)
             .setAllowCrossProtocolRedirects(true)
             .setTransferListener(bandwidthMeter)
         val cacheDsf = CacheDataSource.Factory()
@@ -606,8 +629,8 @@ class PlayerViewModel @Inject constructor(
             }
             val upstreamDsf = DefaultHttpDataSource.Factory()
                 .setDefaultRequestProperties(headers)
-                .setConnectTimeoutMs(4_000)    // fail fast → trigger fallback
-                .setReadTimeoutMs(20_000)      // generous read for CDN segments
+                .setConnectTimeoutMs(4_000)
+                .setReadTimeoutMs(20_000)
                 .setAllowCrossProtocolRedirects(true)
             CacheDataSource.Factory()
                 .setCache(getVideoCache(appContext)).setUpstreamDataSourceFactory(upstreamDsf)
@@ -675,47 +698,83 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Bulletproof error handler
+    //
+    // Priority order:
+    //   1. No network → show network error (resume auto when reconnected)
+    //   2. Fallback ladder has a next URL → swap silently, NO UI change
+    //   3. Ladder exhausted → invalidate cache, re-fetch backend silently
+    //      (up to MAX_SILENT_RETRIES) → only show UI after all retries fail
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun handleError(error: PlaybackException) {
+        // Debounce: cancel any in-flight error handler before spawning a new one.
+        // This prevents rapid HLS segment errors from firing 10 parallel re-fetches.
+        errorHandlerJob?.cancel()
+        errorHandlerJob = viewModelScope.launch { handleErrorInternal(error) }
+    }
+
+    private suspend fun handleErrorInternal(error: PlaybackException) {
+        Log.w("PlayerVM", "Playback error: ${error.errorCodeName} — ${error.message}")
+
+        // ── 1. Network gone → wait for reconnect ──────────────────────────
         val netOk = _ui.value.networkState is NetworkState.Connected
         if (!netOk && !_ui.value.isOfflinePlayback) {
             _ui.update { it.copy(state = PlayerState.Error(
-                "No internet connection. Playback will resume when you're back online.", isNetworkError = true)) }
+                "No internet connection. Playback will resume when you're back online.",
+                isNetworkError = true)) }
             return
         }
 
-        // ── Fallback ladder: try the next URL the SSE stream already gave us ──
-        // This avoids a full backend round-trip when we already have alternative
-        // URLs. The ladder grows in the background as the SSE connection drains,
-        // so by the time the first URL fails there are often 2-5 others ready.
+        // ── 2. Try next URL in the fallback ladder ─────────────────────────
         val ladder = lastResult?.qualities ?: emptyList()
         val nextIndex = fallbackIndex + 1
         if (nextIndex < ladder.size) {
             val nextTrack = ladder[nextIndex]
             if (nextTrack.url.isNotBlank()) {
-                Log.d("PlayerVM", "Fallback: trying ladder[$nextIndex] ${nextTrack.label}")
+                Log.d("PlayerVM", "Silent fallback: trying ladder[$nextIndex] ${nextTrack.label}")
                 fallbackIndex = nextIndex
                 val current = lastResult!!
                 val isHls = nextTrack.url.contains(".m3u8", ignoreCase = true) ||
                         (!nextTrack.url.contains("/api/v1/torrent/") && current.isHls)
                 val fallbackResult = current.copy(
-                    url   = nextTrack.url,
-                    isHls = isHls,
+                    url     = nextTrack.url,
+                    isHls   = isHls,
                     quality = nextTrack.label,
                 )
                 lastResult = fallbackResult
+                // Stay in Buffering — user sees spinner, not error
                 _ui.update { it.copy(state = PlayerState.Buffering) }
                 playStream(fallbackResult)
                 return
             }
         }
 
-        // Ladder exhausted → full re-resolve from backend
-        Log.d("PlayerVM", "Fallback ladder exhausted (tried ${fallbackIndex + 1}/${ladder.size}), re-resolving")
-        _ui.update { it.copy(state = PlayerState.Resolving) }
-        viewModelScope.launch {
-            resolveAndPlay(currentTmdbId, currentType, currentTitle,
+        // ── 3. Ladder exhausted → invalidate cache + re-fetch backend ──────
+        Log.d("PlayerVM", "Fallback ladder exhausted (tried ${fallbackIndex + 1}/${ladder.size})")
+        // Invalidate so the next resolveFirst hits the backend fresh
+        streamRepo.invalidateCache(currentTmdbId, currentType, currentSeason, currentEpisode)
+
+        if (silentRetryCount < MAX_SILENT_RETRIES) {
+            silentRetryCount++
+            Log.d("PlayerVM", "Silent backend re-fetch #$silentRetryCount")
+            // Stay in Buffering state — user sees spinner, no error flash
+            _ui.update { it.copy(state = PlayerState.Buffering) }
+            // Small back-off so we don't hammer the backend on a flaky connection
+            delay(200L * silentRetryCount)
+            resolveAndPlay(
+                currentTmdbId, currentType, currentTitle,
                 currentSeason, currentEpisode, currentImdbId, currentYear,
-                _ui.value.isOfflinePlayback)
+                _ui.value.isOfflinePlayback,
+            )
+        } else {
+            // All retries exhausted — NOW show the user a message
+            silentRetryCount = 0
+            _ui.update { it.copy(state = PlayerState.Error(
+                "Couldn't load stream. Tap to try again.",
+                isNetworkError = false,
+            ))}
         }
     }
 
@@ -728,6 +787,9 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun retry() {
+        silentRetryCount = 0
+        fallbackIndex    = 0
+        streamRepo.invalidateCache(currentTmdbId, currentType, currentSeason, currentEpisode)
         _ui.update { it.copy(state = PlayerState.Resolving) }
         viewModelScope.launch {
             resolveAndPlay(currentTmdbId, currentType, currentTitle,
@@ -739,6 +801,7 @@ class PlayerViewModel @Inject constructor(
     override fun onCleared() { release(null) }
 
     fun release(context: Context? = null) {
+        errorHandlerJob?.cancel()
         stopNetworkMonitor(context)
         exoPlayer?.stop(); exoPlayer?.clearMediaItems(); exoPlayer?.release()
         exoPlayer = null

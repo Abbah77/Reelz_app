@@ -444,9 +444,28 @@ class DetailViewModel @Inject constructor(
             runtimeMinutes != null && runtimeMinutes > 0 -> runtimeMinutes * 60L
             else -> 7200L
         }
+        // Resolution order for sorting — highest first.
+        // Tracks from /download already have plain labels like "1080p" or
+        // "1080p · Hindi". We sort by the numeric height extracted from the
+        // label prefix so that bandwidth=0 (download links) sort correctly.
+        val resOrder = listOf("2160p", "1080p", "720p", "480p", "360p", "240p")
+
+        fun resIndex(label: String): Int =
+            resOrder.indexOfFirst { label.startsWith(it) }.takeIf { it >= 0 } ?: 99
+
+        fun estimatedBitrateForLabel(label: String): Long = when {
+            label.startsWith("2160") -> 15_000_000L
+            label.startsWith("1080") -> 5_000_000L
+            label.startsWith("720")  -> 2_500_000L
+            label.startsWith("480")  -> 1_000_000L
+            label.startsWith("360")  ->   600_000L
+            label.startsWith("240")  ->   300_000L
+            else                     ->         0L
+        }
+
         return tracks.map { track ->
             val label = when {
-                track.label != "Auto" && track.label.isNotBlank() -> track.label
+                track.label.isNotBlank() && track.label != "Auto" -> track.label
                 track.bandwidth >= 8_000_000 -> "1080p"
                 track.bandwidth >= 4_000_000 -> "1080p"
                 track.bandwidth >= 2_000_000 -> "720p"
@@ -455,16 +474,23 @@ class DetailViewModel @Inject constructor(
                 track.bandwidth >  0         -> "240p"
                 else -> "Auto"
             }
+            val effectiveBitrate = track.bandwidth.takeIf { it > 0 }
+                ?: estimatedBitrateForLabel(label)
             val size = when {
                 track.estimatedSizeBytes > 0 -> track.estimatedSizeBytes
-                track.bandwidth > 0 -> ((track.bandwidth * runtimeSec) / 8L * 55L) / 100L
+                effectiveBitrate > 0 -> ((effectiveBitrate * runtimeSec) / 8L * 55L) / 100L
                 else -> 0L
             }
             track.copy(label = label, estimatedSizeBytes = size)
         }
+        // Dedup: keep one entry per label (prefer the one with a real size)
         .groupBy { it.label }
-        .map { (_, v) -> v.maxByOrNull { it.bandwidth }!! }
-        .sortedByDescending { it.bandwidth }
+        .map { (_, v) -> v.maxByOrNull { it.estimatedSizeBytes }!! }
+        // Sort highest resolution first; dubs after English at same resolution
+        .sortedWith(compareBy(
+            { resIndex(it.label) },
+            { if (it.label.contains("·")) 1 else 0 },
+        ))
     }
 
     // parseMasterPlaylist removed — quality ladder now comes from the backend
