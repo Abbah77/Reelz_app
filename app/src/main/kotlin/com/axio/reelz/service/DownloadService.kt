@@ -245,28 +245,15 @@ class DownloadService : Service() {
             val mediaType = runCatching { MediaType.valueOf(item.mediaType) }.getOrNull()
                 ?: return item
 
-            // Use the SSE event stream — collect download events until done.
+            // Use POST /download — returns deduplicated per-resolution links.
             val links = mutableListOf<com.axio.reelz.data.model.QualityTrack>()
-            streamRepo.openEventStream(
+            streamRepo.resolveDownloadLinks(
                 tmdbId    = item.tmdbId,
                 mediaType = mediaType,
                 title     = item.title,
                 season    = item.season,
                 episode   = item.episode,
-            ).collect { event ->
-                when (event) {
-                    is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.DownloadAvailable ->
-                        links.add(com.axio.reelz.data.model.QualityTrack(
-                            label              = event.quality,
-                            url                = event.url,
-                            estimatedSizeBytes = event.sizeBytes,
-                        ))
-                    is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.Done,
-                    is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.ConnectionError ->
-                        return@collect
-                    else -> {}
-                }
-            }
+            ).forEach { track -> links.add(track) }
 
             if (links.isEmpty()) return item  // backend found nothing — keep current URL
 

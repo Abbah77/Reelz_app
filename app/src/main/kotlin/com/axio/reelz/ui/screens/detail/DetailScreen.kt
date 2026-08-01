@@ -362,45 +362,26 @@ class DetailViewModel @Inject constructor(
             }
         }
 
-        // SSE — download qualities arrive live as each provider resolves.
-        // The sheet populates incrementally; no waiting for the slowest provider.
+        // POST /download — returns all deduplicated per-resolution links in one shot.
+        // Faster than the old SSE approach since the backend returns once all
+        // download providers have resolved (no long-lived connection needed).
         viewModelScope.launch {
-            val accumulated = mutableListOf<QualityTrack>()
             try {
-                streamRepo.openEventStream(
+                val tracks = streamRepo.resolveDownloadLinks(
                     tmdbId    = tmdbId,
                     mediaType = mediaType,
                     title     = _ui.value.detail?.title ?: "",
                     season    = season,
                     episode   = episode,
-                ).collect { event ->
-                    when (event) {
-                        is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.DownloadAvailable -> {
-                            val track = QualityTrack(
-                                label              = event.quality,
-                                url                = event.url,
-                                estimatedSizeBytes = event.sizeBytes,
-                            )
-                            if (accumulated.none { it.url == track.url }) {
-                                accumulated.add(track)
-                                // Update the sheet live as each quality arrives
-                                val normalized = normalizeQualities(accumulated, _ui.value.detail?.runtime)
-                                preResolvedQualities[key] = normalized
-                                _ui.update { it.copy(downloadQualities = normalized, pendingQualityLabels = emptySet()) }
-                            }
-                        }
-                        is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.Done,
-                        is com.axio.reelz.stream.BackendStreamRepository.MediaEvent.ConnectionError -> {
-                            // Stream finished or failed — show fallback if nothing came through
-                            if (accumulated.isEmpty()) {
-                                val fallbackUrl = preResolvedStream?.url ?: ""
-                                val fallback = listOf(QualityTrack("Best available", fallbackUrl))
-                                _ui.update { it.copy(downloadQualities = fallback, pendingQualityLabels = emptySet()) }
-                            }
-                            return@collect
-                        }
-                        else -> { /* stream/subtitle/provider events — not relevant here */ }
-                    }
+                )
+                if (tracks.isNotEmpty()) {
+                    val normalized = normalizeQualities(tracks, _ui.value.detail?.runtime)
+                    preResolvedQualities[key] = normalized
+                    _ui.update { it.copy(downloadQualities = normalized, pendingQualityLabels = emptySet()) }
+                } else {
+                    val fallbackUrl = preResolvedStream?.url ?: ""
+                    val fallback = listOf(QualityTrack("Best available", fallbackUrl))
+                    _ui.update { it.copy(downloadQualities = fallback, pendingQualityLabels = emptySet()) }
                 }
             } catch (_: Exception) {
                 _ui.update { it.copy(pendingQualityLabels = emptySet()) }

@@ -318,6 +318,37 @@ class BackendStreamRepository @Inject constructor(
         }
     }
 
+    // ── resolveDownloadLinks — used by DetailScreen + DownloadService ─────────
+    //
+    // Calls POST /api/v1/download and returns a flat list of QualityTrack entries,
+    // one per available resolution. The backend deduplicates by quality so there
+    // are never two 1080p entries for the same language.
+
+    suspend fun resolveDownloadLinks(
+        tmdbId:    Int,
+        mediaType: MediaType,
+        title:     String,
+        season:    Int = 0,
+        episode:   Int = 0,
+        imdbId:    String? = null,
+        year:      Int? = null,
+    ): List<QualityTrack> = withContext(Dispatchers.IO) {
+        val base = streamBaseUrl() ?: return@withContext emptyList()
+        val body = buildBody(tmdbId, mediaType, title, season, episode, imdbId, year)
+        val json = post("$base/api/v1/download", body) ?: return@withContext emptyList()
+        val arr  = json.optJSONArray("links") ?: return@withContext emptyList()
+        val out  = mutableListOf<QualityTrack>()
+        for (i in 0 until arr.length()) {
+            val e = parseDownloadEntry(arr.getJSONObject(i)) ?: continue
+            out.add(QualityTrack(
+                label              = "${e.quality} (${e.language})",
+                url                = e.url,
+                estimatedSizeBytes = e.sizeBytes,
+            ))
+        }
+        out
+    }
+
     // ── searchSubtitles — used by PlayerViewModel subtitle search ─────────────
 
     suspend fun searchSubtitles(
