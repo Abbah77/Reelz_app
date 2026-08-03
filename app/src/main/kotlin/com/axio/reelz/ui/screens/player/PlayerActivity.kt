@@ -1,14 +1,18 @@
 package com.axio.reelz.ui.screens.player
 
 import android.app.Activity
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -24,16 +28,16 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.PathData
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -65,7 +69,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import androidx.compose.ui.draw.drawBehind
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Custom vector icons
@@ -271,6 +274,77 @@ private val IconTimerOff: ImageVector
         )
     }.build()
 
+private val IconSettings: ImageVector
+    get() = ImageVector.Builder("Settings", 24.dp, 24.dp, 24f, 24f).apply {
+        addPath(
+            pathData = PathData {
+                // cog outline
+                moveTo(12f, 15f); arcTo(3f, 3f, 0f, false, true, 12f, 9f); arcTo(3f, 3f, 0f, false, true, 12f, 15f)
+                moveTo(19.4f, 15f); arcTo(1.65f, 1.65f, 0f, false, false, 0.33f, 1.65f)
+                lineTo(18f, 13f); arcTo(1.65f, 1.65f, 0f, false, false, 15.82f, 9.17f)
+                lineTo(19.4f, 9f); arcTo(1.65f, 1.65f, 0f, false, false, 19.73f, 7.35f)
+                lineTo(21f, 5f); lineTo(19f, 3f); lineTo(17f, 4.27f)
+                arcTo(1.65f, 1.65f, 0f, false, false, 15.33f, 4.6f)
+                lineTo(15f, 4.6f); arcTo(1.65f, 1.65f, 0f, false, false, 13.35f, 3f)
+                lineTo(13f, 3f); lineTo(11f, 3f); lineTo(10.65f, 3f)
+                arcTo(1.65f, 1.65f, 0f, false, false, 9f, 4.6f)
+                lineTo(8.67f, 4.6f); arcTo(1.65f, 1.65f, 0f, false, false, 7f, 4.27f)
+                lineTo(5f, 3f); lineTo(3f, 5f); lineTo(4.27f, 7f)
+                arcTo(1.65f, 1.65f, 0f, false, false, 4.6f, 8.67f)
+                lineTo(4.6f, 9f); arcTo(1.65f, 1.65f, 0f, false, false, 3f, 10.65f)
+                lineTo(3f, 11f); lineTo(3f, 13f); lineTo(3f, 13.35f)
+                arcTo(1.65f, 1.65f, 0f, false, false, 4.6f, 15f)
+                lineTo(4.6f, 15.33f); arcTo(1.65f, 1.65f, 0f, false, false, 4.27f, 17f)
+                lineTo(3f, 19f); lineTo(5f, 21f); lineTo(7f, 19.73f)
+                arcTo(1.65f, 1.65f, 0f, false, false, 8.67f, 19.4f)
+                lineTo(9f, 19.4f); arcTo(1.65f, 1.65f, 0f, false, false, 10.65f, 21f)
+                lineTo(11f, 21f); lineTo(13f, 21f); lineTo(13.35f, 21f)
+                arcTo(1.65f, 1.65f, 0f, false, false, 15f, 19.4f)
+                lineTo(15.33f, 19.4f); arcTo(1.65f, 1.65f, 0f, false, false, 17f, 19.73f)
+                lineTo(19f, 21f); lineTo(21f, 19f); lineTo(19.73f, 17f)
+                arcTo(1.65f, 1.65f, 0f, false, false, 19.4f, 15.33f); close()
+            },
+            stroke = SolidColor(Color.White), strokeLineWidth = 1.5f,
+            strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+            fill = SolidColor(Color.Transparent)
+        )
+    }.build()
+
+/** Picture-in-Picture icon (two overlapping rectangles, small one top-right) */
+private val IconPip: ImageVector
+    get() = ImageVector.Builder("PiP", 24.dp, 24.dp, 24f, 24f).apply {
+        addPath(
+            pathData = PathData {
+                moveTo(2f, 5f)
+                arcTo(2f, 2f, 0f, false, true, 4f, 3f)
+                lineTo(20f, 3f)
+                arcTo(2f, 2f, 0f, false, true, 22f, 5f)
+                lineTo(22f, 19f)
+                arcTo(2f, 2f, 0f, false, true, 20f, 21f)
+                lineTo(4f, 21f)
+                arcTo(2f, 2f, 0f, false, true, 2f, 19f)
+                close()
+            },
+            stroke = SolidColor(Color.White), strokeLineWidth = 1.6f,
+            fill = SolidColor(Color.Transparent)
+        )
+        addPath(
+            pathData = PathData {
+                moveTo(12f, 11f)
+                arcTo(1f, 1f, 0f, false, true, 13f, 10f)
+                lineTo(20f, 10f)
+                arcTo(1f, 1f, 0f, false, true, 21f, 11f)
+                lineTo(21f, 17f)
+                arcTo(1f, 1f, 0f, false, true, 20f, 18f)
+                lineTo(13f, 18f)
+                arcTo(1f, 1f, 0f, false, true, 12f, 17f)
+                close()
+            },
+            stroke = SolidColor(Color.White), strokeLineWidth = 1.3f,
+            fill = SolidColor(Color.White.copy(alpha = 0.15f))
+        )
+    }.build()
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Activity
 // ─────────────────────────────────────────────────────────────────────────────
@@ -278,6 +352,12 @@ private val IconTimerOff: ImageVector
 @AndroidEntryPoint
 class PlayerActivity : ComponentActivity() {
     private val vm: PlayerViewModel by viewModels()
+
+    // ── Local flag set the instant we call enterPictureInPictureMode() ────────
+    // onPause() fires BEFORE onPictureInPictureModeChanged(), so we cannot rely
+    // on vm.ui.value.isPipActive being true yet inside onPause(). This flag is
+    // set synchronously in enterPipMode() so onPause() can read it immediately.
+    private var isEnteringPip = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -306,29 +386,117 @@ class PlayerActivity : ComponentActivity() {
             com.axio.reelz.ui.theme.ProvideDimensions {
                 MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(primary = Brand)) {
                     PlayerScreen(
-                        vm          = vm,
-                        tmdbId      = tmdbId, mediaType = mediaType,
-                        season      = season, episode = episode,
-                        title       = title, poster = poster,
-                        onBack      = { finish() },
-                        streamUrl   = streamUrl, streamIsHls = streamIsHls,
+                        vm            = vm,
+                        tmdbId        = tmdbId, mediaType = mediaType,
+                        season        = season, episode = episode,
+                        title         = title, poster = poster,
+                        onBack        = { finish() },
+                        onEnterPip    = { enterPipMode() },
+                        streamUrl     = streamUrl, streamIsHls = streamIsHls,
                         streamReferer = streamReferer, streamOrigin = streamOrigin,
-                        downloadId  = downloadId,
+                        downloadId    = downloadId,
                     )
                 }
             }
         }
     }
 
-    override fun onPause()   {
-        super.onPause()
-        // Premium users keep playing when the screen locks or another app briefly
-        // covers this one (background_play tier limit). Free users still pause —
-        // this preserves the original behavior for them exactly as before.
-        if (!vm.canBackgroundPlay()) vm.exoPlayer?.pause()
+    // ── Automatic PiP: triggered when user presses Home or switches apps ──────
+    // Section 3: only enter PiP if global toggle is ON and playing.
+    // Back button does NOT trigger this path.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (vm.shouldAutoPip()) {
+            enterPipMode()
+        }
     }
-    override fun onResume()  { super.onResume();  vm.exoPlayer?.let { if (it.mediaItemCount > 0) it.play() } }
-    override fun onDestroy() { super.onDestroy(); vm.release(this) }
+
+    // ── PiP lifecycle ─────────────────────────────────────────────────────────
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        vm.onPipModeChanged(isInPictureInPictureMode)
+
+        if (!isInPictureInPictureMode) {
+            // ── Bug 3 fix: PiP was closed via the system X button ─────────────
+            // When the user drags the floating window to the "X" dismiss zone,
+            // the Activity goes from PiP → stopped without coming back to the
+            // foreground. We detect this by checking isFinishing / lifecycle state
+            // inside onStop (see below). Here we just restore system UI for the
+            // normal "tap to return" case.
+            WindowInsetsControllerCompat(window, window.decorView).let { ctrl ->
+                ctrl.hide(WindowInsetsCompat.Type.systemBars())
+                ctrl.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
+    }
+
+    // ── Bug 3 fix: kill ghost audio when PiP window is dismissed via X ────────
+    // When the user drags the PiP window to the discard zone the Activity
+    // receives onStop (not onPause + onResume). At that point isPipActive has
+    // already been cleared by onPictureInPictureModeChanged(false), so we can
+    // reliably detect the "closed while still in PiP flow" case.
+    override fun onStop() {
+        super.onStop()
+        // If we're stopping but NOT coming back to foreground AND we were in PiP,
+        // the user dismissed the floating window — stop playback immediately.
+        if (!isChangingConfigurations && vm.wasInPipBeforeStop()) {
+            vm.stopPlaybackAndRelease()
+            finish()
+        }
+    }
+
+    // ── Shared PiP entry helper ───────────────────────────────────────────────
+    // Sets isEnteringPip = true BEFORE calling the system API so that onPause()
+    // (which fires immediately after) knows not to pause the player.
+    // We never call finish() here — Android keeps the Activity alive in the
+    // back stack behind the floating window. Whatever screen was underneath
+    // (detail page, settings, browse — anything) naturally becomes visible.
+    // Tapping the floating window brings this Activity back to the foreground
+    // without recreating it, so no restart ever happens.
+    private fun enterPipMode() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            isEnteringPip = true
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(16, 9))
+                .build()
+            enterPictureInPictureMode(params)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // IMPORTANT: onPause fires BEFORE onPictureInPictureModeChanged(), so
+        // vm.ui.value.isPipActive is still false here even when we are entering
+        // PiP. We use the local isEnteringPip flag (set synchronously in
+        // enterPipMode()) to guard correctly.
+        val uiState = vm.ui.value
+        val inOrEnteringPip = isEnteringPip || uiState.isPipActive
+        if (!inOrEnteringPip && !vm.canBackgroundPlay()) {
+            vm.exoPlayer?.pause()
+        }
+        // Reset the entering flag — by the time onResume fires it's no longer needed
+        isEnteringPip = false
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Bug 4 fix: resume immediately when returning FROM PiP (user tapped window).
+        // We only auto-play if the VM knows we were in PiP — not on every resume
+        // (e.g. returning from settings, notifications, etc.) which would override
+        // a user-intentional pause.
+        if (vm.ui.value.isPipActive) {
+            vm.exoPlayer?.let { if (it.mediaItemCount > 0) it.play() }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        vm.release(this)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -336,6 +504,16 @@ class PlayerActivity : ComponentActivity() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private enum class GestureType { NONE, VOLUME, BRIGHTNESS, SEEK }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Drawer width tiers (fractional screen width)
+// ─────────────────────────────────────────────────────────────────────────────
+
+private enum class DrawerWidthTier(val fraction: Float) {
+    COMPACT(0.36f),   // Speed / Quality
+    STANDARD(0.44f),  // Settings
+    WIDE(0.52f),      // Subtitles
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main player screen
@@ -348,13 +526,14 @@ fun PlayerScreen(
     season: Int, episode: Int,
     title: String, poster: String?,
     onBack: () -> Unit,
+    onEnterPip: () -> Unit,
     streamUrl: String? = null,
     streamIsHls: Boolean = false,
     streamReferer: String = "",
     streamOrigin: String = "",
     downloadId: String? = null,
 ) {
-    val d = LocalDimensions.current
+    val d       = LocalDimensions.current
     val ctx     = LocalContext.current
     val ui      by vm.ui.collectAsState()
     val player  by vm.exoPlayerFlow.collectAsState()
@@ -365,16 +544,20 @@ fun PlayerScreen(
         vm.init(ctx, tmdbId, mediaType, season, episode, title, poster,
             streamUrl, streamIsHls, streamReferer, streamOrigin, downloadId)
     }
+
+    // ── Bug 1 fix: keep polling position even when in PiP mode ───────────────
+    // The poll loop runs unconditionally — isPipActive does not gate it.
     LaunchedEffect(Unit) { while (true) { vm.pollPosition(); delay(500) } }
+
     LaunchedEffect(ui.showControls) {
-        if (ui.showControls && ui.state is PlayerState.Playing && !ui.showSubtitleDrawer) {
+        if (ui.showControls && ui.state is PlayerState.Playing &&
+            !ui.showSubtitleDrawer && !ui.isSpeedDrawerOpen &&
+            !ui.isQualityDrawerOpen && !ui.isSettingsDrawerOpen
+        ) {
             delay(4_000)
             vm.hideControls()
         }
     }
-
-    var showSpeedDialog   by remember { mutableStateOf(false) }
-    var showQualityDialog by remember { mutableStateOf(false) }
 
     var gestureType      by remember { mutableStateOf(GestureType.NONE) }
     var gestureValue     by remember { mutableStateOf(0f) }
@@ -391,8 +574,9 @@ fun PlayerScreen(
         }
     }
 
-    val gestureModifier = Modifier.pointerInput(ui.isLocked, ui.durationMs) {
-        if (ui.isLocked) return@pointerInput
+    // ── Gesture modifier: disabled while in PiP ───────────────────────────────
+    val gestureModifier = Modifier.pointerInput(ui.isLocked, ui.durationMs, ui.isPipActive) {
+        if (ui.isLocked || ui.isPipActive) return@pointerInput
         var dragStartX      = 0f
         var dragStartY      = 0f
         var dragTotalX      = 0f
@@ -483,7 +667,15 @@ fun PlayerScreen(
             .background(Color.Black)
             .then(gestureModifier)
             .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
-                if (!ui.isLocked && !ui.showSubtitleDrawer) vm.toggleControls()
+                // Taps inside PiP mode should exit PiP and open settings (Bug 2)
+                if (ui.isPipActive) {
+                    vm.onPipModeChanged(false)
+                    vm.openSettingsDrawer()
+                    return@clickable
+                }
+                if (!ui.isLocked && !ui.showSubtitleDrawer &&
+                    !ui.isSpeedDrawerOpen && !ui.isQualityDrawerOpen && !ui.isSettingsDrawerOpen
+                ) vm.toggleControls()
                 else if (ui.showSubtitleDrawer) vm.closeSubtitleDrawer()
             }
     ) {
@@ -502,6 +694,19 @@ fun PlayerScreen(
                 modifier = Modifier.fillMaxSize(),
             )
         }
+
+        // ── PiP clean mode: show nothing but the video ────────────────────
+        // When isPipActive == true every overlay is hidden; the video surface
+        // above is the only visible element. The tiny floating window renders
+        // only the pure video frame — exactly like YouTube / Netflix PiP.
+        // We return early from the rest of the composition tree.
+        if (ui.isPipActive) {
+            return@Box
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Everything below is full-screen-only UI
+        // ─────────────────────────────────────────────────────────────────
 
         // ── Network offline banner ────────────────────────────────────────
         AnimatedVisibility(
@@ -525,13 +730,9 @@ fun PlayerScreen(
         }
 
         // ── IMA Pre-roll ad overlay ───────────────────────────────────────
-        // Rendered as an AndroidView on top of ExoPlayer while isPreRollPlaying = true.
-        // When the ad finishes or errors we call vm.preRollCompleted() which clears the
-        // flag and starts actual content playback.
         if (ui.isPreRollPlaying && ui.preRollVastUrl != null) {
-            val vastUrl = ui.preRollVastUrl!!
             ImaPreRollView(
-                vastUrl         = vastUrl,
+                vastUrl         = ui.preRollVastUrl!!,
                 onAdCompleted   = { vm.preRollCompleted() },
                 onAdError       = { vm.preRollCompleted() },
                 modifier        = Modifier.fillMaxSize(),
@@ -582,7 +783,6 @@ fun PlayerScreen(
                         color = White80, fontSize = (d.textXl.value - 2).sp,
                         textAlign = TextAlign.Center, lineHeight = (d.textXl.value * 1.4f).sp,
                     )
-                    // Extra note for network errors
                     if (errorState?.isNetworkError == true) {
                         Text(
                             "Playback will resume automatically when connection is restored.",
@@ -612,14 +812,15 @@ fun PlayerScreen(
         // ── Controls overlay ──────────────────────────────────────────────
         AnimatedVisibility(
             visible  = ui.showControls
+                    && !ui.isLocked
                     && ui.state !is PlayerState.Resolving
-                     && ui.state !is PlayerState.Buffering
+                    && ui.state !is PlayerState.Buffering
                     && ui.state !is PlayerState.Error,
             enter    = fadeIn(tween(180)),
             exit     = fadeOut(tween(300)),
         ) {
             Box(Modifier.fillMaxSize()) {
-                // Scrims
+                // ── Gradient scrims ───────────────────────────────────────
                 Box(
                     Modifier.fillMaxWidth().height(d.spaceXxl * 4.4f)
                         .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
@@ -653,19 +854,32 @@ fun PlayerScreen(
                             Text(ui.episodeLabel, color = White60, fontSize = d.textMd)
                         }
                     }
+                    // Settings cog — top-right in full-screen mode
                     Box(
                         Modifier.size(d.buttonHeightMd - d.spaceXxs).clip(CircleShape)
-                            .background(if (ui.isLocked) AmberGlass else GlassMd)
-                            .border(d.borderThin, if (ui.isLocked) AmberBorder else GlassBorderMd, CircleShape)
-                            .clickable { vm.toggleLock() },
+                            .background(if (ui.isSettingsDrawerOpen) AmberGlass else GlassMd)
+                            .border(d.borderThin, if (ui.isSettingsDrawerOpen) AmberBorder else GlassBorderMd, CircleShape)
+                            .clickable { vm.openSettingsDrawer() },
                         Alignment.Center,
                     ) {
-                        Icon(
-                            if (ui.isLocked) IconLock else IconUnlock, null,
-                            tint = if (ui.isLocked) Brand else White,
-                            modifier = Modifier.size(d.iconMd - 2.dp),
-                        )
+                        Icon(IconSettings, null, tint = if (ui.isSettingsDrawerOpen) Brand else White,
+                            modifier = Modifier.size(d.iconMd - 2.dp))
                     }
+                }
+
+                // ── Center-Left Lock Button ───────────────────────────────
+                Box(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = d.spaceMd)
+                        .size(d.buttonHeightMd - d.spaceXxs)
+                        .clip(CircleShape)
+                        .background(GlassMd)
+                        .border(d.borderThin, GlassBorderMd, CircleShape)
+                        .clickable { vm.toggleLock() },
+                    Alignment.Center,
+                ) {
+                    Icon(IconUnlock, null, tint = White, modifier = Modifier.size(d.iconMd - 2.dp))
                 }
 
                 // ── Center play/pause ─────────────────────────────────────
@@ -695,79 +909,73 @@ fun PlayerScreen(
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = d.spaceMd + d.spaceXs, vertical = d.spaceMd - d.spaceXs),
+                        .padding(
+                            start  = d.spaceMd + d.spaceXs,
+                            end    = d.spaceMd + d.spaceXs,
+                            bottom = d.spaceMd,
+                        ),
                     verticalArrangement = Arrangement.spacedBy(0.dp),
                 ) {
+                    // ── Minimal seek bar (Netflix/YouTube style) ──────────
                     if (ui.durationMs > 0) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(bottom = d.spaceXs),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(formatMs(ui.positionMs), color = White60, fontSize = d.textXs)
-                            Text(formatMs(ui.durationMs), color = White60, fontSize = d.textXs)
-                        }
+                        MinimalSeekBar(
+                            positionMs  = ui.positionMs,
+                            durationMs  = ui.durationMs,
+                            bufferedMs  = ui.bufferedMs,
+                            onSeek      = { vm.seekTo(it) },
+                        )
                     }
 
-                    if (ui.durationMs > 0) {
-                        val progress = (ui.positionMs.toFloat() / ui.durationMs).coerceIn(0f, 1f)
-                        val buffered = (ui.bufferedMs.toFloat() / ui.durationMs).coerceIn(0f, 1f)
-                        Box(Modifier.fillMaxWidth().height(d.buttonHeightSm), contentAlignment = Alignment.Center) {
-                            Box(
-                                Modifier.fillMaxWidth().height(d.progressBarHeight)
-                                    .clip(RoundedCornerShape(d.spaceXxs))
-                                    .background(White.copy(alpha = 0.15f))
-                            ) {
-                                Box(Modifier.fillMaxWidth(buffered).fillMaxHeight().background(White.copy(alpha = 0.28f)))
-                                Box(
-                                    Modifier.fillMaxWidth(progress).fillMaxHeight()
-                                        .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
-                                )
-                            }
-                            Slider(
-                                value          = progress,
-                                onValueChange  = { vm.seekTo((it * ui.durationMs).toLong()) },
-                                colors         = SliderDefaults.colors(
-                                    thumbColor            = Brand2,
-                                    activeTrackColor      = Color.Transparent,
-                                    inactiveTrackColor    = Color.Transparent,
-                                    disabledThumbColor    = Color.Transparent,
-                                    disabledActiveTrackColor = Color.Transparent,
-                                ),
-                                modifier       = Modifier.fillMaxWidth().height(d.buttonHeightSm),
-                            )
-                        }
-                    }
+                    Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
 
-                    Spacer(Modifier.height(d.spaceSm))
-
-                    // Bottom action row
+                    // ── Bottom action row ─────────────────────────────────
+                    // Order: [PiP or Mute] [CC] [Speed] [Quality]
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 2.dp, Alignment.End),
                         verticalAlignment     = Alignment.CenterVertically,
                     ) {
-                        // Mute
-                        Box(
-                            Modifier.size(d.buttonHeightSm).clip(CircleShape)
-                                .background(GlassMd)
-                                .border(d.borderThin, GlassBorderMd, CircleShape)
-                                .clickable { vm.toggleMute() },
-                            Alignment.Center,
-                        ) {
-                            Icon(if (ui.isMuted) IconVolumeOff else IconVolumeUp, null, tint = White, modifier = Modifier.size(d.iconMd - 2.dp))
+                        // PiP icon (global toggle ON) OR Mute (global toggle OFF)
+                        if (ui.isPipGloballyEnabled) {
+                            Box(
+                                Modifier.size(d.buttonHeightSm).clip(CircleShape)
+                                    .background(GlassMd)
+                                    .border(d.borderThin, GlassBorderMd, CircleShape)
+                                    .clickable {
+                                        if (vm.canManualPip()) {
+                                            onEnterPip()
+                                        }
+                                    },
+                                Alignment.Center,
+                            ) {
+                                Icon(
+                                    IconPip, null,
+                                    tint     = if (vm.canManualPip()) White else White40,
+                                    modifier = Modifier.size(d.iconMd - 2.dp),
+                                )
+                            }
+                        } else {
+                            Box(
+                                Modifier.size(d.buttonHeightSm).clip(CircleShape)
+                                    .background(GlassMd)
+                                    .border(d.borderThin, GlassBorderMd, CircleShape)
+                                    .clickable { vm.toggleMute() },
+                                Alignment.Center,
+                            ) {
+                                Icon(
+                                    if (ui.isMuted) IconVolumeOff else IconVolumeUp, null,
+                                    tint = White, modifier = Modifier.size(d.iconMd - 2.dp),
+                                )
+                            }
                         }
 
-                        // Subtitles button — highlighted when active
-                        val hasSubtitles = ui.subtitleOptions.isNotEmpty()
+                        // Subtitles (CC)
                         Box(
                             Modifier
                                 .clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
                                 .background(if (ui.subtitlesEnabled) AmberGlass else GlassMd)
                                 .border(d.borderThin, if (ui.subtitlesEnabled) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusSm + d.spaceXxs))
-                                .clickable {
-                                    if (hasSubtitles) vm.openSubtitleDrawer()
-                                    else vm.openSubtitleDrawer()
-                                }
+                                .clickable { vm.openSubtitleDrawer() }
                                 .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp)
                         ) {
                             Row(
@@ -780,7 +988,7 @@ fun PlayerScreen(
                                     modifier = Modifier.size(d.iconSm + 4.dp),
                                 )
                                 Text(
-                                    if (ui.subtitlesEnabled) "CC" else "CC",
+                                    "CC",
                                     color      = if (ui.subtitlesEnabled) Brand else White,
                                     fontSize   = d.textSm,
                                     fontWeight = FontWeight.SemiBold,
@@ -791,26 +999,31 @@ fun PlayerScreen(
                         // Speed
                         Box(
                             Modifier.clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
-                                .background(GlassMd)
-                                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusSm + d.spaceXxs))
-                                .clickable { showSpeedDialog = true }
+                                .background(if (ui.isSpeedDrawerOpen) AmberGlass else GlassMd)
+                                .border(d.borderThin, if (ui.isSpeedDrawerOpen) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusSm + d.spaceXxs))
+                                .clickable { vm.openSpeedDrawer() }
                                 .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp)
                         ) {
                             Text(
                                 ui.playbackSpeed.let { if (it == it.toLong().toFloat()) "${it.toLong()}×" else "${it}×" },
-                                color = White, fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
+                                color = if (ui.isSpeedDrawerOpen) Brand else White,
+                                fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
                             )
                         }
 
                         // Quality
                         Box(
                             Modifier.clip(RoundedCornerShape(d.radiusSm + d.spaceXxs))
-                                .background(GlassMd)
-                                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusSm + d.spaceXxs))
-                                .clickable { showQualityDialog = true }
+                                .background(if (ui.isQualityDrawerOpen) AmberGlass else GlassMd)
+                                .border(d.borderThin, if (ui.isQualityDrawerOpen) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusSm + d.spaceXxs))
+                                .clickable { vm.openQualityDrawer() }
                                 .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp)
                         ) {
-                            Text(ui.selectedQuality, color = White, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                ui.selectedQuality,
+                                color = if (ui.isQualityDrawerOpen) Brand else White,
+                                fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
                 }
@@ -824,7 +1037,7 @@ fun PlayerScreen(
                     .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {},
             ) {
                 Box(
-                    Modifier.align(Alignment.CenterStart).padding(d.spaceXl)
+                    Modifier.align(Alignment.CenterStart).padding(start = d.spaceXl)
                         .clip(RoundedCornerShape(d.radiusPill))
                         .background(AmberGlass)
                         .border(d.borderThin, AmberBorder, RoundedCornerShape(d.radiusPill))
@@ -853,12 +1066,6 @@ fun PlayerScreen(
             onOffsetChange = { vm.setSubtitleOffset(it) },
             onSearchOnline = { query -> vm.searchOnlineSubtitles(query) },
             onUpgradeToPremium = {
-                // PlayerActivity is a separate Activity from the main NavHost, so the
-                // only way back to a Compose-navigable screen is to finish this one
-                // and relaunch MainActivity with an extra it reads once on create.
-                // REORDER_TO_FRONT + SINGLE_TOP brings the existing MainActivity
-                // instance forward (with all its state intact) instead of stacking
-                // a blank duplicate on top of it.
                 val intent = android.content.Intent(ctx, com.axio.reelz.ui.MainActivity::class.java).apply {
                     putExtra(com.axio.reelz.ui.MainActivity.EXTRA_OPEN_PREMIUM, true)
                     flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
@@ -868,33 +1075,363 @@ fun PlayerScreen(
                 (ctx as? android.app.Activity)?.finish()
             },
         )
-    }
 
-    // ── Speed dialog ──────────────────────────────────────────────────────
-    if (showSpeedDialog) {
-        PlayerOptionDialog(
-            title    = "Playback Speed",
-            options  = listOf("0.5×" to 0.5f, "0.75×" to 0.75f, "1×" to 1f, "1.25×" to 1.25f, "1.5×" to 1.5f, "2×" to 2f),
-            selected = ui.playbackSpeed.let { s -> if (s == s.toLong().toFloat()) "${s.toLong()}×" else "${s}×" },
-            onSelect  = { _, v -> vm.setSpeed(v); showSpeedDialog = false },
-            onDismiss = { showSpeedDialog = false },
-        )
-    }
+        // ── Speed drawer ──────────────────────────────────────────────────
+        PlayerSideDrawer(
+            visible     = ui.isSpeedDrawerOpen,
+            widthTier   = DrawerWidthTier.COMPACT,
+            onDismiss   = { vm.closeSpeedDrawer() },
+        ) {
+            DrawerOptionList(
+                title    = "Playback Speed",
+                options  = listOf("0.5×" to 0.5f, "0.75×" to 0.75f, "1×" to 1f, "1.25×" to 1.25f, "1.5×" to 1.5f, "2×" to 2f),
+                selected = ui.playbackSpeed.let { s -> if (s == s.toLong().toFloat()) "${s.toLong()}×" else "${s}×" },
+                onSelect = { _, v -> vm.setSpeed(v); vm.closeSpeedDrawer() },
+                onClose  = { vm.closeSpeedDrawer() },
+            )
+        }
 
-    // ── Quality dialog ────────────────────────────────────────────────────
-    if (showQualityDialog) {
-        PlayerOptionDialog(
-            title     = "Quality",
-            options   = ui.availableQualities.map { it.label to it.label },
-            selected  = ui.selectedQuality,
-            onSelect  = { label, _ -> vm.setQuality(label); showQualityDialog = false },
-            onDismiss = { showQualityDialog = false },
+        // ── Quality drawer ────────────────────────────────────────────────
+        PlayerSideDrawer(
+            visible   = ui.isQualityDrawerOpen,
+            widthTier = DrawerWidthTier.COMPACT,
+            onDismiss = { vm.closeQualityDrawer() },
+        ) {
+            DrawerOptionList(
+                title    = "Quality",
+                options  = ui.availableQualities.map { it.label to it.label },
+                selected = ui.selectedQuality,
+                onSelect = { label, _ -> vm.setQuality(label); vm.closeQualityDrawer() },
+                onClose  = { vm.closeQualityDrawer() },
+            )
+        }
+
+        // ── Settings drawer ───────────────────────────────────────────────
+        PlayerSideDrawer(
+            visible   = ui.isSettingsDrawerOpen,
+            widthTier = DrawerWidthTier.STANDARD,
+            onDismiss = { vm.closeSettingsDrawer() },
+        ) {
+            SettingsDrawerContent(
+                ui      = ui,
+                vm      = vm,
+                onClose = { vm.closeSettingsDrawer() },
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Minimal seek bar — Netflix / YouTube style
+// A single thin line with current-time on the left and total-time on the right.
+// No thumb is shown by default; a barely-visible thumb appears only on drag.
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun MinimalSeekBar(
+    positionMs: Long,
+    durationMs: Long,
+    bufferedMs: Long,
+    onSeek: (Long) -> Unit,
+) {
+    val d        = LocalDimensions.current
+    val density  = LocalDensity.current
+    val progress = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    val buffered = (bufferedMs.toFloat() / durationMs).coerceIn(0f, 1f)
+
+    // Animate thumb visibility: only reveal it while the user is dragging
+    var isDragging by remember { mutableStateOf(false) }
+    val thumbAlpha by animateFloatAsState(
+        targetValue   = if (isDragging) 1f else 0f,
+        animationSpec = tween(150),
+        label         = "thumbAlpha"
+    )
+    val trackHeightPx = with(density) { d.progressBarHeight.toPx() }
+    val touchTargetPx = with(density) { 28.dp.toPx() } // invisible touch target taller than the line
+
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
+    ) {
+        // ── Time labels ───────────────────────────────────────────────────
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                formatMs(positionMs),
+                color      = White60,
+                fontSize   = d.textXs,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                formatMs(durationMs),
+                color      = White40,
+                fontSize   = d.textXs,
+                fontWeight = FontWeight.Normal,
+            )
+        }
+
+        Spacer(Modifier.height(d.spaceXs))
+
+        // ── Progress track + invisible drag target ─────────────────────────
+        Box(
+            Modifier
+                .fillMaxWidth()
+                // tall invisible touch area so swipes register easily
+                .height(with(density) { touchTargetPx.toDp() })
+                .pointerInput(durationMs) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { isDragging = true },
+                        onDragEnd   = { isDragging = false },
+                        onDragCancel = { isDragging = false },
+                        onHorizontalDrag = { change, _ ->
+                            change.consume()
+                            val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                            onSeek((fraction * durationMs).toLong())
+                        }
+                    )
+                },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            // Track background
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(d.progressBarHeight)
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(d.spaceXxs))
+                    .background(White.copy(alpha = 0.12f))
+            ) {
+                // Buffered layer
+                Box(
+                    Modifier
+                        .fillMaxWidth(buffered)
+                        .fillMaxHeight()
+                        .background(White.copy(alpha = 0.22f))
+                )
+                // Played layer — brand gradient
+                Box(
+                    Modifier
+                        .fillMaxWidth(progress)
+                        .fillMaxHeight()
+                        .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
+                )
+            }
+
+            // Thumb dot — appears on drag
+            Box(
+                Modifier
+                    .fillMaxWidth(progress)
+                    .wrapContentWidth(Alignment.End)
+                    .size(d.spaceMd + d.spaceXxs)
+                    .graphicsLayer { alpha = thumbAlpha }
+                    .clip(CircleShape)
+                    .background(Brand2)
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reusable side drawer — slides in from right with fade
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun PlayerSideDrawer(
+    visible: Boolean,
+    widthTier: DrawerWidthTier,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val d = LocalDimensions.current
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
+
+    val bgAlpha by animateFloatAsState(
+        targetValue   = if (visible) 1f else 0f,
+        animationSpec = tween(280),
+        label         = "drawerScrimAlpha",
+    )
+
+    val offsetX by animateDpAsState(
+        targetValue   = if (visible) 0.dp else screenWidthDp + d.spaceXl,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness    = Spring.StiffnessMedium,
+        ),
+        label = "drawerSlideX",
+    )
+
+    if (!visible && offsetX >= screenWidthDp) return
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .drawBehind { drawRect(Color.Black.copy(alpha = 0.50f * bgAlpha)) }
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                onDismiss()
+            }
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth(widthTier.fraction)
+                .fillMaxHeight()
+                .align(Alignment.CenterEnd)
+                .offset(x = offsetX)
+                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(Color(0xCC050510), Color(0xEE080818)),
+                    )
+                )
+                .border(
+                    width = d.borderThin,
+                    brush = Brush.verticalGradient(listOf(GlassBorderHv, GlassBorderMd, GlassBorder)),
+                    shape = RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg),
+                )
+                .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg)),
+            content = content,
         )
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Subtitle Drawer — 40% right-side panel, glass over video
+// Generic option list for Speed / Quality drawers
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun <T> DrawerOptionList(
+    title: String,
+    options: List<Pair<String, T>>,
+    selected: String,
+    onSelect: (String, T) -> Unit,
+    onClose: () -> Unit,
+) {
+    val d = LocalDimensions.current
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(start = d.spaceMd + d.spaceXs, end = d.spaceMd, top = d.spaceXl, bottom = d.spaceMd),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(title, color = White, fontSize = d.textLg, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
+            Box(
+                Modifier.size(d.avatarSm - d.spaceXs).clip(CircleShape)
+                    .background(GlassMd)
+                    .border(d.borderThin, GlassBorderMd, CircleShape)
+                    .clickable { onClose() },
+                Alignment.Center,
+            ) {
+                Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconSm + 2.dp))
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(d.borderThin).background(GlassBorder))
+        LazyColumn(
+            Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm),
+            verticalArrangement = Arrangement.spacedBy(d.spaceXs),
+        ) {
+            items(options) { (label, value) ->
+                val isSelected = label == selected
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
+                        .background(if (isSelected) AmberGlass else Color.Transparent)
+                        .border(d.borderThin, if (isSelected) AmberBorder else Color.Transparent, RoundedCornerShape(d.radiusMd - d.spaceXs))
+                        .clickable { onSelect(label, value) }
+                        .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceMd - d.spaceXxs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
+                ) {
+                    if (isSelected) {
+                        Icon(IconCheck, null, tint = Brand, modifier = Modifier.size(d.iconSm + 2.dp))
+                    } else {
+                        Box(Modifier.size(d.iconSm + 2.dp).clip(CircleShape).background(GlassMd))
+                    }
+                    Text(
+                        label,
+                        color      = if (isSelected) Brand else White80,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        fontSize   = d.textMd,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings drawer content
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SettingsDrawerContent(
+    ui: PlayerUiState,
+    vm: PlayerViewModel,
+    onClose: () -> Unit,
+) {
+    val d = LocalDimensions.current
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(start = d.spaceMd + d.spaceXs, end = d.spaceMd, top = d.spaceXl, bottom = d.spaceMd),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Settings", color = White, fontSize = d.textLg, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
+            Box(
+                Modifier.size(d.avatarSm - d.spaceXs).clip(CircleShape)
+                    .background(GlassMd)
+                    .border(d.borderThin, GlassBorderMd, CircleShape)
+                    .clickable { onClose() },
+                Alignment.Center,
+            ) {
+                Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconSm + 2.dp))
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(d.borderThin).background(GlassBorder))
+
+        LazyColumn(
+            Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceMd),
+            verticalArrangement = Arrangement.spacedBy(d.spaceSm),
+        ) {
+            // Auto Miniplayer / Global PiP toggle
+            item {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(d.radiusMd))
+                        .background(GlassMd)
+                        .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+                        .clickable { vm.setGlobalPipEnabled(!ui.isPipGloballyEnabled) }
+                        .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceMd - d.spaceXs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Auto Miniplayer",
+                            color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            if (ui.isPipGloballyEnabled)
+                                "Video floats when you leave the app"
+                            else
+                                "Video stops when you leave the app",
+                            color = White40, fontSize = (d.textXxs.value + 1).sp,
+                        )
+                    }
+                    Spacer(Modifier.width(d.spaceMd))
+                    SubtitleTogglePill(enabled = ui.isPipGloballyEnabled)
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Subtitle Drawer
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -906,17 +1443,14 @@ private fun SubtitleDrawer(
     onToggleOff: () -> Unit,
     onTogglePersistent: (SubtitleOption) -> Unit,
     onOffsetChange: (Int) -> Unit,
-    onSearchOnline: (String) -> Unit,   // passes the user's typed query
+    onSearchOnline: (String) -> Unit,
     onUpgradeToPremium: () -> Unit,
 ) {
     val d = LocalDimensions.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
-    val drawerWidth   = if (d.isTablet) 0.32f else 0.40f   // fraction of screen width
-    var searchQuery   by remember { mutableStateOf("") }
+    var searchQuery      by remember { mutableStateOf("") }
     var showOffsetSection by remember { mutableStateOf(false) }
 
-    // Animate slide-in from right — offscreen distance scales with actual screen width
-    // so the drawer always starts fully hidden, on any device size.
     val offscreenX = screenWidthDp + d.spaceXl
     val offsetX by animateDpAsState(
         targetValue = if (visible) 0.dp else offscreenX,
@@ -931,25 +1465,19 @@ private fun SubtitleDrawer(
 
     if (!visible && offsetX >= offscreenX) return
 
-    // Glassmorphism backdrop (dim left 60% softly)
     Box(
         Modifier
             .fillMaxSize()
-            .drawBehind {
-                drawRect(Color.Black.copy(alpha = 0.45f * bgAlpha))
-            }
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
-                onClose()
-            }
+            .drawBehind { drawRect(Color.Black.copy(alpha = 0.45f * bgAlpha)) }
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClose() }
     ) {
-        // The drawer panel
         Box(
             Modifier
-                .fillMaxWidth(drawerWidth)
+                .fillMaxWidth(DrawerWidthTier.WIDE.fraction)
                 .fillMaxHeight()
                 .align(Alignment.CenterEnd)
                 .offset(x = offsetX)
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { /* absorb */ }
+                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
                 .background(
                     Brush.horizontalGradient(
                         colors = listOf(Color(0xCC050510), Color(0xEE080818)),
@@ -964,19 +1492,12 @@ private fun SubtitleDrawer(
                 .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
         ) {
             Column(Modifier.fillMaxSize()) {
-
-                // ── Header ────────────────────────────────────────────────
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(Color(0x33050510), Color.Transparent)
-                            )
-                        )
+                        .background(Brush.verticalGradient(listOf(Color(0x33050510), Color.Transparent)))
                         .padding(top = d.spaceXl, start = d.spaceMd + d.spaceXs, end = d.spaceMd + d.spaceXs, bottom = 0.dp)
                 ) {
-                    // Title row
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -994,13 +1515,7 @@ private fun SubtitleDrawer(
                             ) {
                                 Icon(IconSubtitles, null, tint = Brand, modifier = Modifier.size(d.iconSm + 3.dp))
                             }
-                            Text(
-                                "Subtitles",
-                                color      = White,
-                                fontSize   = d.textLg,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = (-0.3).sp,
-                            )
+                            Text("Subtitles", color = White, fontSize = d.textLg, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
                         }
                         Box(
                             Modifier.size(d.avatarSm - d.spaceXs).clip(CircleShape)
@@ -1012,13 +1527,10 @@ private fun SubtitleDrawer(
                             Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconSm + 2.dp))
                         }
                     }
-
                     Spacer(Modifier.height(d.spaceMd + d.spaceXs))
 
-                    // ── Subtitle ON/OFF toggle ────────────────────────────
                     Row(
-                        Modifier
-                            .fillMaxWidth()
+                        Modifier.fillMaxWidth()
                             .clip(RoundedCornerShape(d.radiusMd))
                             .background(GlassMd)
                             .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd))
@@ -1028,10 +1540,7 @@ private fun SubtitleDrawer(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Column {
-                            Text(
-                                "Subtitles",
-                                color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold
-                            )
+                            Text("Subtitles", color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
                             Text(
                                 if (ui.subtitlesEnabled) "On • ${ui.subtitleOptions.firstOrNull { it.language == ui.activeSubtitleLanguage }?.label ?: ""}"
                                 else "Off",
@@ -1039,20 +1548,14 @@ private fun SubtitleDrawer(
                                 fontSize = (d.textXxs.value + 1).sp,
                             )
                         }
-                        // Pill toggle
                         SubtitleTogglePill(enabled = ui.subtitlesEnabled)
                     }
-
                     Spacer(Modifier.height(d.spaceMd - d.spaceXs))
 
-                    // ── Search / language filter bar ──────────────────────
-                    // Doubles as: (a) filter for already-loaded subtitles,
-                    // (b) language input for the "Search Online" button.
                     val searchBorderColor = if (searchQuery.isNotEmpty()) AmberBorder else GlassBorderMd
                     val searchBg          = if (searchQuery.isNotEmpty()) AmberGlass   else GlassSm
                     Row(
-                        Modifier
-                            .fillMaxWidth()
+                        Modifier.fillMaxWidth()
                             .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                             .background(searchBg)
                             .border(d.borderThin, searchBorderColor, RoundedCornerShape(d.radiusMd - d.spaceXxs))
@@ -1093,21 +1596,16 @@ private fun SubtitleDrawer(
                             }
                         }
                     }
-
                     Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
                 }
 
-                // Subtle separator
                 Box(Modifier.fillMaxWidth().height(d.borderThin).background(GlassBorder))
 
-                // ── Scrollable content ────────────────────────────────────
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
                     verticalArrangement = Arrangement.spacedBy(d.spaceXs),
                 ) {
-
-                    // "Off" option — always visible
                     item {
                         SubtitleRow(
                             label        = "Off",
@@ -1119,14 +1617,12 @@ private fun SubtitleDrawer(
                         )
                     }
 
-                    // ── Available / downloaded subtitle tracks ────────────
                     if (ui.subtitleOptions.isNotEmpty()) {
                         val filtered = ui.subtitleOptions.filter {
                             searchQuery.isBlank() ||
                             it.label.contains(searchQuery, ignoreCase = true) ||
                             it.language.contains(searchQuery, ignoreCase = true)
                         }
-
                         if (filtered.isNotEmpty()) {
                             item {
                                 Text(
@@ -1150,137 +1646,76 @@ private fun SubtitleDrawer(
                                 )
                             }
                         } else if (searchQuery.isNotEmpty()) {
-                            // Local filter found nothing — offer to search online for that language
                             item {
                                 Spacer(Modifier.height(d.spaceSm))
-                                Text(
-                                    "No match in loaded subtitles",
-                                    color    = White40,
-                                    fontSize = d.textXs,
-                                    modifier = Modifier.padding(horizontal = d.spaceXs),
-                                )
+                                Text("No match in loaded subtitles", color = White40, fontSize = d.textXs,
+                                    modifier = Modifier.padding(horizontal = d.spaceXs))
                             }
                         }
                     }
 
-                    // ── Search Online CTA ─────────────────────────────────
-                    // Show whenever: no subtitles at all, OR user has typed a query.
-                    // This lets them search for additional languages even when some
-                    // subtitles already arrived embedded with the stream.
                     val showSearchCta = ui.subtitleOptions.isEmpty() || searchQuery.isNotEmpty()
                     if (showSearchCta) {
                         item {
                             Spacer(Modifier.height(d.spaceMd))
                             Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = d.spaceXs),
+                                Modifier.fillMaxWidth().padding(horizontal = d.spaceXs),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                             ) {
                                 when {
-                                    // ── Spinner while searching ──────────
                                     ui.isSubtitleSearching -> {
                                         CircularProgressIndicator(
                                             modifier    = Modifier.size(d.iconMd + d.spaceXxs),
                                             color       = Brand,
                                             strokeWidth = d.borderMed,
                                         )
-                                        Text(
-                                            "Searching for subtitles…",
-                                            color    = White40,
-                                            fontSize = d.textXs,
-                                        )
+                                        Text("Searching for subtitles…", color = White40, fontSize = d.textXs)
                                     }
-
-                                    // ── Search returned nothing ──────────
                                     ui.subtitleSearchEmpty -> {
-                                        Icon(
-                                            Icons.Default.Search,
-                                            contentDescription = null,
-                                            tint     = White40,
-                                            modifier = Modifier.size(d.iconMd),
-                                        )
+                                        Icon(Icons.Default.Search, contentDescription = null,
+                                            tint = White40, modifier = Modifier.size(d.iconMd))
                                         Text(
                                             "No subtitles found${if (searchQuery.isNotEmpty()) " for \"$searchQuery\"" else ""}",
-                                            color      = White60,
-                                            fontSize   = d.textSm,
-                                            fontWeight = FontWeight.Medium,
-                                            textAlign  = TextAlign.Center,
-                                        )
-                                        Text(
-                                            "Try a different language name or check the spelling",
-                                            color     = White40,
-                                            fontSize  = d.textXs,
+                                            color = White60, fontSize = d.textSm, fontWeight = FontWeight.Medium,
                                             textAlign = TextAlign.Center,
-                                            lineHeight = (d.textXs.value * 1.5f).sp,
                                         )
-                                        // Retry with same query
+                                        Text("Try a different language name or check the spelling",
+                                            color = White40, fontSize = d.textXs, textAlign = TextAlign.Center,
+                                            lineHeight = (d.textXs.value * 1.5f).sp)
                                         Box(
-                                            Modifier
-                                                .fillMaxWidth()
+                                            Modifier.fillMaxWidth()
                                                 .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .background(GlassMd)
                                                 .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .clickable { onSearchOnline(searchQuery) }
                                                 .padding(vertical = d.spaceSm + d.spaceXxs),
                                             Alignment.Center,
-                                        ) {
-                                            Text(
-                                                "Try again",
-                                                color      = Brand,
-                                                fontSize   = d.textSm,
-                                                fontWeight = FontWeight.SemiBold,
-                                            )
-                                        }
+                                        ) { Text("Try again", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold) }
                                     }
-
-                                    // ── Upsell: free tier hit paywall ───
                                     ui.subtitleUpsellMessage != null -> {
-                                        Text(
-                                            ui.subtitleUpsellMessage,
-                                            color      = White60,
-                                            fontSize   = d.textXs,
-                                            textAlign  = TextAlign.Center,
-                                            lineHeight = (d.textXs.value * 1.45f).sp,
-                                        )
+                                        Text(ui.subtitleUpsellMessage, color = White60, fontSize = d.textXs,
+                                            textAlign = TextAlign.Center, lineHeight = (d.textXs.value * 1.45f).sp)
                                         Box(
-                                            Modifier
-                                                .fillMaxWidth()
+                                            Modifier.fillMaxWidth()
                                                 .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .background(AmberGlass)
                                                 .border(d.borderThin, AmberBorder, RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .clickable { onUpgradeToPremium() }
                                                 .padding(vertical = d.spaceSm + d.spaceXxs),
                                             Alignment.Center,
-                                        ) {
-                                            Text(
-                                                "Upgrade to Premium",
-                                                color      = Brand,
-                                                fontSize   = d.textSm,
-                                                fontWeight = FontWeight.Bold,
-                                            )
-                                        }
+                                        ) { Text("Upgrade to Premium", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold) }
                                     }
-
-                                    // ── Default: Search Online button ────
                                     else -> {
                                         if (ui.subtitleOptions.isEmpty()) {
-                                            // No subtitles at all yet — explain why
                                             Text(
-                                                if (ui.isOfflinePlayback)
-                                                    "No subtitles saved for this download"
-                                                else
-                                                    "No subtitles came with this stream",
-                                                color    = White40,
-                                                fontSize = d.textXs,
-                                                textAlign = TextAlign.Center,
+                                                if (ui.isOfflinePlayback) "No subtitles saved for this download"
+                                                else "No subtitles came with this stream",
+                                                color = White40, fontSize = d.textXs, textAlign = TextAlign.Center,
                                             )
                                         }
-                                        // Search Online CTA — works whether subtitles exist or not
                                         Box(
-                                            Modifier
-                                                .fillMaxWidth()
+                                            Modifier.fillMaxWidth()
                                                 .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
                                                 .background(AmberGlass)
                                                 .border(d.borderThin, AmberBorder, RoundedCornerShape(d.radiusMd - d.spaceXxs))
@@ -1289,31 +1724,20 @@ private fun SubtitleDrawer(
                                             Alignment.Center,
                                         ) {
                                             Row(
-                                                verticalAlignment     = Alignment.CenterVertically,
+                                                verticalAlignment = Alignment.CenterVertically,
                                                 horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                                             ) {
-                                                Icon(
-                                                    Icons.Default.Search,
-                                                    contentDescription = null,
-                                                    tint     = Brand,
-                                                    modifier = Modifier.size(d.iconSm + 2.dp),
-                                                )
+                                                Icon(Icons.Default.Search, contentDescription = null,
+                                                    tint = Brand, modifier = Modifier.size(d.iconSm + 2.dp))
                                                 Text(
-                                                    if (searchQuery.isNotEmpty()) "Search for \"$searchQuery\""
-                                                    else "Search Online",
-                                                    color      = Brand,
-                                                    fontSize   = d.textSm,
-                                                    fontWeight = FontWeight.Bold,
+                                                    if (searchQuery.isNotEmpty()) "Search for \"$searchQuery\"" else "Search Online",
+                                                    color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold,
                                                 )
                                             }
                                         }
                                         if (searchQuery.isEmpty()) {
-                                            Text(
-                                                "Searches for subtitles in your language",
-                                                color    = White40,
-                                                fontSize = d.textXxs,
-                                                textAlign = TextAlign.Center,
-                                            )
+                                            Text("Searches for subtitles in your language",
+                                                color = White40, fontSize = d.textXxs, textAlign = TextAlign.Center)
                                         }
                                     }
                                 }
@@ -1321,23 +1745,17 @@ private fun SubtitleDrawer(
                             Spacer(Modifier.height(d.spaceXs))
                         }
                     }
-
-                    // Gap at bottom
                     item { Spacer(Modifier.height(d.spaceSm + d.spaceXxs)) }
                 }
 
-                // ── Divider ───────────────────────────────────────────────
                 Box(Modifier.fillMaxWidth().height(d.borderThin).background(GlassBorder))
 
-                // ── Timing offset section ─────────────────────────────────
                 Column(
-                    Modifier
-                        .fillMaxWidth()
+                    Modifier.fillMaxWidth()
                         .background(Color(0x22050510))
                         .padding(d.spaceMd - d.spaceXxs),
                     verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
                 ) {
-                    // Section toggle
                     Row(
                         Modifier.fillMaxWidth().clickable { showOffsetSection = !showOffsetSection },
                         verticalAlignment = Alignment.CenterVertically,
@@ -1348,10 +1766,7 @@ private fun SubtitleDrawer(
                             horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
                         ) {
                             Icon(IconTimerOff, null, tint = White60, modifier = Modifier.size(d.iconSm + 1.dp))
-                            Text(
-                                "Subtitle Timing",
-                                color = White60, fontSize = d.textXs, fontWeight = FontWeight.Medium,
-                            )
+                            Text("Subtitle Timing", color = White60, fontSize = d.textXs, fontWeight = FontWeight.Medium)
                         }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1359,23 +1774,14 @@ private fun SubtitleDrawer(
                         ) {
                             if (ui.subtitleOffsetMs != 0) {
                                 val sign = if (ui.subtitleOffsetMs > 0) "+" else ""
-                                Text(
-                                    "${sign}${ui.subtitleOffsetMs / 1000.0}s",
-                                    color = Brand, fontSize = (d.textXxs.value + 1).sp, fontWeight = FontWeight.SemiBold,
-                                )
+                                Text("${sign}${ui.subtitleOffsetMs / 1000.0}s",
+                                    color = Brand, fontSize = (d.textXxs.value + 1).sp, fontWeight = FontWeight.SemiBold)
                             }
-                            Text(
-                                if (showOffsetSection) "▲" else "▼",
-                                color = White40, fontSize = d.textXxs,
-                            )
+                            Text(if (showOffsetSection) "▲" else "▼", color = White40, fontSize = d.textXxs)
                         }
                     }
-
                     AnimatedVisibility(visible = showOffsetSection) {
-                        SubtitleOffsetControl(
-                            offsetMs   = ui.subtitleOffsetMs,
-                            onChanged  = onOffsetChange,
-                        )
+                        SubtitleOffsetControl(offsetMs = ui.subtitleOffsetMs, onChanged = onOffsetChange)
                     }
                 }
             }
@@ -1407,10 +1813,8 @@ private fun SubtitleRow(
         !isEnabled && isPersistent -> White40
         else     -> White80
     }
-
     Row(
-        Modifier
-            .fillMaxWidth()
+        Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
             .background(bg)
             .border(d.borderThin, border, RoundedCornerShape(d.radiusMd - d.spaceXs))
@@ -1430,20 +1834,15 @@ private fun SubtitleRow(
                 Box(Modifier.size(d.iconSm + 2.dp).clip(CircleShape).background(GlassMd))
             }
             Text(
-                label,
-                color      = textColor,
-                fontSize   = d.textSm,
+                label, color = textColor, fontSize = d.textSm,
                 fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines   = 1,
-                overflow   = TextOverflow.Ellipsis,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
-
         if (isPersistent && onToggle != null) {
             Spacer(Modifier.width(d.spaceSm))
             Box(
-                Modifier
-                    .clip(RoundedCornerShape(d.radiusPill))
+                Modifier.clip(RoundedCornerShape(d.radiusPill))
                     .background(if (isEnabled) AmberGlass else GlassSm)
                     .border(d.borderThin, if (isEnabled) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusPill))
                     .clickable { onToggle() }
@@ -1451,9 +1850,8 @@ private fun SubtitleRow(
             ) {
                 Text(
                     if (isEnabled) "On" else "Off",
-                    color      = if (isEnabled) Brand else White40,
-                    fontSize   = (d.textXxs.value + 1).sp,
-                    fontWeight = FontWeight.SemiBold,
+                    color = if (isEnabled) Brand else White40,
+                    fontSize = (d.textXxs.value + 1).sp, fontWeight = FontWeight.SemiBold,
                 )
             }
         }
@@ -1468,23 +1866,19 @@ private fun SubtitleRow(
 private fun SubtitleTogglePill(enabled: Boolean) {
     val d = LocalDimensions.current
     val trackColor  by animateColorAsState(if (enabled) Brand else GlassBorderMd, label = "track")
-    // Thumb travel = track width - thumb size - 2*padding; scaled to d
-    val thumbTravel = d.spaceXl - d.spaceSm   // ~16 sp
+    val thumbTravel = d.spaceXl - d.spaceSm
     val thumbOffset by animateDpAsState(if (enabled) thumbTravel else 0.dp, label = "thumb")
     val trackW = d.spaceXxl - d.spaceXs
     val trackH = d.spaceLg
     val thumbSz = trackH - d.spaceSm
-
     Box(
-        Modifier
-            .width(trackW).height(trackH)
+        Modifier.width(trackW).height(trackH)
             .clip(RoundedCornerShape(trackH / 2))
             .background(trackColor.copy(alpha = 0.35f))
             .border(d.borderThin, trackColor, RoundedCornerShape(trackH / 2))
     ) {
         Box(
-            Modifier
-                .size(thumbSz)
+            Modifier.size(thumbSz)
                 .offset(x = d.spaceXs + thumbOffset, y = d.spaceXs)
                 .clip(CircleShape)
                 .background(if (enabled) Brand else White40)
@@ -1497,38 +1891,17 @@ private fun SubtitleTogglePill(enabled: Boolean) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun SubtitleOffsetControl(
-    offsetMs: Int,
-    onChanged: (Int) -> Unit,
-) {
+private fun SubtitleOffsetControl(offsetMs: Int, onChanged: (Int) -> Unit) {
     val d = LocalDimensions.current
-
     Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             val sign = if (offsetMs > 0) "+" else ""
-            val secs = offsetMs / 1000.0
-            Text(
-                "${sign}${secs}s",
-                color      = if (offsetMs == 0) White40 else Brand,
-                fontSize   = d.textXxl,
-                fontWeight = FontWeight.Bold,
-            )
+            Text("${sign}${offsetMs / 1000.0}s",
+                color = if (offsetMs == 0) White40 else Brand, fontSize = d.textXxl, fontWeight = FontWeight.Bold)
         }
-        Text(
-            "Positive = delay   Negative = advance",
-            color    = White40, fontSize = d.textXxs,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
-        )
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
-        ) {
+        Text("Positive = delay   Negative = advance",
+            color = White40, fontSize = d.textXxs, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.spaceXs)) {
             Box(
                 Modifier.weight(1f)
                     .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
@@ -1537,22 +1910,15 @@ private fun SubtitleOffsetControl(
                     .clickable { onChanged((offsetMs - 500).coerceAtLeast(-10_000)) }
                     .padding(vertical = d.spaceSm + d.spaceXxs),
                 Alignment.Center,
-            ) {
-                Text("−0.5s", color = White80, fontSize = d.textXs, fontWeight = FontWeight.Medium)
-            }
-
+            ) { Text("−0.5s", color = White80, fontSize = d.textXs, fontWeight = FontWeight.Medium) }
             Box(
-                Modifier
-                    .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
+                Modifier.clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
                     .background(if (offsetMs != 0) AmberGlass else GlassMd)
                     .border(d.borderThin, if (offsetMs != 0) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXs))
                     .clickable { onChanged(0) }
                     .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
                 Alignment.Center,
-            ) {
-                Text("Reset", color = if (offsetMs != 0) Brand else White40, fontSize = d.textXs, fontWeight = FontWeight.SemiBold)
-            }
-
+            ) { Text("Reset", color = if (offsetMs != 0) Brand else White40, fontSize = d.textXs, fontWeight = FontWeight.SemiBold) }
             Box(
                 Modifier.weight(1f)
                     .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
@@ -1561,11 +1927,8 @@ private fun SubtitleOffsetControl(
                     .clickable { onChanged((offsetMs + 500).coerceAtMost(10_000)) }
                     .padding(vertical = d.spaceSm + d.spaceXxs),
                 Alignment.Center,
-            ) {
-                Text("+0.5s", color = White80, fontSize = d.textXs, fontWeight = FontWeight.Medium)
-            }
+            ) { Text("+0.5s", color = White80, fontSize = d.textXs, fontWeight = FontWeight.Medium) }
         }
-
         Slider(
             value         = offsetMs.toFloat(),
             onValueChange = { onChanged(it.roundToInt()) },
@@ -1606,8 +1969,7 @@ private fun GestureIndicator(type: GestureType, value: Float, anchorValue: Float
         else -> 0f
     }
     Box(
-        Modifier
-            .clip(RoundedCornerShape(d.radiusMd + d.spaceXs))
+        Modifier.clip(RoundedCornerShape(d.radiusMd + d.spaceXs))
             .background(Color(0xCC000000))
             .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd + d.spaceXs))
             .padding(horizontal = d.spaceXl, vertical = d.spaceLg),
@@ -1631,64 +1993,6 @@ private fun GestureIndicator(type: GestureType, value: Float, anchorValue: Float
             }
         }
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared option dialog
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun <T> PlayerOptionDialog(
-    title: String,
-    options: List<Pair<String, T>>,
-    selected: String,
-    onSelect: (String, T) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val d = LocalDimensions.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor   = BgCard,
-        shape            = RoundedCornerShape(d.radiusLg),
-        title = {
-            Text(title, color = White, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
-        },
-        text = {
-            Column {
-                options.forEach { (label, value) ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(d.radiusMd - d.spaceXs))
-                            .background(if (label == selected) AmberGlass else Color.Transparent)
-                            .clickable { onSelect(label, value) }
-                            .padding(vertical = d.spaceMd - d.spaceXxs, horizontal = d.spaceMd - d.spaceXxs),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = label == selected,
-                            onClick  = { onSelect(label, value) },
-                            colors   = RadioButtonDefaults.colors(
-                                selectedColor   = Brand,
-                                unselectedColor = White40,
-                            ),
-                        )
-                        Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
-                        Text(
-                            label,
-                            color      = if (label == selected) Brand else White80,
-                            fontWeight = if (label == selected) FontWeight.Bold else FontWeight.Normal,
-                            fontSize   = d.textMd,
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close", color = Brand, fontWeight = FontWeight.SemiBold, fontSize = d.textMd)
-            }
-        },
-    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

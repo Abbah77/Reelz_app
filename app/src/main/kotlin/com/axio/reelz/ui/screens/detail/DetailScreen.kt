@@ -232,7 +232,9 @@ class DetailViewModel @Inject constructor(
                     loadEpisodes(tmdbId, 1)
                 }
 
-                // Stage 2 — heavy extras (credits, videos, similar) in background
+                // Stage 2 — heavy extras (credits, videos, similar) in background.
+                // Stage 3 (stream pre-resolve) is nested here so imdbId is guaranteed
+                // available before resolveFirst() is called.
                 viewModelScope.launch {
                     try {
                         val extras = repo.getDetailExtras(tmdbId, mediaType)
@@ -240,19 +242,21 @@ class DetailViewModel @Inject constructor(
                     } catch (_: Exception) {
                         _ui.update { it.copy(extrasLoading = false) }
                     }
-                }
 
-                // Stage 3 — pre-resolve stream in background via SSE.
-                // resolveFirst() returns on the first stream event so preResolvedStream
-                // is available quickly. Download qualities and subtitles are collected
-                // into preResolvedQualities as they arrive on the same connection.
-                viewModelScope.launch {
+                    // Stage 3 — pre-resolve stream after extras (and imdbId) are available.
+                    // resolveFirst() returns on the first stream event so preResolvedStream
+                    // is available quickly. Download qualities and subtitles are collected
+                    // into preResolvedQualities as they arrive on the same connection.
                     try {
+                        val d = _ui.value.detail
+                        val year = d?.releaseDate?.take(4)?.toIntOrNull()
                         val key = qualityKey(tmdbId)
                         val stream = streamRepo.resolveFirst(
                             tmdbId    = tmdbId,
                             mediaType = mediaType,
-                            title     = _ui.value.detail?.title ?: "",
+                            title     = d?.title ?: "",
+                            imdbId    = d?.imdbId,   // now available after Stage 2
+                            year      = year,
                             onDownload = { track ->
                                 val current = (preResolvedQualities[key] ?: emptyList()).toMutableList()
                                 if (current.none { it.url == track.url }) {
@@ -367,12 +371,17 @@ class DetailViewModel @Inject constructor(
         // download providers have resolved (no long-lived connection needed).
         viewModelScope.launch {
             try {
+                val detail = _ui.value.detail
+                val releaseYear = detail?.releaseDate
+                    ?.take(4)?.toIntOrNull()
                 val tracks = streamRepo.resolveDownloadLinks(
                     tmdbId    = tmdbId,
                     mediaType = mediaType,
-                    title     = _ui.value.detail?.title ?: "",
+                    title     = detail?.title ?: "",
                     season    = season,
                     episode   = episode,
+                    imdbId    = detail?.imdbId,      // enables VegaMovies provider
+                    year      = releaseYear,          // improves all providers
                 )
                 if (tracks.isNotEmpty()) {
                     val normalized = normalizeQualities(tracks, _ui.value.detail?.runtime)
@@ -465,13 +474,26 @@ class DetailViewModel @Inject constructor(
 
         return tracks.map { track ->
             val label = when {
+                // Already has a real label — keep it.
                 track.label.isNotBlank() && track.label != "Auto" -> track.label
+                // Bandwidth-based inference (HLS tracks from the stream ladder).
                 track.bandwidth >= 8_000_000 -> "1080p"
                 track.bandwidth >= 4_000_000 -> "1080p"
                 track.bandwidth >= 2_000_000 -> "720p"
                 track.bandwidth >= 1_000_000 -> "480p"
                 track.bandwidth >= 400_000   -> "360p"
                 track.bandwidth >  0         -> "240p"
+                // Download links have bandwidth=0 but may have a real file size.
+                // Rough thresholds for a 2-hour film (varies ±40% by codec/source):
+                //   4K  ≥ 20 GB,  1080p ≥ 4 GB,  720p ≥ 1.5 GB,
+                //   480p ≥ 700 MB, 360p ≥ 350 MB
+                track.estimatedSizeBytes >= 20_000_000_000L -> "2160p"
+                track.estimatedSizeBytes >=  4_000_000_000L -> "1080p"
+                track.estimatedSizeBytes >=  1_500_000_000L -> "720p"
+                track.estimatedSizeBytes >=    700_000_000L -> "480p"
+                track.estimatedSizeBytes >=    350_000_000L -> "360p"
+                track.estimatedSizeBytes >              0L  -> "240p"
+                // No signal at all — keep "Auto" as last resort.
                 else -> "Auto"
             }
             val effectiveBitrate = track.bandwidth.takeIf { it > 0 }

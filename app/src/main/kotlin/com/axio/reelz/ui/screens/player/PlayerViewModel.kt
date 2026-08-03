@@ -24,6 +24,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.axio.reelz.data.local.DownloadSubtitleDao
+import com.axio.reelz.data.local.PipPreferenceStore
 import com.axio.reelz.data.model.DownloadSubtitle
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.QualityTrack
@@ -85,8 +86,18 @@ data class PlayerUiState(
     val playbackSpeed: Float                    = 1f,
     val availableQualities: List<QualityTrack>  = listOf(QualityTrack("Auto", "")),
     val selectedQuality: String                 = "Auto",
+    // ── Lock & overlay state ───────────────────────────────────────────────
     val isLocked: Boolean                       = false,
     val isMuted: Boolean                        = false,
+    // ── Drawer state ───────────────────────────────────────────────────────
+    val isSpeedDrawerOpen: Boolean              = false,
+    val isQualityDrawerOpen: Boolean            = false,
+    val isSettingsDrawerOpen: Boolean           = false,
+    val isSubtitlesDrawerOpen: Boolean          = false,
+    // ── PiP state ──────────────────────────────────────────────────────────
+    val isPipGloballyEnabled: Boolean           = true,
+    val isPipActive: Boolean                    = false,
+    // ── Subtitle state ─────────────────────────────────────────────────────
     val subtitleOptions: List<SubtitleOption>   = emptyList(),
     val activeSubtitleLanguage: String          = "off",
     val subtitlesEnabled: Boolean               = false,
@@ -98,12 +109,13 @@ data class PlayerUiState(
     val subtitleUpsellMessage: String?          = null,
     val subtitles: List<Subtitle>               = emptyList(),
     val selectedSubtitle: String                = "Off",
+    // ── Ads ────────────────────────────────────────────────────────────────
     val preRollVastUrl: String?                 = null,
     val isPreRollPlaying: Boolean               = false,
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ViewModel — thin client with bulletproof error handling + URL cache
+// ViewModel
 // ─────────────────────────────────────────────────────────────────────────────
 
 @HiltViewModel
@@ -114,6 +126,7 @@ class PlayerViewModel @Inject constructor(
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val adEngine: AdEngine,
     private val premiumGate: PremiumGate,
+    private val pipPrefs: PipPreferenceStore,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PlayerUiState())
@@ -142,18 +155,103 @@ class PlayerViewModel @Inject constructor(
     private var isOnMeteredConnection = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
+    // ── Bug 3 fix: track whether the Activity was in PiP right before onStop ─
+    // The Activity calls wasInPipBeforeStop() inside onStop to decide whether
+    // the PiP window was dismissed (vs normal background / config change).
+    private var _wasInPipBeforeStop = false
+
     // ── Silent-retry state ────────────────────────────────────────────────────
-    // When a URL or fetch fails with a transient/blocked error the app retries
-    // invisibly. We cap silent retries to avoid an infinite loop if the backend
-    // is genuinely down — after MAX_SILENT_RETRIES we show a friendly message.
     private var silentRetryCount = 0
     private val MAX_SILENT_RETRIES = 3
-
-    // Debounce job so rapid errors (e.g. during HLS segment load) don't spawn
-    // multiple parallel re-fetch coroutines.
     private var errorHandlerJob: Job? = null
 
+    init {
+        viewModelScope.launch {
+            pipPrefs.isPipEnabled.collect { enabled ->
+                _ui.update { it.copy(isPipGloballyEnabled = enabled) }
+            }
+        }
+    }
+
     fun canBackgroundPlay(): Boolean = premiumGate.canBackgroundPlay()
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PiP controls
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Called by the Activity whenever the system notifies us that PiP mode
+     * changed. Handles entry, exit (user tapped to return), and dismissal.
+     */
+    fun onPipModeChanged(isInPipMode: Boolean) {
+        if (isInPipMode) {
+            // Entering PiP — record the flag so onStop can detect dismissal
+            _wasInPipBeforeStop = true
+        } else {
+            // Exiting PiP back to full screen (user tapped the floating window)
+            // Bug 4 fix: resume playback immediately.
+            _wasInPipBeforeStop = false
+            exoPlayer?.let { p ->
+                if (p.mediaItemCount > 0 && !p.isPlaying) p.play()
+            }
+        }
+        _ui.update { it.copy(isPipActive = isInPipMode) }
+    }
+
+    /**
+     * Called from PlayerActivity.onStop().
+     * Returns true when the Activity stopped while still in the PiP flow,
+     * meaning the user dismissed the floating window via the system X button.
+     * The Activity must then call stopPlaybackAndRelease() + finish().
+     */
+    fun wasInPipBeforeStop(): Boolean = _wasInPipBeforeStop
+
+    /**
+     * Bug 3 fix: hard-stop all playback and release the player.
+     * Called when the PiP window is dismissed via the system close button to
+     * prevent ghost audio playing in the background.
+     */
+    fun stopPlaybackAndRelease() {
+        exoPlayer?.stop()
+        exoPlayer?.release()
+        exoPlayer = null
+        _wasInPipBeforeStop = false
+        _ui.update { it.copy(isPipActive = false, state = PlayerState.Idle) }
+    }
+
+    /** Returns true if PiP should be auto-entered (Home / Recents press). */
+    fun shouldAutoPip(): Boolean =
+        _ui.value.isPipGloballyEnabled && _ui.value.state is PlayerState.Playing
+
+    /** Returns true if PiP should be entered when the user taps the PiP icon. */
+    fun canManualPip(): Boolean =
+        _ui.value.isPipGloballyEnabled && _ui.value.state is PlayerState.Playing
+
+    /** Persists the global PiP preference and optimistically updates UI. */
+    fun setGlobalPipEnabled(enabled: Boolean) {
+        viewModelScope.launch { pipPrefs.setPipEnabled(enabled) }
+        _ui.update { it.copy(isPipGloballyEnabled = enabled) }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Drawer controls
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fun openSpeedDrawer()     { closeAllDrawers(); _ui.update { it.copy(isSpeedDrawerOpen = true,    showControls = true) } }
+    fun closeSpeedDrawer()    { _ui.update { it.copy(isSpeedDrawerOpen = false) } }
+    fun openQualityDrawer()   { closeAllDrawers(); _ui.update { it.copy(isQualityDrawerOpen = true,   showControls = true) } }
+    fun closeQualityDrawer()  { _ui.update { it.copy(isQualityDrawerOpen = false) } }
+    fun openSettingsDrawer()  { closeAllDrawers(); _ui.update { it.copy(isSettingsDrawerOpen = true,  showControls = true) } }
+    fun closeSettingsDrawer() { _ui.update { it.copy(isSettingsDrawerOpen = false) } }
+
+    private fun closeAllDrawers() {
+        _ui.update { it.copy(
+            isSpeedDrawerOpen    = false,
+            isQualityDrawerOpen  = false,
+            isSettingsDrawerOpen = false,
+            showSubtitleDrawer   = false,
+        )}
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Network monitoring
@@ -232,7 +330,6 @@ class PlayerViewModel @Inject constructor(
         currentPoster     = posterPath
         currentDownloadId = downloadId
 
-        // Reset retry counters on every fresh init
         silentRetryCount = 0
         fallbackIndex    = 0
         errorHandlerJob?.cancel()
@@ -255,7 +352,6 @@ class PlayerViewModel @Inject constructor(
             if (isOffline && downloadId != null) loadDownloadedSubtitles(tmdbId, season, episode)
 
             if (streamUrl != null) {
-                // Offline/pre-resolved URL — play immediately, no cache needed
                 val result = StreamResult(
                     url = streamUrl, isHls = streamIsHls,
                     headers = emptyMap(), referer = streamReferer, origin = streamOrigin,
@@ -281,7 +377,6 @@ class PlayerViewModel @Inject constructor(
         isOffline: Boolean = false,
         isQualitySwitch: Boolean = false,
     ) {
-        // Pre-roll gate
         val minutesSince = System.currentTimeMillis() / 60_000L - lastPreRollTimeMinutes
         val vastUrl = adEngine.vastTagUrlOrNull()
         if (vastUrl != null && VastTagProvider.shouldShowPreRoll(
@@ -299,8 +394,6 @@ class PlayerViewModel @Inject constructor(
             return
         }
         isFirstPlayThisSession = false
-
-        // Reset fallback index on every fresh backend call
         fallbackIndex = 0
 
         val result = streamRepo.resolveFirst(
@@ -335,9 +428,6 @@ class PlayerViewModel @Inject constructor(
 
         if (result == null) {
             val errType = streamRepo.lastErrorType
-
-            // 404 / NOT_FOUND is the only case we show to the user — everything
-            // else we retry silently (or fall through to network-error UI).
             if (errType == BackendStreamRepository.StreamError.NOT_FOUND) {
                 _ui.update { it.copy(state = PlayerState.Error(
                     "Reelz doesn't have this title yet. Try again later.",
@@ -345,7 +435,6 @@ class PlayerViewModel @Inject constructor(
                 ))}
                 return
             }
-
             val netOk = _ui.value.networkState is NetworkState.Connected
             if (!netOk) {
                 _ui.update { it.copy(state = PlayerState.Error(
@@ -354,16 +443,12 @@ class PlayerViewModel @Inject constructor(
                 ))}
                 return
             }
-
-            // Transient / blocked error — retry silently up to MAX_SILENT_RETRIES
             if (silentRetryCount < MAX_SILENT_RETRIES) {
                 silentRetryCount++
                 Log.d("PlayerVM", "Silent retry #$silentRetryCount (errType=$errType)")
-                // Brief pause to avoid hammering the backend instantly
                 delay(300L * silentRetryCount)
                 resolveAndPlay(tmdbId, type, title, season, episode, imdbId, year, isOffline)
             } else {
-                // Give up silently — show a vague "try again" without revealing internals
                 _ui.update { it.copy(state = PlayerState.Error(
                     "Couldn't load stream. Tap to try again.",
                     isNetworkError = false,
@@ -372,7 +457,6 @@ class PlayerViewModel @Inject constructor(
             return
         }
 
-        // Success — reset retry counter
         silentRetryCount = 0
         lastResult = result
         playStream(result)
@@ -510,7 +594,10 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun setSubtitleOffset(offsetMs: Int) { _ui.update { it.copy(subtitleOffsetMs = offsetMs) } }
-    fun openSubtitleDrawer()  { _ui.update { it.copy(showSubtitleDrawer = true, showControls = true) } }
+    fun openSubtitleDrawer()  {
+        closeAllDrawers()
+        _ui.update { it.copy(showSubtitleDrawer = true, showControls = true) }
+    }
     fun closeSubtitleDrawer() { _ui.update { it.copy(showSubtitleDrawer = false, subtitleUpsellMessage = null) } }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -597,8 +684,17 @@ class PlayerViewModel @Inject constructor(
                             if (g.type == C.TRACK_TYPE_VIDEO) {
                                 for (i in 0 until g.length) {
                                     val fmt = g.getTrackFormat(i)
-                                    if (fmt.height > 0 && fmt.height <= mh)
-                                        qualities.add(QualityTrack("${fmt.height}p", "", fmt.bitrate.toLong()))
+                                    if (fmt.height > 0 && fmt.height <= mh) {
+                                        val label = when {
+                                            fmt.height >= 2000 -> "2160p"
+                                            fmt.height >= 900  -> "1080p"
+                                            fmt.height >= 600  -> "720p"
+                                            fmt.height >= 420  -> "480p"
+                                            fmt.height >= 300  -> "360p"
+                                            else               -> "240p"
+                                        }
+                                        qualities.add(QualityTrack(label, "", fmt.bitrate.toLong()))
+                                    }
                                 }
                             }
                         }
@@ -685,6 +781,9 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    // ── Bug 1 fix: pollPosition runs unconditionally, regardless of PiP state ─
+    // This keeps the seek bar progress flowing inside the PiP window and ensures
+    // watch-progress is saved even when the app is in the floating window.
     fun pollPosition() {
         val p = exoPlayer ?: return
         val pos = p.currentPosition.coerceAtLeast(0)
@@ -699,18 +798,10 @@ class PlayerViewModel @Inject constructor(
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Bulletproof error handler
-    //
-    // Priority order:
-    //   1. No network → show network error (resume auto when reconnected)
-    //   2. Fallback ladder has a next URL → swap silently, NO UI change
-    //   3. Ladder exhausted → invalidate cache, re-fetch backend silently
-    //      (up to MAX_SILENT_RETRIES) → only show UI after all retries fail
+    // Error handler
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun handleError(error: PlaybackException) {
-        // Debounce: cancel any in-flight error handler before spawning a new one.
-        // This prevents rapid HLS segment errors from firing 10 parallel re-fetches.
         errorHandlerJob?.cancel()
         errorHandlerJob = viewModelScope.launch { handleErrorInternal(error) }
     }
@@ -718,7 +809,6 @@ class PlayerViewModel @Inject constructor(
     private suspend fun handleErrorInternal(error: PlaybackException) {
         Log.w("PlayerVM", "Playback error: ${error.errorCodeName} — ${error.message}")
 
-        // ── 1. Network gone → wait for reconnect ──────────────────────────
         val netOk = _ui.value.networkState is NetworkState.Connected
         if (!netOk && !_ui.value.isOfflinePlayback) {
             _ui.update { it.copy(state = PlayerState.Error(
@@ -727,7 +817,6 @@ class PlayerViewModel @Inject constructor(
             return
         }
 
-        // ── 2. Try next URL in the fallback ladder ─────────────────────────
         val ladder = lastResult?.qualities ?: emptyList()
         val nextIndex = fallbackIndex + 1
         if (nextIndex < ladder.size) {
@@ -744,24 +833,19 @@ class PlayerViewModel @Inject constructor(
                     quality = nextTrack.label,
                 )
                 lastResult = fallbackResult
-                // Stay in Buffering — user sees spinner, not error
                 _ui.update { it.copy(state = PlayerState.Buffering) }
                 playStream(fallbackResult)
                 return
             }
         }
 
-        // ── 3. Ladder exhausted → invalidate cache + re-fetch backend ──────
         Log.d("PlayerVM", "Fallback ladder exhausted (tried ${fallbackIndex + 1}/${ladder.size})")
-        // Invalidate so the next resolveFirst hits the backend fresh
         streamRepo.invalidateCache(currentTmdbId, currentType, currentSeason, currentEpisode)
 
         if (silentRetryCount < MAX_SILENT_RETRIES) {
             silentRetryCount++
             Log.d("PlayerVM", "Silent backend re-fetch #$silentRetryCount")
-            // Stay in Buffering state — user sees spinner, no error flash
             _ui.update { it.copy(state = PlayerState.Buffering) }
-            // Small back-off so we don't hammer the backend on a flaky connection
             delay(200L * silentRetryCount)
             resolveAndPlay(
                 currentTmdbId, currentType, currentTitle,
@@ -769,7 +853,6 @@ class PlayerViewModel @Inject constructor(
                 _ui.value.isOfflinePlayback,
             )
         } else {
-            // All retries exhausted — NOW show the user a message
             silentRetryCount = 0
             _ui.update { it.copy(state = PlayerState.Error(
                 "Couldn't load stream. Tap to try again.",

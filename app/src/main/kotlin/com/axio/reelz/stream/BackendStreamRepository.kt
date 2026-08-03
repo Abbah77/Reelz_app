@@ -236,6 +236,18 @@ class BackendStreamRepository @Inject constructor(
         return m
     }
 
+    /**
+     * Safely reads a string field that may be JSON null (not just absent).
+     * json.optString("quality", "Auto") returns the string "null" when the
+     * field is present but set to JSON null — this helper returns the
+     * fallback in that case too.
+     */
+    private fun JSONObject.safeString(key: String, fallback: String = ""): String {
+        if (isNull(key)) return fallback
+        val v = optString(key, fallback)
+        return if (v.isBlank() || v == "null") fallback else v
+    }
+
     private fun parseStreamEntry(json: JSONObject): MediaEvent.StreamAvailable? {
         val url  = json.optString("url").ifBlank { return null }
         val type = json.optString("type", "m3u8")
@@ -244,9 +256,9 @@ class BackendStreamRepository @Inject constructor(
         return MediaEvent.StreamAvailable(
             url      = url,
             type     = type,
-            quality  = json.optString("quality", "Auto").ifBlank { "Auto" },
-            name     = json.optString("name", ""),
-            language = json.optString("language", "English"),
+            quality  = json.safeString("quality", "Auto"),
+            name     = json.safeString("name", ""),
+            language = json.safeString("language", "English"),
             headers  = headers,
             priority = json.optInt("priority", 0),
         )
@@ -256,9 +268,9 @@ class BackendStreamRepository @Inject constructor(
         val url = json.optString("url").ifBlank { return null }
         return MediaEvent.DownloadAvailable(
             url       = url,
-            type      = json.optString("type", "mp4"),
-            quality   = json.optString("quality", "Auto").ifBlank { "Auto" },
-            language  = json.optString("language", "English"),
+            type      = json.safeString("type", "mp4"),
+            quality   = json.safeString("quality", "Auto"),
+            language  = json.safeString("language", "English"),
             sizeBytes = json.optLong("size_bytes", 0),
         )
     }
@@ -425,8 +437,19 @@ class BackendStreamRepository @Inject constructor(
         val arr = json.optJSONArray("links") ?: return
         for (i in 0 until arr.length()) {
             val e = parseDownloadEntry(arr.getJSONObject(i)) ?: continue
+            // Use the SAME label format as resolveDownloadLinks():
+            // "1080p" for English, "1080p · Hindi" for others.
+            // Previously this was "${e.quality} (${e.language})" which
+            // caused a label mismatch in resolveIfNeeded() → wrong URL.
+            val label = if (e.language.isNotBlank()
+                && !e.language.equals("English", ignoreCase = true)
+            ) {
+                "${e.quality} · ${e.language}"
+            } else {
+                e.quality
+            }
             onDownload(QualityTrack(
-                label              = "${e.quality} (${e.language})",
+                label              = label,
                 url                = e.url,
                 estimatedSizeBytes = e.sizeBytes,
             ))
@@ -477,7 +500,10 @@ class BackendStreamRepository @Inject constructor(
         val raw = mutableListOf<RawEntry>()
         for (i in 0 until arr.length()) {
             val e = parseDownloadEntry(arr.getJSONObject(i)) ?: continue
-            raw.add(RawEntry(e.quality, e.language, e.url, e.sizeBytes))
+            // parseDownloadEntry returns "Auto" when the backend sends quality=null.
+            // Try to salvage a real label from the URL path before giving up.
+            val quality = if (e.quality == "Auto") inferQualityFromUrl(e.url) else e.quality
+            raw.add(RawEntry(quality, e.language, e.url, e.sizeBytes))
         }
 
         val qualityLanguageCounts = raw.groupBy { it.quality }.mapValues { (_, v) ->
@@ -504,6 +530,47 @@ class BackendStreamRepository @Inject constructor(
             { if (it.label.contains("·")) 1 else 0 }
         ))
         out
+    }
+
+    /**
+     * Last-resort quality inference from the download URL when the backend
+     * sends quality=null. Checks (in order):
+     *  1. Standard resolution tokens in the URL path  (e.g. "1080p", "720p")
+     *  2. Raw pixel heights  (e.g. "1920x1080", "1280x720", or standalone "1080")
+     * Returns a standard label like "1080p", or "Auto" if nothing is found.
+     */
+    private fun inferQualityFromUrl(url: String): String {
+        val lower = url.lowercase()
+        // 1. Explicit token: 2160p / 4k / 1080p / 720p / 480p / 360p / 240p
+        val tokenMatch = Regex("""(2160p|4k|1080p|720p|480p|360p|240p)""").find(lower)
+        if (tokenMatch != null) {
+            return when (tokenMatch.value) {
+                "4k"    -> "2160p"
+                else    -> tokenMatch.value
+            }
+        }
+        // 2. WxH resolution string (e.g. "1920x1080") — use the height component
+        val dimMatch = Regex("""\d{3,4}[x×]\d{3,4}""").find(lower)
+        if (dimMatch != null) {
+            val height = dimMatch.value.substringAfterLast(Regex("[x×]").find(dimMatch.value)!!.value)
+                .toIntOrNull() ?: dimMatch.value.split(Regex("[x×]")).lastOrNull()?.toIntOrNull() ?: 0
+            return when {
+                height >= 2000 -> "2160p"
+                height >= 900  -> "1080p"
+                height >= 600  -> "720p"
+                height >= 420  -> "480p"
+                height >= 300  -> "360p"
+                height >  0    -> "240p"
+                else           -> "Auto"
+            }
+        }
+        // 3. Standalone height number in path segment (e.g. ".../1080/...")
+        val heightMatch = Regex("""[/_-](2160|1080|720|480|360|240)[/_.-]""").find(lower)
+        if (heightMatch != null) {
+            val h = heightMatch.groupValues[1].toIntOrNull() ?: 0
+            return if (h > 0) "${h}p" else "Auto"
+        }
+        return "Auto"
     }
 
     // ── searchSubtitles — used by PlayerViewModel subtitle search ─────────────

@@ -197,6 +197,22 @@ class DownloadService : Service() {
         try {
             val freshItem = resolveIfNeeded(downloadDao.get(dlId) ?: return)
 
+            // Guard: resolve succeeded but the backend returned no links for this title.
+            // Mark ERROR (not PAUSED) so the user sees a clear failure badge and the
+            // item is excluded from the active download count (premium cap).
+            // Note: resolveIfNeeded returns item (original URL) on network failure so
+            // this branch only fires when the backend explicitly returned an empty list.
+            if (freshItem.streamUrl.isBlank()) {
+                downloadDao.markPaused(freshItem.id, DownloadStatus.ERROR.name)
+                updateNotif(
+                    "Download failed",
+                    "No source found for \"${item.title}\". The content may not be available yet.",
+                    0, 0
+                )
+                activeJobs.remove(dlId)
+                return
+            }
+
             if (freshItem.streamUrl.contains(".m3u8", ignoreCase = true)) {
                 downloadHls(freshItem, outputFile, dlId)
             } else {
@@ -219,9 +235,10 @@ class DownloadService : Service() {
             // Intentional pause — DB already marked PAUSED in ACTION_PAUSE handler.
             throw e
         } catch (e: Exception) {
-            // BUG 1 + P11: Mark paused with resolveRequired=true
+            // Network/IO error — mark PAUSED with resolveRequired=1 so the next
+            // resume attempt re-fetches a fresh CDN URL from the backend.
             downloadDao.markPaused(dlId)
-            updateNotif("Paused", "Will resume when network returns", 0, 0)
+            updateNotif("Download paused", "\"${item.title}\" will resume when the connection is restored.", 0, 0)
         } finally {
             activeJobs.remove(dlId)
         }
@@ -241,39 +258,58 @@ class DownloadService : Service() {
      */
     private suspend fun resolveIfNeeded(item: DownloadItem): DownloadItem {
         if (!item.resolveRequired) return item
-        return try {
-            val mediaType = runCatching { MediaType.valueOf(item.mediaType) }.getOrNull()
-                ?: return item
 
+        val mediaType = runCatching { MediaType.valueOf(item.mediaType) }.getOrNull()
+            ?: return item   // unknown media type — keep current URL and try anyway
+
+        return try {
             // Use POST /download — returns deduplicated per-resolution links.
-            val links = mutableListOf<com.axio.reelz.data.model.QualityTrack>()
-            streamRepo.resolveDownloadLinks(
+            val links = streamRepo.resolveDownloadLinks(
                 tmdbId    = item.tmdbId,
                 mediaType = mediaType,
                 title     = item.title,
                 season    = item.season,
                 episode   = item.episode,
-            ).forEach { track -> links.add(track) }
+            )
 
-            if (links.isEmpty()) return item  // backend found nothing — keep current URL
+            if (links.isEmpty()) {
+                // Backend was reachable but found no download links for this title.
+                // Signal to processDownload via a blank URL so it can show ERROR.
+                return item.copy(streamUrl = "")
+            }
 
             // Pick the exact quality the user selected.
             // Match on plain label ("1080p") or label-with-language ("1080p · Hindi").
             // Fall back to highest resolution by parsing the quality prefix.
             val resOrder = listOf("2160p", "1080p", "720p", "480p", "360p", "240p")
-            val freshTrack = links.firstOrNull { it.label == item.quality }
-                ?: links.firstOrNull { it.label.startsWith(item.quality) }
+            // Strip any legacy suffix formats before matching:
+            //   "1080p (English)" → "1080p"
+            //   "1080p · Hindi"   → "1080p · Hindi" (kept — specific variant)
+            val normalizedWanted = item.quality
+                .substringBefore(" (").trim()  // strip "(English)" legacy format
+            val freshTrack = links.firstOrNull { it.label == item.quality }      // exact
+                ?: links.firstOrNull { it.label == normalizedWanted }             // normalized
+                ?: links.firstOrNull { it.label.startsWith(normalizedWanted) }    // prefix
+                ?: links.firstOrNull { normalizedWanted.startsWith(it.label) }    // reverse
                 ?: links.minByOrNull { track ->
                     resOrder.indexOfFirst { track.label.startsWith(it) }.takeIf { it >= 0 } ?: 99
                 }
                 ?: links.first()
 
             val freshUrl = freshTrack.url
-            if (freshUrl.isBlank()) return item  // guard against empty URL
+            // Guard: entry has a label but an empty URL (shouldn't happen, but be safe).
+            if (freshUrl.isBlank()) return item.copy(streamUrl = "")
 
-            downloadDao.updateStreamUrl(item.id, freshUrl, item.headers)  // headers stay the same for direct links
+            downloadDao.updateStreamUrl(item.id, freshUrl, item.headers)
             item.copy(streamUrl = freshUrl, resolveRequired = false)
-        } catch (_: Exception) { item }
+
+        } catch (_: Exception) {
+            // Network / timeout during resolve (backend unreachable, no internet, etc.).
+            // Keep the ORIGINAL streamUrl so the download can still attempt it — the
+            // URL stored at enqueue time is a direct link and may still be valid.
+            // processDownload will retry on next resume if this attempt also fails.
+            item
+        }
     }
 
     // ── Direct MP4/MKV download — parallel Range chunks ───────────────────────
