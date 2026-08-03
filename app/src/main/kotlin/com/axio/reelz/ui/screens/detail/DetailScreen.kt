@@ -168,6 +168,12 @@ class DetailViewModel @Inject constructor(
         val showDownloadCapSheet: Boolean = false,
         /** True when a free user tapped a quality above their tier's resolution cap. */
         val showResolutionLockSheet: Boolean = false,
+        /**
+         * Set of keys ("tmdbId_season_episode" or "tmdbId_0_0" for movies)
+         * that already have a non-ERROR download. Used to show IconDownloaded
+         * instead of IconDownloadCloud on the episode/movie download button.
+         */
+        val downloadedKeys: Set<String> = emptySet(),
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -203,6 +209,20 @@ class DetailViewModel @Inject constructor(
 
     private fun qualityKey(tmdbId: Int, season: Int = 0, episode: Int = 0) =
         "${tmdbId}_${season}_${episode}"
+
+    /** Observe all non-ERROR downloads and push their keys into UiState so the
+     *  episode/movie download button can show IconDownloaded in real time. */
+    fun observeDownloads() {
+        viewModelScope.launch {
+            downloadDao.getAll().collect { items ->
+                val keys = items
+                    .filter { it.status != DownloadStatus.ERROR.name }
+                    .map { "${it.tmdbId}_${it.season}_${it.episode}" }
+                    .toSet()
+                _ui.update { it.copy(downloadedKeys = keys) }
+            }
+        }
+    }
 
     fun load(tmdbId: Int, mediaType: MediaType) {
         viewModelScope.launch {
@@ -532,7 +552,10 @@ fun DetailScreen(
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
 
-    LaunchedEffect(tmdbId) { vm.load(tmdbId, mediaType) }
+    LaunchedEffect(tmdbId) {
+        vm.load(tmdbId, mediaType)
+        vm.observeDownloads()
+    }
 
     fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
         val d = ui.detail ?: return
@@ -589,6 +612,7 @@ fun DetailScreen(
                 onDownloadEpisode = { s, e, name ->
                     vm.openDownloadSheet(tmdbId, mediaType, s, e, name)
                 },
+                downloadedKeys = ui.downloadedKeys,
             )
         }
 
@@ -1049,6 +1073,7 @@ private fun DetailContent(
     onSimilarClick: (Int, MediaType) -> Unit,
     onDownloadMovie: () -> Unit,
     onDownloadEpisode: (Int, Int, String) -> Unit,
+    downloadedKeys: Set<String> = emptySet(),
 ) {
     val d = LocalDimensions.current
     val detail  = ui.detail!!
@@ -1223,10 +1248,12 @@ private fun DetailContent(
                 item { Box(Modifier.fillMaxWidth().height(d.spaceXxl * 3.75f), Alignment.Center) { CinematicSpinner() } }
             } else {
                 items(ui.episodes, key = { it.id }) { ep ->
+                    val epKey = "${detail.tmdbId}_${ep.seasonNumber}_${ep.episodeNumber}"
                     EpisodeRow(
-                        episode   = ep,
-                        onClick   = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
-                        onDownload = { onDownloadEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        episode      = ep,
+                        onClick      = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        onDownload   = { onDownloadEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        isDownloaded = epKey in downloadedKeys,
                     )
                 }
             }
@@ -1276,6 +1303,7 @@ fun EpisodeRow(
     episode: Episode,
     onClick: () -> Unit,
     onDownload: () -> Unit = {},
+    isDownloaded: Boolean = false,
 ) {
     val d = LocalDimensions.current
     Row(
@@ -1286,8 +1314,13 @@ fun EpisodeRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
+        // Thumbnail — taller so episode stills are clearly visible
         Box(
-            Modifier.width(d.avatarLg + d.spaceXxl - d.spaceXs).height(d.continueCardThumbHeight - d.spaceMd + d.spaceXxs).clip(RoundedCornerShape(d.radiusMd)).background(BgRaised),
+            Modifier
+                .width(d.avatarLg + d.spaceXxl)
+                .height(d.continueCardThumbHeight)
+                .clip(RoundedCornerShape(d.radiusMd))
+                .background(BgRaised),
         ) {
             if (episode.stillPath != null) {
                 AsyncImage(
@@ -1296,9 +1329,33 @@ fun EpisodeRow(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
+            } else {
+                // Fallback gradient when no still is available
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(listOf(BgRaised, BgCard))
+                    ),
+                    Alignment.Center,
+                ) {
+                    Icon(IconMovieSlate, null, tint = White20, modifier = Modifier.size(d.iconLg))
+                }
             }
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
-                Icon(IconPlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(d.iconLg))
+            // Play overlay
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(.28f)), Alignment.Center) {
+                Icon(IconPlayCircle, null, tint = White.copy(.85f), modifier = Modifier.size(d.iconLg))
+            }
+            // "Offline" badge when already downloaded
+            if (isDownloaded) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(d.spaceXxs + 1.dp)
+                        .clip(RoundedCornerShape(d.radiusSm))
+                        .background(Color(0xFF30D158).copy(.9f))
+                        .padding(horizontal = d.spaceXs, vertical = d.spaceXxs),
+                ) {
+                    Text("Offline", color = Color.White, fontSize = (d.textXxs.value - 0.5f).sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
         Column(Modifier.weight(1f)) {
@@ -1310,9 +1367,18 @@ fun EpisodeRow(
                 Text("${it}m", color = White40, fontSize = d.textXxs)
             }
         }
-        // Download icon for each episode
-        IconButton(onClick = onDownload, modifier = Modifier.size(d.buttonHeightSm)) {
-            Icon(IconDownloadCloud, null, tint = White60, modifier = Modifier.size(d.iconMd - 2.dp))
+        // Download icon: shows IconDownloaded (green) if owned, otherwise normal cloud icon
+        IconButton(
+            onClick = if (isDownloaded) ({}) else onDownload,
+            modifier = Modifier.size(d.buttonHeightSm),
+            enabled = !isDownloaded,
+        ) {
+            Icon(
+                if (isDownloaded) IconDownloaded else IconDownloadCloud,
+                contentDescription = if (isDownloaded) "Offline" else "Download",
+                tint = if (isDownloaded) Color(0xFF30D158) else White60,
+                modifier = Modifier.size(d.iconMd - 2.dp),
+            )
         }
         Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconMd))
     }
