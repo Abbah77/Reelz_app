@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material3.*
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.blur
@@ -127,8 +128,9 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
     val activeDownloads by vm.activeDownloads.collectAsState()
     val readyCount     by vm.readyCount.collectAsState()
     var tab            by remember { mutableStateOf(0) }
-    val expandedSeries  = remember { mutableStateOf(setOf<Int>()) }
-    val expandedSeasons = remember { mutableStateOf(setOf<String>()) }
+    // Single-expand: only one series and one season open at a time
+    val expandedSeries  = remember { mutableStateOf<Int?>(null) }
+    val expandedSeasons = remember { mutableStateOf<String?>(null) }
 
     val showMovies  = tab == 0 || tab == 1
     val showSeries  = tab == 0 || tab == 2
@@ -182,10 +184,16 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                 items(seriesGroups, key = { "s-${it.tmdbId}" }) { group ->
                     SeriesCard(
                         group           = group,
-                        expanded        = group.tmdbId in expandedSeries.value,
-                        expandedSeasons = expandedSeasons.value,
-                        onToggle        = { expandedSeries.value = toggle(expandedSeries.value, group.tmdbId) },
-                        onToggleSeason  = { expandedSeasons.value = toggle(expandedSeasons.value, it) },
+                        expanded        = expandedSeries.value == group.tmdbId,
+                        expandedSeason  = expandedSeasons.value,
+                        onToggle        = {
+                            // Close the previously expanded season whenever we toggle a series
+                            expandedSeasons.value = null
+                            expandedSeries.value = if (expandedSeries.value == group.tmdbId) null else group.tmdbId
+                        },
+                        onToggleSeason  = { key ->
+                            expandedSeasons.value = if (expandedSeasons.value == key) null else key
+                        },
                         onPlay          = { playDownload(ctx, it) },
                         onDelete        = { vm.delete(it, ctx) },
                         onResume        = { vm.resume(ctx, it) },
@@ -365,73 +373,42 @@ private fun ActiveQueueCard(
               else 0f
     val animPct by animateFloatAsState(pct.coerceIn(0f, 1f), label = "aq-pct")
 
-    // Card width slightly more than a movie poster
     val cardW = d.continueCardWidth + d.spaceLg
 
-    Box(
+    // ── Slim card: poster thumbnail on the left, title + progress on the right ─
+    // Height is intentionally minimal — no pause button (user can pause below in
+    // the movie/series card). Only shows progress line + speed.
+    Row(
         Modifier
             .width(cardW)
             .clip(RoundedCornerShape(d.radiusMd))
             .background(BgCard)
-            .border(1.dp, if (isDownloading) Brand.copy(.25f) else GlassBorderMd, RoundedCornerShape(d.radiusMd))
+            .border(1.dp, if (isDownloading) Brand.copy(.22f) else GlassBorderMd, RoundedCornerShape(d.radiusMd))
+            .padding(d.spaceSm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
     ) {
-        // Poster fills top portion
-        Box(Modifier.fillMaxWidth().height(cardW * 0.56f)) {
+        // Small poster thumbnail
+        Box(
+            Modifier
+                .size(width = d.avatarSm + d.spaceXxs, height = d.avatarSm + d.spaceMd)
+                .clip(RoundedCornerShape(d.radiusSm))
+                .background(BgRaised),
+        ) {
             AsyncImage(
                 model = item.posterPath?.let { "${BuildConfig.TMDB_IMG_W342}$it" },
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            // Gradient overlay from bottom
-            Box(
-                Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(
-                        listOf(Color.Transparent, BgCard),
-                        startY = Float.MAX_VALUE * 0.3f,
-                    )
-                )
-            )
-            // Quality badge top-left
-            if (item.quality.isNotBlank()) {
-                Box(
-                    Modifier
-                        .padding(d.spaceXs + 1.dp)
-                        .clip(RoundedCornerShape(d.radiusSm - 2.dp))
-                        .background(Color.Black.copy(.65f))
-                        .padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)
-                        .align(Alignment.TopStart)
-                ) {
-                    Text(item.quality, color = White80, fontSize = (d.textXxs.value + 0.5f).sp, fontWeight = FontWeight.Bold)
-                }
-            }
-            // Pause/Resume control — top-right
-            Box(
-                Modifier
-                    .padding(d.spaceXs + 1.dp)
-                    .size(d.iconLg + d.spaceXxs)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(.6f))
-                    .border(1.dp, White20, CircleShape)
-                    .clickable(onClick = if (isDownloading) onPause else onResume)
-                    .align(Alignment.TopEnd),
-                Alignment.Center,
-            ) {
-                Text(
-                    if (isDownloading) "⏸" else "▶",
-                    color = White,
-                    fontSize = (d.textSm.value - 1f).sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
         }
 
-        // Info below image
-        Column(Modifier.padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceSm + 1.dp)) {
+        // Title + subtitle + progress bar
+        Column(Modifier.weight(1f)) {
             Text(
                 item.title,
                 color = White,
-                fontSize = d.textSm,
+                fontSize = d.textXs,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -443,9 +420,8 @@ private fun ActiveQueueCard(
                     fontSize = (d.textXxs.value + 0.5f).sp,
                 )
             }
-            Spacer(Modifier.height(d.spaceSm - 1.dp))
-
-            // Progress bar
+            Spacer(Modifier.height(d.spaceXxs + 2.dp))
+            // Progress line — the only active indicator shown here
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -464,28 +440,18 @@ private fun ActiveQueueCard(
                         )
                 )
             }
-            Spacer(Modifier.height(d.spaceXxs + 1.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    when {
-                        isQueued      -> "Waiting…"
-                        isPaused      -> "${(pct * 100).toInt()}% paused"
-                        item.networkSpeedBps > 0 -> formatSpeed(item.networkSpeedBps)
-                        else          -> "${(pct * 100).toInt()}%"
-                    },
-                    color = if (isDownloading && item.networkSpeedBps > 0) Success.copy(.9f) else White40,
-                    fontSize = (d.textXxs.value + 0.5f).sp,
-                    fontWeight = if (isDownloading) FontWeight.SemiBold else FontWeight.Normal,
-                )
-                Text(
-                    "${(pct * 100).toInt()}%",
-                    color = White40,
-                    fontSize = (d.textXxs.value + 0.5f).sp,
-                )
-            }
+            Spacer(Modifier.height(d.spaceXxs))
+            Text(
+                when {
+                    isQueued                      -> "Waiting…"
+                    isPaused                      -> "${(pct * 100).toInt()}% · Paused"
+                    item.networkSpeedBps > 0      -> "${(pct * 100).toInt()}% · ${formatSpeed(item.networkSpeedBps)}"
+                    else                          -> "${(pct * 100).toInt()}%"
+                },
+                color = if (isDownloading && item.networkSpeedBps > 0) Success.copy(.85f) else White40,
+                fontSize = (d.textXxs.value + 0.5f).sp,
+                fontWeight = if (isDownloading) FontWeight.SemiBold else FontWeight.Normal,
+            )
         }
     }
 }
@@ -796,7 +762,7 @@ fun MovieCard(
                             }
                         }
 
-                        // Pause/Resume action
+                        // Pause/Resume action — uses proper vector icons instead of emoji
                         Row(
                             Modifier
                                 .clip(RoundedCornerShape(d.radiusPill))
@@ -807,10 +773,11 @@ fun MovieCard(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
                         ) {
-                            Text(
-                                if (isDownloading) "⏸" else if (isPaused || isError) "▶" else "…",
-                                color = if (isPaused || isError) Brand else White60,
-                                fontSize = d.textXs,
+                            Icon(
+                                imageVector = if (isDownloading) IconPause else IconPlay,
+                                contentDescription = null,
+                                tint = if (isPaused || isError) Brand else White60,
+                                modifier = Modifier.size(d.iconSm - 2.dp),
                             )
                             Text(
                                 when {
@@ -867,7 +834,7 @@ fun MovieCard(
 fun SeriesCard(
     group: SeriesGroup,
     expanded: Boolean,
-    expandedSeasons: Set<String>,
+    expandedSeason: String?,           // null = none expanded; only one at a time
     onToggle: () -> Unit,
     onToggleSeason: (String) -> Unit,
     onPlay: (DownloadItem) -> Unit,
@@ -1010,7 +977,7 @@ fun SeriesCard(
                     val seasonKey = "${group.tmdbId}:${season.season}"
                     SeasonRow(
                         season        = season,
-                        expanded      = seasonKey in expandedSeasons,
+                        expanded      = expandedSeason == seasonKey,
                         onToggle      = { onToggleSeason(seasonKey) },
                         onPlay        = onPlay,
                         onDelete      = onDelete,
@@ -1228,13 +1195,13 @@ fun EpisodeRow(
             }
 
             Spacer(Modifier.width(d.spaceSm))
-            // Primary action
+            // Primary action — proper vector icons
             when {
-                isDone        -> EpActionButton(symbol = "▶", tint = Brand, onClick = onPlay)
-                isDownloading -> EpActionButton(symbol = "⏸", tint = White60, onClick = onPause)
-                isPaused || isError -> EpActionButton(symbol = "▶", tint = Brand, onClick = onResume)
-                isQueued      -> Spacer(Modifier.width(d.iconLg))
-                else          -> Spacer(Modifier.width(d.iconLg))
+                isDone              -> EpActionButton(icon = IconPlay,  tint = Brand,   onClick = onPlay)
+                isDownloading       -> EpActionButton(icon = IconPause, tint = White60, onClick = onPause)
+                isPaused || isError -> EpActionButton(icon = IconPlay,  tint = Brand,   onClick = onResume)
+                isQueued            -> Spacer(Modifier.width(d.iconLg))
+                else                -> Spacer(Modifier.width(d.iconLg))
             }
 
             Spacer(Modifier.width(d.spaceXs))
@@ -1261,7 +1228,7 @@ fun EpisodeRow(
 }
 
 @Composable
-private fun EpActionButton(symbol: String, tint: Color, onClick: () -> Unit) {
+private fun EpActionButton(icon: ImageVector, tint: Color, onClick: () -> Unit) {
     val d = LocalDimensions.current
     Box(
         Modifier
@@ -1270,7 +1237,14 @@ private fun EpActionButton(symbol: String, tint: Color, onClick: () -> Unit) {
             .background(tint.copy(.15f))
             .clickable(onClick = onClick),
         Alignment.Center,
-    ) { Text(symbol, color = tint, fontSize = (d.textSm.value - 1f).sp, fontWeight = FontWeight.Bold) }
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(d.iconSm - 2.dp),
+        )
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1422,11 +1396,7 @@ private fun ReelzDeleteDialog(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-private fun toggle(set: Set<Int>, key: Int): Set<Int> =
-    if (key in set) set - key else set + key
-
-private fun toggle(set: Set<String>, key: String): Set<String> =
-    if (key in set) set - key else set + key
+// toggle helpers removed — series/season now use single-expand (nullable) state
 
 private fun playDownload(ctx: Context, dl: DownloadItem) {
     val base = Intent(ctx, PlayerActivity::class.java).apply {
