@@ -238,7 +238,7 @@ private fun DownloadsHeader(readyCount: Int, activeCount: Int, onTransfer: () ->
             Text(
                 "Downloads",
                 color = White,
-                fontSize = d.textXxl + 3.sp,
+                fontSize = (d.textXxl.value + 3f).sp,
                 fontWeight = FontWeight.Black,
                 letterSpacing = (-0.8).sp,
             )
@@ -327,7 +327,7 @@ private fun ActiveQueueStrip(
                 Text(
                     "ACTIVE",
                     color = White40,
-                    fontSize = d.textXxs + 1.sp,
+                    fontSize = (d.textXxs.value + 1f).sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 )
@@ -402,7 +402,7 @@ private fun ActiveQueueCard(
                         .padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)
                         .align(Alignment.TopStart)
                 ) {
-                    Text(item.quality, color = White80, fontSize = d.textXxs + 0.5.sp, fontWeight = FontWeight.Bold)
+                    Text(item.quality, color = White80, fontSize = (d.textXxs.value + 0.5f).sp, fontWeight = FontWeight.Bold)
                 }
             }
             // Pause/Resume control — top-right
@@ -420,7 +420,7 @@ private fun ActiveQueueCard(
                 Text(
                     if (isDownloading) "⏸" else "▶",
                     color = White,
-                    fontSize = d.textSm - 1.sp,
+                    fontSize = (d.textSm.value - 1f).sp,
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -440,7 +440,7 @@ private fun ActiveQueueCard(
                 Text(
                     "S${item.season}E${item.episode}",
                     color = White40,
-                    fontSize = d.textXxs + 0.5.sp,
+                    fontSize = (d.textXxs.value + 0.5f).sp,
                 )
             }
             Spacer(Modifier.height(d.spaceSm - 1.dp))
@@ -458,8 +458,8 @@ private fun ActiveQueueCard(
                         .fillMaxWidth(animPct)
                         .fillMaxHeight()
                         .background(
-                            if (isPaused) White40
-                            else if (isQueued) White20
+                            brush = if (isPaused) SolidColor(White40)
+                            else if (isQueued) SolidColor(White20)
                             else Brush.horizontalGradient(listOf(Brand, Brand2))
                         )
                 )
@@ -477,13 +477,13 @@ private fun ActiveQueueCard(
                         else          -> "${(pct * 100).toInt()}%"
                     },
                     color = if (isDownloading && item.networkSpeedBps > 0) Success.copy(.9f) else White40,
-                    fontSize = d.textXxs + 0.5.sp,
+                    fontSize = (d.textXxs.value + 0.5f).sp,
                     fontWeight = if (isDownloading) FontWeight.SemiBold else FontWeight.Normal,
                 )
                 Text(
                     "${(pct * 100).toInt()}%",
                     color = White40,
-                    fontSize = d.textXxs + 0.5.sp,
+                    fontSize = (d.textXxs.value + 0.5f).sp,
                 )
             }
         }
@@ -558,7 +558,7 @@ private fun TabFilterBar(
                             Text(
                                 "$count",
                                 color = if (isSelected) White else White40,
-                                fontSize = d.textXxs + 0.5.sp,
+                                fontSize = (d.textXxs.value + 0.5f).sp,
                                 fontWeight = FontWeight.Bold,
                             )
                         }
@@ -599,7 +599,7 @@ private fun SectionLabel(title: String, subtitle: String, modifier: Modifier = M
             Text(
                 title,
                 color = White,
-                fontSize = d.textMd + 0.5.sp,
+                fontSize = (d.textMd.value + 0.5f).sp,
                 fontWeight = FontWeight.Bold,
             )
         }
@@ -743,7 +743,7 @@ fun MovieCard(
                             .clickable { showDeleteDialog = true },
                         Alignment.Center,
                     ) {
-                        Text("✕", color = White40, fontSize = d.textSm - 1.sp)
+                        Text("✕", color = White40, fontSize = (d.textSm.value - 1f).sp)
                     }
                 }
 
@@ -763,7 +763,7 @@ fun MovieCard(
                                 .fillMaxWidth(animPct)
                                 .fillMaxHeight()
                                 .background(
-                                    if (isError) SolidColor(Error)
+                                    brush = if (isError) SolidColor(Error)
                                     else if (isPaused) SolidColor(White40)
                                     else Brush.horizontalGradient(listOf(Brand, Brand2))
                                 )
@@ -783,7 +783,7 @@ fun MovieCard(
                                 Text(
                                     "↓ ${formatSpeed(item.networkSpeedBps)}",
                                     color = Success.copy(.85f),
-                                    fontSize = d.textXxs + 1.sp,
+                                    fontSize = (d.textXxs.value + 1f).sp,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                             }
@@ -791,7 +791,7 @@ fun MovieCard(
                                 Text(
                                     "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}",
                                     color = White40,
-                                    fontSize = d.textXxs + 1.sp,
+                                    fontSize = (d.textXxs.value + 1f).sp,
                                 )
                             }
                         }
@@ -992,7 +992,7 @@ fun SeriesCard(
                     .background(GlassMd)
                     .clickable { showDeleteDialog = true },
                 Alignment.Center,
-            ) { Text("✕", color = White40, fontSize = d.textSm - 1.sp) }
+            ) { Text("✕", color = White40, fontSize = (d.textSm.value - 1f).sp) }
         }
 
         // ── Seasons ───────────────────────────────────────────────────────────
@@ -1070,7 +1070,7 @@ fun SeasonRow(
             Text(
                 "Season ${season.season}",
                 color = White80,
-                fontSize = d.textSm + 0.5.sp,
+                fontSize = (d.textSm.value + 0.5f).sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
@@ -1084,7 +1084,7 @@ fun SeasonRow(
                 Text(
                     "${season.doneCount}/${season.episodes.size}",
                     color = if (allDone) Success else White40,
-                    fontSize = d.textXxs + 1.sp,
+                    fontSize = (d.textXxs.value + 1f).sp,
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -1101,7 +1101,7 @@ fun SeasonRow(
                     .background(GlassSm)
                     .clickable { showDeleteDialog = true },
                 Alignment.Center,
-            ) { Text("✕", color = White40, fontSize = d.textXxs + 1.sp) }
+            ) { Text("✕", color = White40, fontSize = (d.textXxs.value + 1f).sp) }
         }
 
         AnimatedVisibility(visible = expanded) {
@@ -1211,7 +1211,7 @@ fun EpisodeRow(
                             Modifier
                                 .fillMaxWidth(animPct)
                                 .fillMaxHeight()
-                                .background(if (isError) Error else if (isPaused) White40 else Brand)
+                                .background(brush = if (isError) SolidColor(Error) else if (isPaused) SolidColor(White40) else SolidColor(Brand))
                         )
                     }
                 } else {
@@ -1222,7 +1222,7 @@ fun EpisodeRow(
                             if (item.sizeBytes > 0) append(formatSize(item.sizeBytes))
                         },
                         color = White40,
-                        fontSize = d.textXxs + 1.sp,
+                        fontSize = (d.textXxs.value + 1f).sp,
                     )
                 }
             }
@@ -1241,7 +1241,7 @@ fun EpisodeRow(
             Box(
                 Modifier.size(22.dp).clip(CircleShape).clickable { showDeleteDialog = true },
                 Alignment.Center,
-            ) { Text("✕", color = White20, fontSize = d.textXxs + 1.sp) }
+            ) { Text("✕", color = White20, fontSize = (d.textXxs.value + 1f).sp) }
         }
         HorizontalDivider(
             color = GlassBorder,
@@ -1270,7 +1270,7 @@ private fun EpActionButton(symbol: String, tint: Color, onClick: () -> Unit) {
             .background(tint.copy(.15f))
             .clickable(onClick = onClick),
         Alignment.Center,
-    ) { Text(symbol, color = tint, fontSize = d.textSm - 1.sp, fontWeight = FontWeight.Bold) }
+    ) { Text(symbol, color = tint, fontSize = (d.textSm.value - 1f).sp, fontWeight = FontWeight.Bold) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1356,7 +1356,7 @@ fun StatusPill(status: String) {
         if (status == DownloadStatus.DONE.name) {
             Box(Modifier.size(d.spaceXs).clip(CircleShape).background(Success))
         }
-        Text(label, color = color, fontSize = d.textXxs + 1.sp, fontWeight = FontWeight.SemiBold)
+        Text(label, color = color, fontSize = (d.textXxs.value + 1f).sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -1370,7 +1370,7 @@ fun QualityChip(quality: String) {
             .background(GlassMd)
             .padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)
     ) {
-        Text(quality, color = White40, fontSize = d.textXxs + 1.sp, fontWeight = FontWeight.Bold)
+        Text(quality, color = White40, fontSize = (d.textXxs.value + 1f).sp, fontWeight = FontWeight.Bold)
     }
 }
 
