@@ -137,6 +137,7 @@ class DetailViewModel @Inject constructor(
         // Download sheet state
         val showDownloadSheet: Boolean = false,
         val downloadQualities: List<QualityTrack> = emptyList(),
+        val alreadyDownloadedQualities: Set<String> = emptySet(),
         val isResolvingQualities: Boolean = false,
         val downloadEnqueued: Boolean = false,
         /**
@@ -168,6 +169,12 @@ class DetailViewModel @Inject constructor(
         val showDownloadCapSheet: Boolean = false,
         /** True when a free user tapped a quality above their tier's resolution cap. */
         val showResolutionLockSheet: Boolean = false,
+        /**
+         * Set of keys ("tmdbId_season_episode" or "tmdbId_0_0" for movies)
+         * that already have a non-ERROR download. Used to show IconDownloaded
+         * instead of IconDownloadCloud on the episode/movie download button.
+         */
+        val downloadedKeys: Set<String> = emptySet(),
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -203,6 +210,20 @@ class DetailViewModel @Inject constructor(
 
     private fun qualityKey(tmdbId: Int, season: Int = 0, episode: Int = 0) =
         "${tmdbId}_${season}_${episode}"
+
+    /** Observe all non-ERROR downloads and push their keys into UiState so the
+     *  episode/movie download button can show IconDownloaded in real time. */
+    fun observeDownloads() {
+        viewModelScope.launch {
+            downloadDao.getAll().collect { items ->
+                val keys = items
+                    .filter { it.status != DownloadStatus.ERROR.name }
+                    .map { "${it.tmdbId}_${it.season}_${it.episode}" }
+                    .toSet()
+                _ui.update { it.copy(downloadedKeys = keys) }
+            }
+        }
+    }
 
     fun load(tmdbId: Int, mediaType: MediaType) {
         viewModelScope.launch {
@@ -345,6 +366,7 @@ class DetailViewModel @Inject constructor(
             it.copy(
                 showDownloadSheet           = true,
                 downloadQualities           = emptyList(),
+                alreadyDownloadedQualities  = emptySet(),
                 isResolvingQualities        = false,
                 pendingQualityLabels        = emptySet(),
                 downloadEnqueued            = false,
@@ -354,6 +376,13 @@ class DetailViewModel @Inject constructor(
                 maxDownloadResolutionHeight = premiumGate.maxDownloadResolutionHeight()
                     .let { h -> if (h <= 0) Int.MAX_VALUE else h },
             )
+        }
+
+        // Load already-downloaded qualities for this content in background
+        viewModelScope.launch {
+            val downloaded = downloadRepo.getDownloadedQualities(tmdbId, season, episode)
+            val qualityLabels = downloaded.map { it.quality }.toSet()
+            _ui.update { it.copy(alreadyDownloadedQualities = qualityLabels) }
         }
 
         val key = qualityKey(tmdbId, season, episode)
@@ -367,8 +396,6 @@ class DetailViewModel @Inject constructor(
         }
 
         // POST /download — returns all deduplicated per-resolution links in one shot.
-        // Faster than the old SSE approach since the backend returns once all
-        // download providers have resolved (no long-lived connection needed).
         viewModelScope.launch {
             try {
                 val detail = _ui.value.detail
@@ -380,8 +407,8 @@ class DetailViewModel @Inject constructor(
                     title     = detail?.title ?: "",
                     season    = season,
                     episode   = episode,
-                    imdbId    = detail?.imdbId,      // enables VegaMovies provider
-                    year      = releaseYear,          // improves all providers
+                    imdbId    = detail?.imdbId,
+                    year      = releaseYear,
                 )
                 if (tracks.isNotEmpty()) {
                     val normalized = normalizeQualities(tracks, _ui.value.detail?.runtime)
@@ -532,7 +559,10 @@ fun DetailScreen(
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
 
-    LaunchedEffect(tmdbId) { vm.load(tmdbId, mediaType) }
+    LaunchedEffect(tmdbId) {
+        vm.load(tmdbId, mediaType)
+        vm.observeDownloads()
+    }
 
     fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
         val d = ui.detail ?: return
@@ -589,6 +619,7 @@ fun DetailScreen(
                 onDownloadEpisode = { s, e, name ->
                     vm.openDownloadSheet(tmdbId, mediaType, s, e, name)
                 },
+                downloadedKeys = ui.downloadedKeys,
             )
         }
 
@@ -609,6 +640,7 @@ fun DetailScreen(
                 isLoading          = ui.isResolvingQualities,
                 enqueued           = ui.downloadEnqueued,
                 maxResolutionHeight = ui.maxDownloadResolutionHeight,
+                alreadyDownloadedQualities = ui.alreadyDownloadedQualities,
                 onDismiss          = { vm.dismissDownloadSheet() },
                 onSelectQuality    = { track -> vm.enqueueDownload(ctx, track) },
                 onLockedQualityTap = { vm.openResolutionLockSheet() },
@@ -659,6 +691,11 @@ fun DownloadQualitySheet(
      * each one quietly disappears or turns into a real row as it's found.
      */
     pendingLabels: Set<String> = emptySet(),
+    /**
+     * Quality labels already downloaded for this content.
+     * These are shown with a "Downloaded" badge and cannot be re-downloaded.
+     */
+    alreadyDownloadedQualities: Set<String> = emptySet(),
 ) {
     val d = LocalDimensions.current
     // Scrim
@@ -767,19 +804,26 @@ fun DownloadQualitySheet(
                     qualities.forEachIndexed { index, track ->
                         // Resolution lock is driven ONLY by config.json via PremiumGate.
                         // The app has zero authority here — it just reads maxResolutionHeight.
-                        val isLocked = trackHeightPx(track.label) > maxResolutionHeight
+                        val isLocked      = trackHeightPx(track.label) > maxResolutionHeight
+                        val isDownloaded  = alreadyDownloadedQualities.contains(track.label)
 
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(d.radiusLg - d.spaceXs))
-                                .background(if (isLocked) GlassSm else BgRaised)
+                                .background(
+                                    when {
+                                        isDownloaded -> Success.copy(.08f)
+                                        isLocked     -> GlassSm
+                                        else         -> BgRaised
+                                    }
+                                )
                                 .border(
                                     d.borderThin,
-                                    GlassBorderMd,
+                                    if (isDownloaded) Success.copy(.25f) else GlassBorderMd,
                                     RoundedCornerShape(d.radiusLg - d.spaceXs),
                                 )
-                                .clickable {
+                                .clickable(enabled = !isDownloaded) {
                                     if (isLocked) onLockedQualityTap() else onSelectQuality(track)
                                 }
                                 .padding(horizontal = d.spaceLg, vertical = d.spaceLg),
@@ -789,14 +833,38 @@ fun DownloadQualitySheet(
                             // Exact resolution label from the backend — no rewriting
                             Text(
                                 track.label,
-                                color = if (isLocked) White40 else White,
+                                color = when {
+                                    isDownloaded -> Success.copy(.8f)
+                                    isLocked     -> White40
+                                    else         -> White
+                                },
                                 fontWeight = FontWeight.Bold,
                                 fontSize = d.textLg,
                                 modifier = Modifier.weight(1f),
                             )
 
-                            // Right side: file size OR premium lock badge
+                            // Right side: Downloaded badge, file size OR premium lock badge
                             when {
+                                isDownloaded -> {
+                                    Row(
+                                        Modifier
+                                            .clip(RoundedCornerShape(d.spaceXs))
+                                            .background(Success.copy(.15f))
+                                            .border(d.borderThin, Success.copy(.35f), RoundedCornerShape(d.spaceXs))
+                                            .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
+                                    ) {
+                                        Text("✓", color = Success, fontSize = d.textXxs, fontWeight = FontWeight.ExtraBold)
+                                        Text(
+                                            "Downloaded",
+                                            color = Success,
+                                            fontSize = d.textXxs,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 0.3.sp,
+                                        )
+                                    }
+                                }
                                 isLocked -> {
                                     Row(
                                         Modifier
@@ -828,9 +896,17 @@ fun DownloadQualitySheet(
                             }
 
                             Icon(
-                                if (isLocked) IconLock else IconDownloadCloud,
+                                when {
+                                    isDownloaded -> IconCheckCircle
+                                    isLocked     -> IconLock
+                                    else         -> IconDownloadCloud
+                                },
                                 null,
-                                tint = if (isLocked) White40 else White60,
+                                tint = when {
+                                    isDownloaded -> Success.copy(.7f)
+                                    isLocked     -> White40
+                                    else         -> White60
+                                },
                                 modifier = Modifier.size(d.iconMd),
                             )
                         }
@@ -1049,6 +1125,7 @@ private fun DetailContent(
     onSimilarClick: (Int, MediaType) -> Unit,
     onDownloadMovie: () -> Unit,
     onDownloadEpisode: (Int, Int, String) -> Unit,
+    downloadedKeys: Set<String> = emptySet(),
 ) {
     val d = LocalDimensions.current
     val detail  = ui.detail!!
@@ -1122,14 +1199,21 @@ private fun DetailContent(
                         modifier = Modifier.weight(1f),
                         icon     = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconMd)) },
                     )
-                    // ── Download button (movies only, like MovieBox) ────────
+                    // ── Download button (movies only) ──────────────────────
+                    val movieDownloaded = "${detail.tmdbId}_0_0" in downloadedKeys
                     OutlinedButton(
-                        onClick  = onDownloadMovie,
+                        onClick  = if (movieDownloaded) ({}) else onDownloadMovie,
                         shape    = RoundedCornerShape(d.radiusPill),
-                        border   = BorderStroke(d.borderThin, GlassBorderMd),
+                        border   = BorderStroke(d.borderThin, if (movieDownloaded) Color(0xFF30D158).copy(.5f) else GlassBorderMd),
                         modifier = Modifier.height(d.buttonHeightMd),
+                        enabled  = !movieDownloaded,
                     ) {
-                        Icon(IconDownloadCloud, null, tint = White80, modifier = Modifier.size(d.iconMd - 2.dp))
+                        Icon(
+                            if (movieDownloaded) IconDownloaded else IconDownloadCloud,
+                            contentDescription = if (movieDownloaded) "Offline" else "Download",
+                            tint = if (movieDownloaded) Color(0xFF30D158) else White80,
+                            modifier = Modifier.size(d.iconMd - 2.dp),
+                        )
                     }
                 }
                 // Watchlist button
@@ -1223,10 +1307,12 @@ private fun DetailContent(
                 item { Box(Modifier.fillMaxWidth().height(d.spaceXxl * 3.75f), Alignment.Center) { CinematicSpinner() } }
             } else {
                 items(ui.episodes, key = { it.id }) { ep ->
+                    val epKey = "${detail.tmdbId}_${ep.seasonNumber}_${ep.episodeNumber}"
                     EpisodeRow(
-                        episode   = ep,
-                        onClick   = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
-                        onDownload = { onDownloadEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        episode      = ep,
+                        onClick      = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        onDownload   = { onDownloadEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        isDownloaded = epKey in downloadedKeys,
                     )
                 }
             }
@@ -1276,6 +1362,7 @@ fun EpisodeRow(
     episode: Episode,
     onClick: () -> Unit,
     onDownload: () -> Unit = {},
+    isDownloaded: Boolean = false,
 ) {
     val d = LocalDimensions.current
     Row(
@@ -1286,8 +1373,13 @@ fun EpisodeRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
+        // Thumbnail — taller so episode stills are clearly visible
         Box(
-            Modifier.width(d.avatarLg + d.spaceXxl - d.spaceXs).height(d.continueCardThumbHeight - d.spaceMd + d.spaceXxs).clip(RoundedCornerShape(d.radiusMd)).background(BgRaised),
+            Modifier
+                .width(d.avatarLg + d.spaceXxl)
+                .height(d.continueCardThumbHeight)
+                .clip(RoundedCornerShape(d.radiusMd))
+                .background(BgRaised),
         ) {
             if (episode.stillPath != null) {
                 AsyncImage(
@@ -1296,9 +1388,33 @@ fun EpisodeRow(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
+            } else {
+                // Fallback gradient when no still is available
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(listOf(BgRaised, BgCard))
+                    ),
+                    Alignment.Center,
+                ) {
+                    Icon(IconMovieSlate, null, tint = White20, modifier = Modifier.size(d.iconLg))
+                }
             }
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
-                Icon(IconPlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(d.iconLg))
+            // Play overlay
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(.28f)), Alignment.Center) {
+                Icon(IconPlayCircle, null, tint = White.copy(.85f), modifier = Modifier.size(d.iconLg))
+            }
+            // "Offline" badge when already downloaded
+            if (isDownloaded) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(d.spaceXxs + 1.dp)
+                        .clip(RoundedCornerShape(d.radiusSm))
+                        .background(Color(0xFF30D158).copy(.9f))
+                        .padding(horizontal = d.spaceXs, vertical = d.spaceXxs),
+                ) {
+                    Text("Offline", color = Color.White, fontSize = (d.textXxs.value - 0.5f).sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
         Column(Modifier.weight(1f)) {
@@ -1310,9 +1426,18 @@ fun EpisodeRow(
                 Text("${it}m", color = White40, fontSize = d.textXxs)
             }
         }
-        // Download icon for each episode
-        IconButton(onClick = onDownload, modifier = Modifier.size(d.buttonHeightSm)) {
-            Icon(IconDownloadCloud, null, tint = White60, modifier = Modifier.size(d.iconMd - 2.dp))
+        // Download icon: shows IconDownloaded (green) if owned, otherwise normal cloud icon
+        IconButton(
+            onClick = if (isDownloaded) ({}) else onDownload,
+            modifier = Modifier.size(d.buttonHeightSm),
+            enabled = !isDownloaded,
+        ) {
+            Icon(
+                if (isDownloaded) IconDownloaded else IconDownloadCloud,
+                contentDescription = if (isDownloaded) "Offline" else "Download",
+                tint = if (isDownloaded) Color(0xFF30D158) else White60,
+                modifier = Modifier.size(d.iconMd - 2.dp),
+            )
         }
         Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconMd))
     }

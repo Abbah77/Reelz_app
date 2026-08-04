@@ -123,6 +123,7 @@ class PlayerViewModel @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
     private val streamRepo: BackendStreamRepository,
     private val repo: MediaRepository,
+    private val downloadRepo: com.axio.reelz.data.repository.DownloadRepository,
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val adEngine: AdEngine,
     private val premiumGate: PremiumGate,
@@ -154,6 +155,14 @@ class PlayerViewModel @Inject constructor(
     private var trackSelector: DefaultTrackSelector? = null
     private var isOnMeteredConnection = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * All downloaded qualities for the current content (set during offline init).
+     * The player quality drawer lists ONLY these when isOfflinePlayback == true.
+     */
+    private var offlineDownloads: List<com.axio.reelz.data.model.DownloadItem> = emptyList()
+    /** Quality the user last selected for this title — "" means auto/highest. */
+    private var preferredOfflineQuality: String = \"\"
 
     // ── Bug 3 fix: track whether the Activity was in PiP right before onStop ─
     // The Activity calls wasInPipBeforeStop() inside onStop to decide whether
@@ -319,6 +328,7 @@ class PlayerViewModel @Inject constructor(
         downloadId: String? = null,
         imdbId: String? = null,
         year: Int? = null,
+        preferredQuality: String? = null,
     ) {
         currentTmdbId     = tmdbId
         currentType       = mediaType
@@ -329,6 +339,7 @@ class PlayerViewModel @Inject constructor(
         currentYear       = year
         currentPoster     = posterPath
         currentDownloadId = downloadId
+        preferredOfflineQuality = preferredQuality ?: ""
 
         silentRetryCount = 0
         fallbackIndex    = 0
@@ -349,11 +360,52 @@ class PlayerViewModel @Inject constructor(
         buildPlayer(context)
 
         viewModelScope.launch {
-            if (isOffline && downloadId != null) loadDownloadedSubtitles(tmdbId, season, episode)
+            if (isOffline && downloadId != null) {
+                loadDownloadedSubtitles(tmdbId, season, episode)
+
+                // ── Multi-quality offline: load all downloaded resolutions for this content ──
+                val allDownloads = downloadRepo.getDownloadedQualities(tmdbId, season, episode)
+                offlineDownloads = allDownloads
+
+                // Build quality list for the player quality drawer
+                val offlineQualities = allDownloads
+                    .filter { it.status == com.axio.reelz.data.model.DownloadStatus.DONE.name }
+                    .sortedByDescending { it.sizeBytes }
+                    .map { QualityTrack(it.quality, it.localPlaylistPath.ifBlank { "file://${it.filePath}" }) }
+
+                // Determine which quality to start with:
+                // 1. preferredQuality intent extra (user's remembered choice)
+                // 2. lastSelectedQuality from DB (remembered from previous play)
+                // 3. Highest available
+                val rememberedQuality = preferredOfflineQuality.ifBlank {
+                    allDownloads.firstOrNull()?.lastSelectedQuality ?: ""
+                }
+                val startQuality = if (rememberedQuality.isNotBlank() &&
+                    offlineQualities.any { it.label == rememberedQuality }
+                ) rememberedQuality
+                else offlineQualities.firstOrNull()?.label ?: ""
+
+                _ui.update { it.copy(
+                    availableQualities = offlineQualities,
+                    selectedQuality    = startQuality,
+                )}
+            }
 
             if (streamUrl != null) {
+                // Honour the preferred quality for offline playback when a pre-built URL is passed
+                val resolvedUrl = if (isOffline && offlineDownloads.isNotEmpty()) {
+                    val preferred = _ui.value.selectedQuality
+                    val match = offlineDownloads.firstOrNull { it.quality == preferred }
+                        ?: offlineDownloads.firstOrNull { it.status == com.axio.reelz.data.model.DownloadStatus.DONE.name }
+                    when {
+                        match?.localPlaylistPath?.isNotBlank() == true -> "file://${match.localPlaylistPath}"
+                        match?.filePath?.isNotBlank() == true          -> "file://${match.filePath}"
+                        else                                           -> streamUrl
+                    }
+                } else streamUrl
+
                 val result = StreamResult(
-                    url = streamUrl, isHls = streamIsHls,
+                    url = resolvedUrl, isHls = streamIsHls,
                     headers = emptyMap(), referer = streamReferer, origin = streamOrigin,
                     sourceName = "prefetched",
                 )
@@ -765,6 +817,47 @@ class PlayerViewModel @Inject constructor(
     @OptIn(UnstableApi::class)
     fun setQuality(label: String) {
         _ui.update { it.copy(selectedQuality = label) }
+
+        // ── Offline: switch to the corresponding downloaded file ──────────────
+        if (_ui.value.isOfflinePlayback && offlineDownloads.isNotEmpty()) {
+            preferredOfflineQuality = label
+            val match = offlineDownloads.firstOrNull {
+                it.quality == label && it.status == com.axio.reelz.data.model.DownloadStatus.DONE.name
+            } ?: offlineDownloads.firstOrNull { it.status == com.axio.reelz.data.model.DownloadStatus.DONE.name }
+            if (match != null) {
+                val url = when {
+                    match.localPlaylistPath.isNotBlank() -> "file://${match.localPlaylistPath}"
+                    match.filePath.isNotBlank()          -> "file://${match.filePath}"
+                    else                                 -> return
+                }
+                val isHls = match.localPlaylistPath.isNotBlank()
+                val savedPos = exoPlayer?.currentPosition ?: 0L
+                val result = StreamResult(
+                    url = url, isHls = isHls,
+                    headers = emptyMap(), referer = "", origin = "",
+                    sourceName = "offline-${match.quality}",
+                )
+                lastResult = result
+                viewModelScope.launch {
+                    playStream(result)
+                    if (savedPos > 0) exoPlayer?.seekTo(savedPos)
+                }
+                // Persist last selected quality to DB
+                viewModelScope.launch {
+                    downloadRepo.updateWatchProgress(
+                        tmdbId              = currentTmdbId,
+                        season              = currentSeason,
+                        episode             = currentEpisode,
+                        progressMs          = exoPlayer?.currentPosition ?: 0L,
+                        durationMs          = exoPlayer?.duration?.coerceAtLeast(0L) ?: 0L,
+                        lastSelectedQuality = label,
+                    )
+                }
+            }
+            return
+        }
+
+        // ── Online: HLS adaptive track selector ──────────────────────────────
         val ts = trackSelector ?: return
         val maxHeight = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
         if (label == "Auto") {
@@ -886,6 +979,28 @@ class PlayerViewModel @Inject constructor(
     fun release(context: Context? = null) {
         errorHandlerJob?.cancel()
         stopNetworkMonitor(context)
+
+        // ── Save watch progress for offline downloads before releasing ─────────
+        val p = exoPlayer
+        if (p != null && _ui.value.isOfflinePlayback && currentTmdbId > 0) {
+            val posMs = p.currentPosition.coerceAtLeast(0L)
+            val durMs = p.duration.coerceAtLeast(0L)
+            val selQ  = _ui.value.selectedQuality
+            // Use runBlocking-lite: ViewModel scope may be cancelled, so launch with SupervisorJob
+            kotlinx.coroutines.runBlocking {
+                try {
+                    downloadRepo.updateWatchProgress(
+                        tmdbId              = currentTmdbId,
+                        season              = currentSeason,
+                        episode             = currentEpisode,
+                        progressMs          = posMs,
+                        durationMs          = durMs,
+                        lastSelectedQuality = selQ,
+                    )
+                } catch (_: Exception) {}
+            }
+        }
+
         exoPlayer?.stop(); exoPlayer?.clearMediaItems(); exoPlayer?.release()
         exoPlayer = null
     }

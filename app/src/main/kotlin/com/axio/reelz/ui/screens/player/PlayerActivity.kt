@@ -381,6 +381,7 @@ class PlayerActivity : ComponentActivity() {
         val streamReferer = intent.getStringExtra("streamReferer") ?: ""
         val streamOrigin  = intent.getStringExtra("streamOrigin") ?: ""
         val downloadId    = intent.getStringExtra("downloadId")
+        val preferredQuality = intent.getStringExtra("preferredQuality")
 
         setContent {
             com.axio.reelz.ui.theme.ProvideDimensions {
@@ -395,6 +396,7 @@ class PlayerActivity : ComponentActivity() {
                         streamUrl     = streamUrl, streamIsHls = streamIsHls,
                         streamReferer = streamReferer, streamOrigin = streamOrigin,
                         downloadId    = downloadId,
+                        preferredQuality = preferredQuality,
                     )
                 }
             }
@@ -532,6 +534,7 @@ fun PlayerScreen(
     streamReferer: String = "",
     streamOrigin: String = "",
     downloadId: String? = null,
+    preferredQuality: String? = null,
 ) {
     val d       = LocalDimensions.current
     val ctx     = LocalContext.current
@@ -542,7 +545,8 @@ fun PlayerScreen(
 
     LaunchedEffect(tmdbId, season, episode) {
         vm.init(ctx, tmdbId, mediaType, season, episode, title, poster,
-            streamUrl, streamIsHls, streamReferer, streamOrigin, downloadId)
+            streamUrl, streamIsHls, streamReferer, streamOrigin, downloadId,
+            preferredQuality = preferredQuality)
     }
 
     // ── Bug 1 fix: keep polling position even when in PiP mode ───────────────
