@@ -42,9 +42,19 @@ enum class ConfigReadiness {
     READY,     // Config is in memory and ready
 }
 
+/** Result of a single CDN attempt — used to avoid continue inside inline lambdas. */
+private sealed class CdnResult {
+    /** Fetched, parsed, validated — ready to commit. */
+    data class Ok(val json: String, val parsed: RemoteConfig) : CdnResult()
+    /** This CDN failed; try the next one. */
+    data class Skip(val reason: String) : CdnResult()
+    /** Schema too new for this build — stop trying all CDNs immediately. */
+    data class SchemaMismatch(val server: Int, val supported: Int) : CdnResult()
+}
+
 @Singleton
 class RemoteConfigRepository @Inject constructor(
-    private val cacheDao: RemoteConfigCacheDao,  // Room — replaces DataStore
+    private val cacheDao: RemoteConfigCacheDao,  // Room — single source of truth
     private val gson: Gson,
 ) {
     private val tag = "RemoteConfig"
@@ -95,51 +105,36 @@ class RemoteConfigRepository @Inject constructor(
         val cdnErrors = mutableMapOf<Int, String>()
 
         for ((index, url) in CDN_URLS.withIndex()) {
-            try {
-                Log.d(tag, "Trying CDN[$index]: $url")
-                val (json, status) = fetchRaw(url)
+            val result = tryCdn(index, url)
 
-                if (json == null) {
-                    cdnErrors[index] = "HTTP $status"
-                    continue
+            when (result) {
+                is CdnResult.Skip -> {
+                    cdnErrors[index] = result.reason
+                    // Try next CDN
                 }
-
-                val schemaVersion = extractSchemaVersion(json)
-                if (schemaVersion > SUPPORTED_SCHEMA_VERSION) {
-                    cdnErrors[index] = "Unsupported schema v$schemaVersion"
-                    _syncState.value = SyncState.SchemaMismatch(schemaVersion, SUPPORTED_SCHEMA_VERSION)
+                is CdnResult.SchemaMismatch -> {
+                    cdnErrors[index] = "Unsupported schema v${result.server}"
+                    _syncState.value = SyncState.SchemaMismatch(result.server, result.supported)
                     return
                 }
+                is CdnResult.Ok -> {
+                    // Version guard — don't overwrite a newer cache with a stale CDN copy
+                    val cachedVersion = cacheDao.get()?.configVersion ?: 0
+                    val fetchedVersion = result.parsed.meta.configVersion
 
-                val parsed = parseConfig(json) ?: run {
-                    cdnErrors[index] = "Parse failed"; continue
-                }
+                    if (fetchedVersion <= cachedVersion && _config.value != null) {
+                        Log.d(tag, "Fetched v$fetchedVersion not newer than cached v$cachedVersion — no update")
+                        _syncState.value = SyncState.Success
+                        return
+                    }
 
-                val validationError = validateConfig(parsed)
-                if (validationError != null) {
-                    cdnErrors[index] = "Validation: $validationError"; continue
-                }
-
-                // Version guard — don't overwrite a newer cache with a stale CDN copy
-                val cachedVersion = cacheDao.get()?.configVersion ?: 0
-                val fetchedVersion = parsed.meta.configVersion
-
-                if (fetchedVersion <= cachedVersion && _config.value != null) {
-                    Log.d(tag, "Fetched v$fetchedVersion not newer than cached v$cachedVersion — no update")
+                    _config.value    = result.parsed
+                    _readiness.value = ConfigReadiness.READY
+                    persistToCache(result.json, result.parsed.meta.configVersion)
                     _syncState.value = SyncState.Success
+                    Log.d(tag, "Config synced from CDN[$index] (v$fetchedVersion, was v$cachedVersion)")
                     return
                 }
-
-                _config.value  = parsed
-                _readiness.value = ConfigReadiness.READY
-                persistToCache(json, parsed.meta.configVersion)
-                _syncState.value = SyncState.Success
-                Log.d(tag, "Config synced from CDN[$index] (v$fetchedVersion, was v$cachedVersion)")
-                return
-
-            } catch (e: Exception) {
-                cdnErrors[index] = "Exception: ${e.javaClass.simpleName}: ${e.message}"
-                Log.w(tag, "CDN[$index] exception for $url — ${e.message}")
             }
         }
 
@@ -148,19 +143,57 @@ class RemoteConfigRepository @Inject constructor(
         _syncState.value = SyncState.Error("Unable to reach server. Please check your connection.", diagnostics)
     }
 
+    /**
+     * Attempt to fetch and validate config from a single CDN URL.
+     * Returns [CdnResult.Ok] on success, [CdnResult.Skip] on recoverable failure,
+     * [CdnResult.SchemaMismatch] when the server schema is too new for this build.
+     *
+     * Extracted from the doSync loop to avoid using `continue` inside an inline
+     * lambda — `continue` in inline lambdas is experimental in Kotlin 2.x.
+     */
+    private suspend fun tryCdn(index: Int, url: String): CdnResult {
+        return try {
+            Log.d(tag, "Trying CDN[$index]: $url")
+            val (json, status) = fetchRaw(url)
+
+            if (json == null) {
+                return CdnResult.Skip("HTTP $status")
+            }
+
+            val schemaVersion = extractSchemaVersion(json)
+            if (schemaVersion > SUPPORTED_SCHEMA_VERSION) {
+                return CdnResult.SchemaMismatch(schemaVersion, SUPPORTED_SCHEMA_VERSION)
+            }
+
+            val parsed = parseConfig(json)
+                ?: return CdnResult.Skip("Parse failed")
+
+            val validationError = validateConfig(parsed)
+            if (validationError != null) {
+                return CdnResult.Skip("Validation: $validationError")
+            }
+
+            CdnResult.Ok(json, parsed)
+
+        } catch (e: Exception) {
+            Log.w(tag, "CDN[$index] exception for $url — ${e.message}")
+            CdnResult.Skip("Exception: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
     // ── Convenience accessors ─────────────────────────────────────────────────
 
     fun activeTmdbKey(): String? =
         _config.value?.tmdb?.keys?.filter { it.enabled }?.maxByOrNull { it.weight }?.key
 
-    fun current(): RemoteConfig       = _config.value ?: RemoteConfig()
-    fun featureFlags(): FeatureFlags  = _config.value?.featureFlags ?: FeatureFlags()
-    fun meta(): MetaConfig            = _config.value?.meta ?: MetaConfig()
-    fun shortsConfig(): ShortsConfig  = _config.value?.shorts ?: ShortsConfig()
-    fun adsConfig(): AdsConfig        = _config.value?.ads ?: AdsConfig()
-    fun tiersConfig(): TiersConfig    = _config.value?.tiers ?: TiersConfig()
-    fun premiumConfig(): PremiumConfig= _config.value?.premium ?: PremiumConfig()
-    fun backendConfig(): BackendConfig= _config.value?.backend ?: BackendConfig()
+    fun current(): RemoteConfig        = _config.value ?: RemoteConfig()
+    fun featureFlags(): FeatureFlags   = _config.value?.featureFlags ?: FeatureFlags()
+    fun meta(): MetaConfig             = _config.value?.meta ?: MetaConfig()
+    fun shortsConfig(): ShortsConfig   = _config.value?.shorts ?: ShortsConfig()
+    fun adsConfig(): AdsConfig         = _config.value?.ads ?: AdsConfig()
+    fun tiersConfig(): TiersConfig     = _config.value?.tiers ?: TiersConfig()
+    fun premiumConfig(): PremiumConfig = _config.value?.premium ?: PremiumConfig()
+    fun backendConfig(): BackendConfig = _config.value?.backend ?: BackendConfig()
 
     fun areAdsEnabled(isPremiumUser: Boolean = false): Boolean =
         adsConfig().enabled && featureFlags().adsEnabled && !isPremiumUser
