@@ -77,6 +77,10 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
             // so this is a safe no-op until both are configured.
             adEngine.initialize(this@ReelzApp)
 
+            // Warm up ad frequency counters from DataStore so caps survive
+            // cold starts. Must come after initialize() so the engine is ready.
+            adEngine.loadPersistedCounters()
+
             // Load any previously cached premium session — instant, local only.
             // PremiumGate is ready with the correct state before any screen renders.
             userSessionRepository.loadLocalSession()

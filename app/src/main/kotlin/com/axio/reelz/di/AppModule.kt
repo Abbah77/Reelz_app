@@ -37,12 +37,13 @@ import javax.inject.Singleton
 object AppModule {
 
     // ── Remote Config ─────────────────────────────────────────────────────────
+    // RemoteConfigRepository uses RemoteConfigCacheDao (Room) — no DataStore.
 
     @Provides @Singleton
     fun provideRemoteConfigRepository(
-        @ApplicationContext ctx: Context,
+        cacheDao: RemoteConfigCacheDao,
         gson: Gson,
-    ): RemoteConfigRepository = RemoteConfigRepository(ctx, gson)
+    ): RemoteConfigRepository = RemoteConfigRepository(cacheDao, gson)
 
     @Provides @Singleton
     fun providePremiumGate(remoteConfig: RemoteConfigRepository): PremiumGate =
@@ -90,23 +91,37 @@ object AppModule {
     fun provideTmdbApi(retrofit: Retrofit): TmdbApi = retrofit.create(TmdbApi::class.java)
 
     // ── Database ──────────────────────────────────────────────────────────────
+    //
+    // WAL (Write-Ahead Logging) is enabled for production performance:
+    //   • Readers never block writers — concurrent reads during a download
+    //     update don't stall the UI thread.
+    //   • Writers never block readers — smooth scrolling even with active
+    //     history/watchlist writes in the background.
+    //   • WAL is the SQLite default recommendation for apps with > 1 writer
+    //     or mixed read/write workloads. Android Room supports it natively.
 
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): ReelzDatabase =
         Room.databaseBuilder(ctx, ReelzDatabase::class.java, "reelz.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+            .addMigrations(
+                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
+                MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+            )
+            .setJournalMode(androidx.room.RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .build()
 
-    @Provides fun provideWatchlistDao(db: ReelzDatabase)        = db.watchlistDao()
-    @Provides fun provideWatchHistoryDao(db: ReelzDatabase)     = db.watchHistoryDao()
-    @Provides fun provideLikedDao(db: ReelzDatabase)            = db.likedDao()
-    @Provides fun provideSavedVideoDao(db: ReelzDatabase)       = db.savedVideoDao()
-    @Provides fun provideCachedMediaDao(db: ReelzDatabase)      = db.cachedMediaDao()
-    @Provides fun provideDownloadDao(db: ReelzDatabase)         = db.downloadDao()
-    @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase) = db.downloadSubtitleDao()
-    @Provides fun provideTransferDao(db: ReelzDatabase)         = db.transferDao()
-    @Provides fun provideUserSessionDao(db: ReelzDatabase)      = db.userSessionDao()
-    @Provides fun provideRecentSearchDao(db: ReelzDatabase)     = db.recentSearchDao()
+    @Provides fun provideWatchlistDao(db: ReelzDatabase)          = db.watchlistDao()
+    @Provides fun provideWatchHistoryDao(db: ReelzDatabase)       = db.watchHistoryDao()
+    @Provides fun provideLikedDao(db: ReelzDatabase)              = db.likedDao()
+    @Provides fun provideSavedVideoDao(db: ReelzDatabase)         = db.savedVideoDao()
+    @Provides fun provideCachedMediaDao(db: ReelzDatabase)        = db.cachedMediaDao()
+    @Provides fun provideDownloadDao(db: ReelzDatabase)           = db.downloadDao()
+    @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase)   = db.downloadSubtitleDao()
+    @Provides fun provideTransferDao(db: ReelzDatabase)           = db.transferDao()
+    @Provides fun provideUserSessionDao(db: ReelzDatabase)        = db.userSessionDao()
+    @Provides fun provideRecentSearchDao(db: ReelzDatabase)       = db.recentSearchDao()
+    @Provides fun provideRemoteConfigCacheDao(db: ReelzDatabase)  = db.remoteConfigCacheDao()
 
     // ── Repositories ──────────────────────────────────────────────────────────
 
@@ -119,10 +134,6 @@ object AppModule {
         likedDao: LikedDao,
     ) = MediaRepository(api, cachedMediaDao, watchlistDao, watchHistoryDao, likedDao)
 
-    // ── Backend stream engine (replaces entire scanner package + C++) ─────────
-    // The app now POSTs to the backend and receives stream URL + qualities +
-    // subtitles. No WebView, no C++, no source racing, no scan loop.
-
     @Provides @Singleton
     fun provideStreamUrlCache(): StreamUrlCache = StreamUrlCache()
 
@@ -133,12 +144,21 @@ object AppModule {
     ): BackendStreamRepository = BackendStreamRepository(remoteConfig, urlCache)
 
     // ── Premium session ───────────────────────────────────────────────────────
+    //
+    // UserSessionStore (DataStore "reelz_user_session") has been removed.
+    // Room (UserSessionDao / user_session table) is the single source of truth
+    // for the signed-in session. This eliminates the dual-write pattern and
+    // the DataStore file handle.
+    //
+    // BackendSessionSource and PaymentRepository now take UserSessionDao
+    // directly — they previously injected UserSessionStore only to call
+    // sessionStore.load(), which is now replaced by dao.get().
 
     @Provides @Singleton
     fun provideSessionSource(
         remoteConfig: RemoteConfigRepository,
-        store: UserSessionStore,
-    ): SessionSource = BackendSessionSource(remoteConfig, store)
+        sessionDao: UserSessionDao,           // Room — DataStore removed
+    ): SessionSource = BackendSessionSource(remoteConfig, sessionDao)
 
     @Provides @Singleton
     fun provideBackendAuthRepository(
@@ -147,16 +167,15 @@ object AppModule {
 
     @Provides @Singleton
     fun provideUserSessionRepository(
-        store: UserSessionStore,
         dao: UserSessionDao,
         sessionSource: SessionSource,
         backendAuth: BackendAuthRepository,
         premiumGate: PremiumGate,
-    ): UserSessionRepository = UserSessionRepository(store, dao, sessionSource, backendAuth, premiumGate)
+    ): UserSessionRepository = UserSessionRepository(dao, sessionSource, backendAuth, premiumGate)
 
     @Provides @Singleton
     fun providePaymentRepository(
         remoteConfig: RemoteConfigRepository,
-        store: UserSessionStore,
-    ): PaymentRepository = PaymentRepository(remoteConfig, store)
+        sessionDao: UserSessionDao,           // Room — DataStore removed
+    ): PaymentRepository = PaymentRepository(remoteConfig, sessionDao)
 }
