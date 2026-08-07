@@ -94,8 +94,21 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
         // Periodic background refresh every 6 hours.
         ConfigSyncWorker.schedule(this)
 
+        // Daily cache eviction — enforces the 10k row cap and removes old search items.
+        scheduleEviction()
+
         // ── Recover downloads stuck in QUEUED/DOWNLOADING state ──────────────
         recoverStuckDownloads()
+    }
+
+    private fun scheduleEviction() {
+        androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "reelz_eviction",
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            androidx.work.PeriodicWorkRequestBuilder<com.axio.reelz.workers.EvictionWorker>(
+                1, java.util.concurrent.TimeUnit.DAYS
+            ).build()
+        )
     }
 
     private fun recoverStuckDownloads() {
@@ -123,7 +136,7 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(256L * 1024 * 1024)
+                    .maxSizeBytes(350L * 1024 * 1024)  // 350MB — upgraded from 256MB
                     .build()
             }
             .okHttpClient {
@@ -132,6 +145,10 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
                     .readTimeout(15, TimeUnit.SECONDS)
                     .build()
             }
+            // TMDB's CDN sets short max-age headers; ignoring them means Coil
+            // uses our own 350MB disk cache TTL instead of re-downloading images
+            // on every session — significant bandwidth and latency saving.
+            .respectCacheHeaders(false)
             .diskCachePolicy(CachePolicy.ENABLED)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .crossfade(true)

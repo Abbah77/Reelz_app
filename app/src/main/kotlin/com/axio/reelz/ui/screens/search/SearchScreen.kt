@@ -97,6 +97,17 @@ class SearchViewModel @Inject constructor(
     /** Re-run a tapped recent-search chip — same path as typing it, so results/filters apply consistently. */
     fun searchRecent(query: String) = onQuery(query)
 
+    /**
+     * Called when the user taps a search result to open the detail screen.
+     * Saves a lightweight card to Room so the title can appear in the feed.
+     * The detail itself is cached in memory by MediaRepository.getDetailFast().
+     */
+    fun onResultTap(media: com.axio.reelz.data.model.Media) {
+        viewModelScope.launch {
+            repo.saveSearchOpenToCatalog(media)
+        }
+    }
+
     private fun recordSearch(query: String) {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return
@@ -281,7 +292,10 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                         items(ui.results, key = { it.tmdbId }) { m ->
                             MediaPosterCard(
                                 media   = m,
-                                onClick = { nav.navigate(com.axio.reelz.ui.Route.Detail.go(m.tmdbId, m.mediaType)) },
+                                onClick = {
+                                    vm.onResultTap(m)
+                                    nav.navigate(com.axio.reelz.ui.Route.Detail.go(m.tmdbId, m.mediaType))
+                                },
                                 modifier = Modifier.aspectRatio(0.65f),
                             )
                         }

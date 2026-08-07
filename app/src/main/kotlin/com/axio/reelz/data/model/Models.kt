@@ -224,7 +224,26 @@ data class CachedMedia(
     val popularity: Double,
     val genreIds: String = "[]",  // JSON list
     val mediaType: String,
+    val originalLanguage: String = "en",       // needed for Explore language filter
+    val voteCount: Int = 0,                     // needed for MetaChip
+    val section: String = "trending",           // which section this row belongs to
+    val sectionCachedAt: Long = 0L,             // when this section was last fetched
+    val source: String = "catalog",             // "catalog" or "search"
+    val lastAccessedAt: Long = System.currentTimeMillis(), // for LRU eviction
     val cachedAt: Long = System.currentTimeMillis(),
+)
+
+/**
+ * Per-section tap counts for personalized feed ordering.
+ * Scoring: score = (taps × 0.7) + (recency × 30)
+ * New users see DEFAULT_ORDER until they interact.
+ */
+@Entity(tableName = "section_weights")
+data class SectionWeight(
+    @PrimaryKey val sectionId: String,
+    val taps: Int = 0,
+    val lastTappedAt: Long = 0L,
+    val manualOrder: Int = 999,
 )
 
 @Entity(tableName = "downloads")

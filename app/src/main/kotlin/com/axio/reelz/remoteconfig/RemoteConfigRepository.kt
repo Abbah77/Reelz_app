@@ -56,6 +56,7 @@ private sealed class CdnResult {
 class RemoteConfigRepository @Inject constructor(
     private val cacheDao: RemoteConfigCacheDao,  // Room — single source of truth
     private val gson: Gson,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
 ) {
     private val tag = "RemoteConfig"
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -79,11 +80,17 @@ class RemoteConfigRepository @Inject constructor(
 
     /**
      * Called once from ReelzApp.onCreate().
-     * Reads Room only — never touches the network.
+     * Reads Room first, then falls back to bundled assets — never touches the network.
      */
     suspend fun loadLocalConfig() {
         val found = loadFromCache()
-        _readiness.value = if (found) ConfigReadiness.READY else ConfigReadiness.NO_CONFIG
+        if (found) {
+            _readiness.value = ConfigReadiness.READY
+        } else {
+            // Try bundled fallback asset so app works on first install without internet
+            val fallbackLoaded = loadBundledFallback()
+            _readiness.value = if (fallbackLoaded) ConfigReadiness.READY else ConfigReadiness.NO_CONFIG
+        }
     }
 
     fun syncInBackground() {
@@ -147,9 +154,6 @@ class RemoteConfigRepository @Inject constructor(
      * Attempt to fetch and validate config from a single CDN URL.
      * Returns [CdnResult.Ok] on success, [CdnResult.Skip] on recoverable failure,
      * [CdnResult.SchemaMismatch] when the server schema is too new for this build.
-     *
-     * Extracted from the doSync loop to avoid using `continue` inside an inline
-     * lambda — `continue` in inline lambdas is experimental in Kotlin 2.x.
      */
     private suspend fun tryCdn(index: Int, url: String): CdnResult {
         return try {
@@ -183,8 +187,26 @@ class RemoteConfigRepository @Inject constructor(
 
     // ── Convenience accessors ─────────────────────────────────────────────────
 
-    fun activeTmdbKey(): String? =
-        _config.value?.tmdb?.keys?.filter { it.enabled }?.maxByOrNull { it.weight }?.key
+    /**
+     * Weighted-random TMDB key rotation.
+     * Keys with higher weight get proportionally more traffic.
+     * All keys with equal weight get evenly distributed traffic.
+     * Disabling a key remotely (enabled=false) immediately removes it
+     * from rotation without an app update.
+     */
+    fun activeTmdbKey(): String? {
+        val keys = _config.value?.tmdb?.keys?.filter { it.enabled } ?: return null
+        if (keys.isEmpty()) return null
+        if (keys.size == 1) return keys[0].key
+        val total = keys.sumOf { it.weight }
+        if (total <= 0) return keys.random().key
+        var pick = (1..total).random()
+        for (key in keys) {
+            pick -= key.weight
+            if (pick <= 0) return key.key
+        }
+        return keys.last().key
+    }
 
     fun current(): RemoteConfig        = _config.value ?: RemoteConfig()
     fun featureFlags(): FeatureFlags   = _config.value?.featureFlags ?: FeatureFlags()
@@ -257,6 +279,31 @@ class RemoteConfigRepository @Inject constructor(
             true
         } catch (e: Exception) {
             Log.e(tag, "Failed to parse cached config: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Load bundled fallback_config.json from assets.
+     * Shipped with the APK — TMDB keys are blanked out but backend URLs are valid.
+     * The app is functional on first install even without internet.
+     * ConfigSyncWorker replaces it with the live config on first successful sync.
+     */
+    private fun loadBundledFallback(): Boolean {
+        return try {
+            val fallback = context.assets.open("fallback_config.json")
+                .bufferedReader().readText()
+            val parsed = safeGson.fromJson(fallback, RemoteConfig::class.java)
+            if (parsed != null) {
+                _config.value = parsed
+                Log.d(tag, "Loaded bundled fallback config — app functional without internet")
+                true
+            } else {
+                Log.e(tag, "Bundled fallback_config.json failed to parse")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "loadBundledFallback: ${e.message}")
             false
         }
     }

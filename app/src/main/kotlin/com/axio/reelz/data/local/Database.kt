@@ -77,11 +77,48 @@ interface SavedVideoDao {
 interface CachedMediaDao {
     @Query("SELECT * FROM cached_media WHERE mediaType = :type ORDER BY popularity DESC LIMIT :limit")
     suspend fun getByType(type: String, limit: Int = 100): List<CachedMedia>
+
+    @Query("SELECT * FROM cached_media WHERE section = :section ORDER BY popularity DESC LIMIT :limit")
+    suspend fun getBySection(section: String, limit: Int = 20): List<CachedMedia>
+
     @Query("SELECT * FROM cached_media WHERE tmdbId = :id LIMIT 1")
     suspend fun get(id: Int): CachedMedia?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(items: List<CachedMedia>)
+
     @Query("DELETE FROM cached_media WHERE cachedAt < :before") suspend fun evict(before: Long)
+
     @Query("SELECT COUNT(*) FROM cached_media") suspend fun count(): Int
+
+    @Query("SELECT COUNT(*) FROM cached_media WHERE source = :source")
+    suspend fun countBySource(source: String): Int
+
+    /** Delete stale rows for a section — keeps rows newer than keepNewerThan ms timestamp. */
+    @Query("DELETE FROM cached_media WHERE section = :section AND sectionCachedAt < :keepNewerThan AND source = 'catalog'")
+    suspend fun deleteOldSectionRows(section: String, keepNewerThan: Long)
+
+    /** Evict the oldest N rows globally (by lastAccessedAt) to enforce a total row cap. */
+    @Query("DELETE FROM cached_media WHERE tmdbId IN (SELECT tmdbId FROM cached_media ORDER BY lastAccessedAt ASC LIMIT :count)")
+    suspend fun evictOldest(count: Int)
+
+    /** Evict search-opened items beyond the keepCount most-recently-accessed. */
+    @Query("""DELETE FROM cached_media WHERE source = 'search'
+        AND tmdbId NOT IN (SELECT tmdbId FROM cached_media
+        WHERE source = 'search' ORDER BY lastAccessedAt DESC LIMIT :keepCount)""")
+    suspend fun evictOldestSearch(keepCount: Int)
+}
+
+// ── Section personalization weights ───────────────────────────────────────────
+@Dao
+interface SectionWeightDao {
+    @Query("SELECT * FROM section_weights")
+    suspend fun getAll(): List<com.axio.reelz.data.model.SectionWeight>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(weight: com.axio.reelz.data.model.SectionWeight)
+
+    @Query("UPDATE section_weights SET taps = taps + 1, lastTappedAt = :now WHERE sectionId = :id")
+    suspend fun recordTap(id: String, now: Long = System.currentTimeMillis())
 }
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
@@ -486,6 +523,34 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
     }
 }
 
+// ── Migration 10 → 11: new CachedMedia columns + indexes ─────────────────────
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE cached_media ADD COLUMN originalLanguage TEXT NOT NULL DEFAULT 'en'")
+        db.execSQL("ALTER TABLE cached_media ADD COLUMN voteCount INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE cached_media ADD COLUMN section TEXT NOT NULL DEFAULT 'trending'")
+        db.execSQL("ALTER TABLE cached_media ADD COLUMN sectionCachedAt INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE cached_media ADD COLUMN source TEXT NOT NULL DEFAULT 'catalog'")
+        db.execSQL("ALTER TABLE cached_media ADD COLUMN lastAccessedAt INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_cached_media_section ON cached_media(section, sectionCachedAt)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_cached_media_source ON cached_media(source, lastAccessedAt)")
+    }
+}
+
+// ── Migration 11 → 12: section_weights table for personalized feed order ─────
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS section_weights (
+                sectionId TEXT PRIMARY KEY NOT NULL,
+                taps INTEGER NOT NULL DEFAULT 0,
+                lastTappedAt INTEGER NOT NULL DEFAULT 0,
+                manualOrder INTEGER NOT NULL DEFAULT 999
+            )
+        """.trimIndent())
+    }
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 @Database(
     entities = [
@@ -500,8 +565,9 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         UserSession::class,
         RecentSearch::class,
         RemoteConfigCache::class,  // v9: replaces DataStore config cache
+        com.axio.reelz.data.model.SectionWeight::class, // v12: feed personalization
     ],
-    version = 10,
+    version = 12,
     exportSchema = false,
 )
 @TypeConverters(com.axio.reelz.data.model.MediaConverters::class)
@@ -517,4 +583,5 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun userSessionDao(): UserSessionDao
     abstract fun recentSearchDao(): RecentSearchDao
     abstract fun remoteConfigCacheDao(): RemoteConfigCacheDao  // v9
+    abstract fun sectionWeightDao(): SectionWeightDao          // v12
 }

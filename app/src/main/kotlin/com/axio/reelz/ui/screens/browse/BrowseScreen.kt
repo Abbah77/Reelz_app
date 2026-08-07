@@ -97,9 +97,19 @@ class BrowseViewModel @Inject constructor(
 
     init {
         initLoad()
+        // When watch history changes, update continueWatching AND rebuild feedRows
+        // so the "Continue Watching" row appears immediately even if it arrives
+        // after the cache-phase display (stale-while-revalidate timing issue fix).
         viewModelScope.launch {
             repo.getHistory().collect { h ->
-                _ui.update { it.copy(continueWatching = h) }
+                _ui.update { st ->
+                    st.copy(
+                        continueWatching = h,
+                        // Only rebuild if we already have sections — avoids rebuilding
+                        // an empty list during the initial loading phase.
+                        feedRows = if (categorySections.isNotEmpty()) buildFeedRows(categorySections) else st.feedRows,
+                    )
+                }
             }
         }
         // Keep watchlist set in sync so hero banner button reflects current state instantly

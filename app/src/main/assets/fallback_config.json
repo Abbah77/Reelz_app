@@ -1,0 +1,183 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "config_version": 2,
+    "min_app_version": 1,
+    "latest_app_version": 2,
+    "latest_apk_url": "https://github.com/Abbah77/Reelz_app/releases/download/Reelz/Reelz.apk",
+    "changelog": "v2: Stream engine moved server-side. App now thin: one POST per play/download. Added stream_url (media engine) and shorts_url (shorts backend) to backend block. stream_sources now server-only (client_side: false). scanner block removed. Auth/subscription unchanged on backend_url."
+  },
+  "backend": {
+    "backend_url": "https://reelz-l1vp.onrender.com",
+    "stream_url": "https://reelz-backend.onrender.com",
+    "shorts_url": "REPLACE_WITH_YOUR_SHORTS_BACKEND_URL"
+  },
+  "tmdb": {
+    "keys": [
+      {
+        "id": "k1",
+        "key": "",
+        "weight": 10,
+        "enabled": false
+      },
+      {
+        "id": "k2",
+        "key": "",
+        "weight": 8,
+        "enabled": false
+      },
+      {
+        "id": "k3",
+        "key": "",
+        "weight": 6,
+        "enabled": false
+      }
+    ],
+    "base_url": "https://api.themoviedb.org/3",
+    "img_w500": "https://image.tmdb.org/t/p/w500",
+    "img_w342": "https://image.tmdb.org/t/p/w342",
+    "img_original": "https://image.tmdb.org/t/p/original"
+  },
+  "ads": {
+    "enabled": true,
+    "applovin_sdk_key": "",
+    "mediation_provider": "max",
+    "placements": {
+      "banner_enabled": true,
+      "interstitial_enabled": true,
+      "rewarded_enabled": true,
+      "native_enabled": true,
+      "app_open_enabled": true,
+      "preroll_enabled": true
+    },
+    "interstitial_frequency": {
+      "min_ms_between": 180000,
+      "max_per_session": 6,
+      "content_opens_before_first": 2,
+      "every_n_plays": 2,
+      "retry_delay_ms": 30000
+    },
+    "preroll": {
+      "show_on_movies_only": true,
+      "min_minutes_between": 30,
+      "skip_on_resume": true,
+      "skip_on_quality_switch": true
+    },
+    "networks": [
+      {
+        "id": "applovin_max",
+        "enabled": true,
+        "banner_id": "",
+        "interstitial_id": "",
+        "rewarded_id": "",
+        "native_id": "",
+        "app_open_id": "",
+        "vast_tag_url": ""
+      }
+    ]
+  },
+  "tiers": {
+    "free": {
+      "max_resolution": "Unlimited",
+      "max_resolution_height": -1,
+      "max_download_resolution_height": -1,
+      "max_downloads": 5,
+      "ads_enabled": true,
+      "subtitles_manual_search": false,
+      "background_play": false,
+      "simultaneous_streams": 1
+    },
+    "premium": {
+      "max_resolution": "Unlimited",
+      "max_resolution_height": -1,
+      "max_download_resolution_height": -1,
+      "max_downloads": -1,
+      "ads_enabled": false,
+      "subtitles_manual_search": true,
+      "background_play": true,
+      "simultaneous_streams": 2
+    }
+  },
+  "premium": {
+    "enabled": true,
+    "grace_period_days": 1,
+    "renew_warning_days_before": 3,
+    "monthly_price_ngn": 1500,
+    "yearly_price_ngn": 12000,
+    "paystack_monthly_url": "https://paystack.com/pay/REPLACE_WITH_YOUR_MONTHLY_PAYMENT_LINK",
+    "paystack_yearly_url": "https://paystack.com/pay/REPLACE_WITH_YOUR_YEARLY_PAYMENT_LINK",
+    "payment_note": "After paying, return here and tap \"I've already paid -- refresh status\" once we've confirmed it on our end.",
+    "contact_to_subscribe": "",
+    "manual_grants": [
+      {
+        "email": "example@gmail.com",
+        "plan": "monthly",
+        "expires_at_ms": 0,
+        "note": "Sample row -- delete this."
+      }
+    ]
+  },
+  "feature_flags": {
+    "subtitles_enabled": true,
+    "downloads_enabled": true,
+    "transfer_enabled": true,
+    "shorts_enabled": true,
+    "ads_enabled": true,
+    "force_maintenance": false,
+    "maintenance_message": ""
+  },
+  "shorts": {
+    "archive_org": {
+      "metadata_base_url": "https://archive.org/metadata",
+      "download_base_url": "https://archive.org/download",
+      "thumbnail_base_url": "https://archive.org/services/img",
+      "request_timeout_ms": 12000
+    },
+    "for_you_items": [
+      "tiktoks"
+    ],
+    "categories": [
+      {
+        "label": "Movies",
+        "items": []
+      },
+      {
+        "label": "Short TV",
+        "items": []
+      },
+      {
+        "label": "Tips",
+        "items": []
+      },
+      {
+        "label": "Hot",
+        "items": []
+      },
+      {
+        "label": "Naija",
+        "items": []
+      },
+      {
+        "label": "Sports",
+        "items": []
+      },
+      {
+        "label": "WOW",
+        "items": []
+      }
+    ],
+    "video_extensions": [
+      "mp4",
+      "m4v",
+      "mov",
+      "webm"
+    ],
+    "excluded_name_contains": [
+      "thumb",
+      "sample",
+      ".ia.",
+      "__ia_thumb"
+    ],
+    "items_per_page": 3
+  }
+}

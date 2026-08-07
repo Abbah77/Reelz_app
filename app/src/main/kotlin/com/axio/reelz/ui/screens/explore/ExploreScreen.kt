@@ -50,10 +50,13 @@ data class ExploreFilters(
     val ratingFrom: Float? = null,
     val runtimeFrom: Int? = null,              // movies only
     val runtimeTo: Int? = null,                // movies only
+    val language: String? = null,              // ISO 639-1: "ko","hi","tr","ja","zh","fr","en"
+    val originCountry: String? = null,         // ISO 3166-1: "NG","ZA","US","GB","KR"
 ) {
     val isDefault: Boolean get() =
         genreIds.isEmpty() && sortBy == "popularity.desc" && yearFrom == null &&
-        yearTo == null && ratingFrom == null && runtimeFrom == null && runtimeTo == null
+        yearTo == null && ratingFrom == null && runtimeFrom == null && runtimeTo == null &&
+        language == null && originCountry == null
 }
 
 /** A one-tap mood preset — pre-fills filters so users can dive in without configuring anything. */
@@ -130,15 +133,17 @@ class ExploreViewModel @Inject constructor(
                 val items = if (f.mediaType == "MOVIE") {
                     repo.discoverMoviesAdvanced(
                         genreIds = f.genreIds.toList(), sortBy = f.sortBy, page = page,
+                        language = f.language, originCountry = f.originCountry,
                         yearFrom = f.yearFrom, yearTo = f.yearTo, ratingFrom = f.ratingFrom,
-                        minVotes = if (f.sortBy == "vote_average.desc") 50 else null,
+                        minVotes = if (f.sortBy == "vote_average.desc") 200 else null,
                         runtimeFrom = f.runtimeFrom, runtimeTo = f.runtimeTo,
                     )
                 } else {
                     repo.discoverTvAdvanced(
                         genreIds = f.genreIds.toList(), sortBy = f.sortBy, page = page,
+                        language = f.language, originCountry = f.originCountry,
                         yearFrom = f.yearFrom, yearTo = f.yearTo, ratingFrom = f.ratingFrom,
-                        minVotes = if (f.sortBy == "vote_average.desc") 50 else null,
+                        minVotes = if (f.sortBy == "vote_average.desc") 200 else null,
                     )
                 }
                 _ui.update {

@@ -1,9 +1,14 @@
 package com.axio.reelz.data.repository
 
+import android.util.LruCache
 import com.axio.reelz.data.local.*
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.remote.api.TmdbApi
 import com.axio.reelz.data.remote.dto.*
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
@@ -16,18 +21,30 @@ class MediaRepository @Inject constructor(
     private val watchlistDao: WatchlistDao,
     private val historyDao: WatchHistoryDao,
     private val likedDao: LikedDao,
+    private val sectionWeightDao: SectionWeightDao,
 ) {
 
+    // ── Detail memory cache ───────────────────────────────────────────────────
+    // Session-only, 12h TTL, max 50 entries. One TMDB call per title per session.
+    private val detailCache = LruCache<Int, Pair<MediaDetail, Long>>(50)
+
+    private fun getCachedDetail(tmdbId: Int): MediaDetail? {
+        val entry = detailCache[tmdbId] ?: return null
+        val ageMs = System.currentTimeMillis() - entry.second
+        if (ageMs > 12 * 3_600_000L) { detailCache.remove(tmdbId); return null }
+        return entry.first
+    }
+
+    private fun putDetailCache(detail: MediaDetail) {
+        detailCache.put(detail.tmdbId, Pair(detail, System.currentTimeMillis()))
+    }
+
     // ── Home sections ─────────────────────────────────────────────────────────
-    // Returns true if there is any locally-cached media data available.
+
     suspend fun hasCachedData(): Boolean = cachedMediaDao.count() > 0
 
-    // Returns cached sections immediately — never hits the network.
-    // Use this for the instant-display phase of stale-while-revalidate.
     suspend fun getHomeSectionsFromCacheOnly(): List<HomeSection> = buildSectionsFromCache()
 
-    // Fetches fresh data from the network, caches it, and returns the result.
-    // Use this for the silent background-refresh phase of stale-while-revalidate.
     suspend fun getHomeSectionsFromNetwork(): List<HomeSection> {
         val sections = fetchHomeSectionsFromNetwork()
         cacheHomeSections(sections)
@@ -35,7 +52,6 @@ class MediaRepository @Inject constructor(
     }
 
     suspend fun getHomeSections(forceRefresh: Boolean = false): List<HomeSection> {
-        // Try cache first (fast offline path)
         val cacheCount = cachedMediaDao.count()
         if (!forceRefresh && cacheCount > 0) {
             return buildSectionsFromCache()
@@ -50,39 +66,115 @@ class MediaRepository @Inject constructor(
         }
     }
 
-    private suspend fun fetchHomeSectionsFromNetwork(): List<HomeSection> {
-        val trending     = api.getTrendingMovies().results.map { it.toMedia(MediaType.MOVIE) }
-        val popular      = api.getPopularMovies().results.map { it.toMedia(MediaType.MOVIE) }
-        val topRated     = api.getTopRatedMovies().results.map { it.toMedia(MediaType.MOVIE) }
-        val popularTv    = api.getPopularTv().results.map { it.toMedia(MediaType.TV) }
-        val trendingTv   = api.getTrendingTv().results.map { it.toMedia(MediaType.TV) }
-        val anime        = api.getAnime().results.map { it.toMedia(MediaType.TV) }
-        return listOf(
-            HomeSection("Trending Now",  trending),
-            HomeSection("Popular Movies",popular),
-            HomeSection("Top Rated",     topRated),
-            HomeSection("Hot TV Series", popularTv),
-            HomeSection("Trending TV",   trendingTv),
-            HomeSection("Anime",         anime),
+    /**
+     * Fetch all home sections concurrently — each section is a separate async call.
+     * Individual failures don't kill other sections; they emit emptyList() gracefully.
+     * 21 concurrent calls, all keyed by the same TMDB connection pool.
+     */
+    private suspend fun fetchHomeSectionsFromNetwork(): List<HomeSection> = coroutineScope {
+        val jobs = mapOf(
+            Section.TRENDING      to async { runCatching { api.getTrendingMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.NEW_RELEASES  to async { runCatching { api.getNowPlayingMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.POPULAR_MOVIES to async { runCatching { api.getPopularMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.HOT_TV        to async { runCatching { api.getPopularTv().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
+            Section.TOP_RATED     to async { runCatching { api.getTopRatedMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.KDRAMA        to async { runCatching { api.getKDrama().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
+            Section.ANIME         to async { runCatching { api.getAnime().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
+            Section.INDIAN        to async { runCatching { api.getIndianMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.NOLLYWOOD     to async { runCatching { api.getNollywood().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.CDRAMA        to async { runCatching { api.getCDrama().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
+            Section.ACTION        to async { runCatching { api.discoverMovies(28).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.COMEDY        to async { runCatching { api.discoverMovies(35).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.ROMANCE       to async { runCatching { api.discoverMovies(10749).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.HORROR        to async { runCatching { api.discoverMovies(27).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.CRIME         to async { runCatching { api.discoverMovies(80).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.DRAMA         to async { runCatching { api.discoverMovies(18).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.TURKISH       to async { runCatching { api.getTurkishDrama().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
+            Section.DOCUMENTARY   to async { runCatching { api.discoverMovies(99).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.FAMILY        to async { runCatching { api.discoverMovies(10751).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.SCIFI         to async { runCatching { api.discoverMovies(878).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+            Section.AFRICAN       to async { runCatching { api.getAfricanContent().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
         )
+        jobs.mapNotNull { (section, deferred) ->
+            val items = deferred.await()
+            if (items.isEmpty()) null else HomeSection(section.label, items)
+        }
     }
 
+    /**
+     * Build sections from Room cache using the section column.
+     * Applies personalized sort if the user has recorded any taps.
+     * Falls back to Section.DEFAULT_ORDER for new users.
+     */
     private suspend fun buildSectionsFromCache(): List<HomeSection> {
-        val movies = cachedMediaDao.getByType("MOVIE", 60).map { it.toMedia() }
-        val tv     = cachedMediaDao.getByType("TV", 40).map { it.toMedia() }
-        return listOf(
-            HomeSection("Trending Now",  movies.take(20)),
-            HomeSection("Popular Movies",movies.drop(20).take(20)),
-            HomeSection("Hot TV Series", tv.take(20)),
-            HomeSection("Anime",         tv.drop(20).take(20)),
-        )
+        val weights = sectionWeightDao.getAll().associateBy { it.sectionId }
+
+        fun scoreSection(sectionId: String): Float {
+            val w = weights[sectionId] ?: return 0f
+            val recency = if (w.lastTappedAt == 0L) 0f
+                else 1f / (1f + (System.currentTimeMillis() - w.lastTappedAt) / 86_400_000f)
+            return (w.taps * 0.7f) + (recency * 30f)
+        }
+
+        // Sort sections by user score; fall back to DEFAULT_ORDER for equal scores
+        val orderedSections = if (weights.isEmpty()) {
+            Section.DEFAULT_ORDER
+        } else {
+            Section.DEFAULT_ORDER.sortedByDescending { scoreSection(it.id) }
+        }
+
+        return orderedSections.mapNotNull { section ->
+            val items = cachedMediaDao.getBySection(section.id, 20)
+            if (items.isEmpty()) null
+            else HomeSection(section.label, items.map { it.toMedia() })
+        }
     }
 
+    /**
+     * Cache each section's items tagged with their section id and a fresh timestamp.
+     * Stale rows for a section are deleted before inserting the new batch.
+     * Global row cap enforced at 10,000 rows.
+     */
     private suspend fun cacheHomeSections(sections: List<HomeSection>) {
-        val all = sections.flatMap { it.items }.map { it.toCached() }
-        cachedMediaDao.insertAll(all)
-        // Evict entries older than 48h
-        cachedMediaDao.evict(System.currentTimeMillis() - 48 * 60 * 60 * 1000L)
+        val sectionByLabel = Section.values().associateBy { it.label }
+        val now = System.currentTimeMillis()
+
+        sections.forEach { hs ->
+            val sEnum = sectionByLabel[hs.title] ?: Section.TRENDING
+            val items = hs.items.map { media ->
+                media.toCached().copy(
+                    section = sEnum.id,
+                    sectionCachedAt = now,
+                    source = "catalog",
+                    lastAccessedAt = now,
+                )
+            }
+            cachedMediaDao.insertAll(items)
+            // Remove stale rows for this section (replaced by new batch)
+            cachedMediaDao.deleteOldSectionRows(sEnum.id, keepNewerThan = now - 1000L)
+        }
+
+        // Enforce global cap of 10,000 rows
+        val total = cachedMediaDao.count()
+        if (total > 10_000) {
+            cachedMediaDao.evictOldest(total - 10_000)
+        }
+    }
+
+    // ── Section tap recording (feed personalization) ───────────────────────────
+
+    /**
+     * Call when a user taps a media card. Records the tap against the section
+     * so the feed reorders toward their interests over time.
+     */
+    suspend fun recordSectionTap(sectionId: String) {
+        // Upsert to ensure the row exists before incrementing
+        val existing = sectionWeightDao.getAll().firstOrNull { it.sectionId == sectionId }
+        if (existing == null) {
+            sectionWeightDao.upsert(SectionWeight(sectionId = sectionId, taps = 1, lastTappedAt = System.currentTimeMillis()))
+        } else {
+            sectionWeightDao.recordTap(sectionId)
+        }
     }
 
     // ── Discover ──────────────────────────────────────────────────────────────
@@ -104,6 +196,7 @@ class MediaRepository @Inject constructor(
         sortBy: String = "popularity.desc",
         page: Int = 1,
         language: String? = null,
+        originCountry: String? = null,
         yearFrom: Int? = null,
         yearTo: Int? = null,
         ratingFrom: Float? = null,
@@ -112,17 +205,18 @@ class MediaRepository @Inject constructor(
         runtimeFrom: Int? = null,
         runtimeTo: Int? = null,
     ): List<Media> = api.discoverMoviesAdvanced(
-        genres      = genreIds.takeIf { it.isNotEmpty() }?.joinToString(","),
-        sortBy      = sortBy,
-        page        = page,
-        language    = language,
-        yearFrom    = yearFrom?.let { "$it-01-01" },
-        yearTo      = yearTo?.let { "$it-12-31" },
-        ratingFrom  = ratingFrom,
-        ratingTo    = ratingTo,
-        minVotes    = minVotes,
-        runtimeFrom = runtimeFrom,
-        runtimeTo   = runtimeTo,
+        genres       = genreIds.takeIf { it.isNotEmpty() }?.joinToString(","),
+        sortBy       = sortBy,
+        page         = page,
+        language     = language,
+        originCountry = originCountry,
+        yearFrom     = yearFrom?.let { "$it-01-01" },
+        yearTo       = yearTo?.let { "$it-12-31" },
+        ratingFrom   = ratingFrom,
+        ratingTo     = ratingTo,
+        minVotes     = minVotes,
+        runtimeFrom  = runtimeFrom,
+        runtimeTo    = runtimeTo,
     ).results.map { it.toMedia(MediaType.MOVIE) }
 
     suspend fun discoverTvAdvanced(
@@ -130,41 +224,46 @@ class MediaRepository @Inject constructor(
         sortBy: String = "popularity.desc",
         page: Int = 1,
         language: String? = null,
+        originCountry: String? = null,
         yearFrom: Int? = null,
         yearTo: Int? = null,
         ratingFrom: Float? = null,
         ratingTo: Float? = null,
         minVotes: Int? = null,
     ): List<Media> = api.discoverTvAdvanced(
-        genres     = genreIds.takeIf { it.isNotEmpty() }?.joinToString(","),
-        sortBy     = sortBy,
-        page       = page,
-        language   = language,
-        yearFrom   = yearFrom?.let { "$it-01-01" },
-        yearTo     = yearTo?.let { "$it-12-31" },
-        ratingFrom = ratingFrom,
-        ratingTo   = ratingTo,
-        minVotes   = minVotes,
+        genres        = genreIds.takeIf { it.isNotEmpty() }?.joinToString(","),
+        sortBy        = sortBy,
+        page          = page,
+        language      = language,
+        originCountry = originCountry,
+        yearFrom      = yearFrom?.let { "$it-01-01" },
+        yearTo        = yearTo?.let { "$it-12-31" },
+        ratingFrom    = ratingFrom,
+        ratingTo      = ratingTo,
+        minVotes      = minVotes,
     ).results.map { it.toMedia(MediaType.TV) }
 
     // ── Detail ────────────────────────────────────────────────────────────────
 
     /** Fast — no append_to_response. Returns in ~300ms. Shows the screen immediately. */
-    suspend fun getDetailFast(tmdbId: Int, type: MediaType): MediaDetail =
-        if (type == MediaType.MOVIE) api.getMovieDetail(tmdbId).toDetail()
-        else api.getTvDetail(tmdbId).toDetail()
+    suspend fun getDetailFast(tmdbId: Int, type: MediaType): MediaDetail {
+        getCachedDetail(tmdbId)?.let { return it }
+        val detail = if (type == MediaType.MOVIE) api.getMovieDetail(tmdbId).toDetail()
+                     else api.getTvDetail(tmdbId).toDetail()
+        putDetailCache(detail)
+        return detail
+    }
 
     /** Extras — credits, videos, similar. Heavier, loads after screen is visible. */
-    suspend fun getDetailExtras(tmdbId: Int, type: MediaType): MediaDetail =
-        if (type == MediaType.MOVIE) api.getMovieExtras(tmdbId).toDetail()
-        else api.getTvExtras(tmdbId).toDetail()
+    suspend fun getDetailExtras(tmdbId: Int, type: MediaType): MediaDetail {
+        val detail = if (type == MediaType.MOVIE) api.getMovieExtras(tmdbId).toDetail()
+                     else api.getTvExtras(tmdbId).toDetail()
+        putDetailCache(detail)  // update cache with full extras
+        return detail
+    }
 
-    suspend fun getMovieDetail(tmdbId: Int): MediaDetail =
-        api.getMovieExtras(tmdbId).toDetail()
-
-    suspend fun getTvDetail(tmdbId: Int): MediaDetail =
-        api.getTvExtras(tmdbId).toDetail()
-
+    suspend fun getMovieDetail(tmdbId: Int): MediaDetail = api.getMovieExtras(tmdbId).toDetail()
+    suspend fun getTvDetail(tmdbId: Int): MediaDetail    = api.getTvExtras(tmdbId).toDetail()
     suspend fun getDetail(tmdbId: Int, type: MediaType): MediaDetail =
         if (type == MediaType.MOVIE) getMovieDetail(tmdbId) else getTvDetail(tmdbId)
 
@@ -176,6 +275,22 @@ class MediaRepository @Inject constructor(
         val movies = api.searchMovies(query, page).results.map { it.toMedia(MediaType.MOVIE) }
         val tv     = api.searchTv(query, page).results.map { it.toMedia(MediaType.TV) }
         return (movies + tv).sortedByDescending { it.popularity }
+    }
+
+    /**
+     * Save a search-opened item to the feed cache.
+     * Appears in relevant sections so the user can find their interests again.
+     * Capped at 50 items; oldest evicted first.
+     */
+    suspend fun saveSearchOpenToCatalog(media: Media) {
+        val count = cachedMediaDao.countBySource("search")
+        if (count >= 50) cachedMediaDao.evictOldestSearch(keepCount = 49)
+        cachedMediaDao.insertAll(listOf(
+            media.toCached().copy(
+                source = "search",
+                lastAccessedAt = System.currentTimeMillis(),
+            )
+        ))
     }
 
     // ── Watchlist ─────────────────────────────────────────────────────────────
@@ -222,14 +337,8 @@ class MediaRepository @Inject constructor(
             season = season, episode = episode,
             positionMs = positionMs, durationMs = durationMs,
         ))
-        // Keep history lean — trim beyond 500 oldest entries silently
         historyDao.trimToLimit(keepCount = 500)
-
-        // Smart watchlist psychology: user watched ≥ 90% → they've seen it → auto-remove.
-        // This covers the "last 10% is trailers/credits" reality — we don't force 100%.
-        // For TV shows (season > 0) we remove per-episode, so binging a season
-        // auto-clears as they finish each one. If you want whole-show removal,
-        // you'd need extra logic but per-episode is lighter and more accurate.
+        // Auto-remove from watchlist when user finishes ≥90% of content
         if (durationMs > 0 && positionMs.toFloat() / durationMs >= 0.90f) {
             watchlistDao.delete(tmdbId)
         }
@@ -304,15 +413,21 @@ fun TmdbEpisodeDto.toEpisode() = Episode(
 fun Media.toCached() = CachedMedia(
     tmdbId = tmdbId, title = title, overview = overview,
     posterPath = posterPath, backdropPath = backdropPath,
-    releaseDate = releaseDate, voteAverage = voteAverage, popularity = popularity,
-    genreIds = com.google.gson.Gson().toJson(genreIds),
+    releaseDate = releaseDate, voteAverage = voteAverage,
+    voteCount = voteCount,
+    popularity = popularity,
+    genreIds = Gson().toJson(genreIds),
     mediaType = mediaType.name,
+    originalLanguage = originalLanguage,
 )
 
 fun CachedMedia.toMedia() = Media(
     id = tmdbId, tmdbId = tmdbId, title = title, overview = overview,
     posterPath = posterPath, backdropPath = backdropPath,
-    releaseDate = releaseDate, voteAverage = voteAverage, voteCount = 0,
-    popularity = popularity, genreIds = emptyList(),
+    releaseDate = releaseDate, voteAverage = voteAverage,
+    voteCount = voteCount,
+    popularity = popularity,
+    genreIds = Gson().fromJson(genreIds, object : TypeToken<List<Int>>() {}.type) ?: emptyList(),
     mediaType = if (mediaType == "TV") MediaType.TV else MediaType.MOVIE,
+    originalLanguage = originalLanguage,
 )
