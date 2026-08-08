@@ -140,10 +140,22 @@ class BrowseViewModel @Inject constructor(
     }
 
     /**
-     * Stale-while-revalidate strategy:
-     *  Phase 1 — show cached data instantly if available (no spinner, no delay).
-     *  Phase 2 — refresh from network in the background; silently update UI when done.
-     *  If there is no cache at all, show the full loading state and fetch from network.
+     * Cache-first display strategy with age-gated background refresh:
+     *
+     *  Cache exists:
+     *    < 2h old  → Show cache instantly. Done. Zero TMDB calls.
+     *    2–12h old → Show cache instantly + silent background TMDB stream (no indicator).
+     *    > 12h old → Show cache instantly + TMDB stream + thin animated progress bar.
+     *
+     *  No cache:
+     *    Skeleton → stream TMDB Batch 1 (~400ms) → progressive fill across 3 batches.
+     *
+     *  Section order is PRESERVED during background refresh — content is updated in-place
+     *  for sections already on screen, preventing jarring reorder mid-session. The
+     *  personalized sort from SectionWeight only applies on fresh cache builds.
+     *
+     *  Hero featured items are pulled from the top 2 items across the first 3 sections
+     *  (not always trending[0..5]) so the banner rotates across categories.
      */
     private fun initLoad() {
         viewModelScope.launch {
@@ -154,74 +166,125 @@ class BrowseViewModel @Inject constructor(
             val hasCached = try { repo.hasCachedData() } catch (_: Exception) { false }
 
             if (hasCached) {
-                // ── Phase 1: instant cache display ────────────────────────────
+                // ── Phase 1: instant cache display (always, 0ms) ──────────────
                 try {
-                    val cached  = repo.getHomeSectionsFromCacheOnly()
-                    val genres  = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
+                    val cached = repo.getHomeSectionsFromCacheOnly()
+                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
                     categorySections = cached
-                    _ui.update {
-                        it.copy(
-                            isLoading            = false,
-                            isCacheLoaded        = true,
-                            featured             = cached.firstOrNull()?.items?.take(6) ?: emptyList(),
-                            feedRows             = buildFeedRows(cached),
-                            genres               = genres,
-                            isBackgroundRefreshing = true,   // show subtle top indicator
-                        )
-                    }
-                    categorySectionsEmitted = true
-                } catch (_: Exception) {
-                    // Cache read failed — fall through to network
-                    _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
-                }
-
-                // ── Phase 2: silent background network refresh ─────────────
-                try {
-                    val fresh  = repo.getHomeSectionsFromNetwork()
-                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
-                    categorySections = fresh
                     _ui.update {
                         it.copy(
                             isLoading              = false,
                             isCacheLoaded          = true,
+                            featured               = pickFeatured(cached),
+                            feedRows               = buildFeedRows(cached),
+                            genres                 = genres,
                             isBackgroundRefreshing = false,
-                            featured               = fresh.firstOrNull()?.items?.take(6) ?: emptyList(),
-                            feedRows               = buildFeedRows(fresh),
-                            genres                 = genres.ifEmpty { it.genres },
                         )
                     }
                     categorySectionsEmitted = true
                 } catch (_: Exception) {
-                    // Network failed — cache content is already visible; no error banner needed.
+                    _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
+                }
+
+                // ── Phase 2: decide whether to refresh based on cache age ─────
+                val ageMs = try { repo.cacheAgeMs() } catch (_: Exception) { Long.MAX_VALUE }
+                val shouldRefresh = ageMs > 2 * 3_600_000L   // older than 2 hours
+                val showIndicator = ageMs > 12 * 3_600_000L  // older than 12 hours → show pill
+
+                if (!shouldRefresh) return@launch  // cache is fresh — done, no TMDB
+
+                _ui.update { it.copy(isBackgroundRefreshing = showIndicator) }
+
+                // ── Phase 3: background TMDB stream — update content in-place ─
+                // Sections are merged by title but ORDER is preserved from what's
+                // already on screen (categorySections), so the list never reorders
+                // while the user is scrolling.
+                try {
+                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
+                    val accumulated = categorySections.toMutableList()
+                    repo.streamHomeSections { batch ->
+                        // Merge new content into existing positions (update, don't reorder)
+                        val byTitle = accumulated.associateBy { it.title }.toMutableMap()
+                        batch.forEach { byTitle[it.title] = it }
+                        // Preserve current on-screen order; append any brand-new sections at end
+                        val updatedInPlace = accumulated.map { existing ->
+                            byTitle[existing.title] ?: existing
+                        }
+                        val newSections = batch.filter { new -> accumulated.none { it.title == new.title } }
+                        accumulated.clear()
+                        accumulated.addAll(updatedInPlace + newSections)
+
+                        categorySections = accumulated.toList()
+                        _ui.update {
+                            it.copy(
+                                isLoading              = false,
+                                isCacheLoaded          = true,
+                                isBackgroundRefreshing = showIndicator,
+                                featured               = pickFeatured(accumulated).ifEmpty { it.featured },
+                                feedRows               = buildFeedRows(accumulated),
+                                genres                 = genres.ifEmpty { it.genres },
+                            )
+                        }
+                        categorySectionsEmitted = true
+                    }
+                    _ui.update { it.copy(isBackgroundRefreshing = false) }
+                } catch (_: Exception) {
                     _ui.update { it.copy(isBackgroundRefreshing = false) }
                 }
+
             } else {
-                // ── No cache: full loading state until network responds ────
+                // ── No cache: skeleton shows until Batch 1 arrives (~400ms) ───
                 _ui.update { it.copy(isLoading = true, error = null) }
+                var firstBatch = true
                 try {
-                    val sections = repo.getHomeSectionsFromNetwork()
-                    val genres   = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
-                    categorySections = sections
-                    _ui.update {
-                        it.copy(
-                            isLoading     = false,
-                            isCacheLoaded = true,
-                            featured      = sections.firstOrNull()?.items?.take(6) ?: emptyList(),
-                            feedRows      = buildFeedRows(sections),
-                            genres        = genres,
+                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
+                    val accumulated = mutableListOf<HomeSection>()
+                    repo.streamHomeSections { batch ->
+                        val byTitle = accumulated.associateBy { it.title }.toMutableMap()
+                        batch.forEach { byTitle[it.title] = it }
+                        val orderedTitles = Section.DEFAULT_ORDER.map { it.label }
+                        accumulated.clear()
+                        accumulated.addAll(
+                            orderedTitles.mapNotNull { byTitle[it] } +
+                            byTitle.values.filter { it.title !in orderedTitles }
                         )
+                        categorySections = accumulated.toList()
+                        _ui.update {
+                            it.copy(
+                                isLoading     = false,
+                                isCacheLoaded = true,
+                                featured      = if (firstBatch) pickFeatured(accumulated)
+                                                else it.featured.ifEmpty { pickFeatured(accumulated) },
+                                feedRows      = buildFeedRows(accumulated),
+                                genres        = genres.ifEmpty { it.genres },
+                            )
+                        }
+                        firstBatch = false
+                        categorySectionsEmitted = true
                     }
-                    categorySectionsEmitted = true
                 } catch (e: Exception) {
-                    _ui.update {
-                        it.copy(isLoading = false, error = friendlyBrowseError(e))
+                    if (firstBatch) {
+                        _ui.update { it.copy(isLoading = false, error = friendlyBrowseError(e)) }
                     }
                 }
             }
         }
     }
 
-    /** User-triggered pull-to-refresh: show the indicator, then fetch fresh data. */
+    /**
+     * Pick hero featured items across the top sections for visual variety.
+     * Takes the top 2 items from each of the first 3 sections → 6 hero candidates.
+     * This means the banner rotates across Trending, New Releases, and Popular Movies
+     * instead of always showing trending[0..5] from a potentially stale cache.
+     */
+    private fun pickFeatured(sections: List<HomeSection>): List<Media> =
+        sections.take(3).flatMap { it.items.take(2) }
+
+    /**
+     * User-triggered pull-to-refresh: always hits TMDB regardless of cache age.
+     * Streams fresh data progressively in 3 batches. Section order resets to
+     * DEFAULT_ORDER (personalized) since the user explicitly asked for fresh content.
+     */
     fun load(forceRefresh: Boolean = true) {
         if (!forceRefresh) { initLoad(); return }
         viewModelScope.launch {
@@ -229,24 +292,35 @@ class BrowseViewModel @Inject constructor(
             infinitePage = 1
             isInfiniteExhausted = false
             categorySectionsEmitted = false
+            var firstBatch = true
             try {
-                val sections = repo.getHomeSectionsFromNetwork()
-                val genres   = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
-                categorySections = sections
-                _ui.update {
-                    it.copy(
-                        isRefreshing  = false,
-                        isCacheLoaded = true,
-                        featured      = sections.firstOrNull()?.items?.take(6) ?: emptyList(),
-                        feedRows      = buildFeedRows(sections),
-                        genres        = genres.ifEmpty { it.genres },
+                val genres = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
+                val accumulated = mutableListOf<HomeSection>()
+                repo.streamHomeSections { batch ->
+                    val byTitle = accumulated.associateBy { it.title }.toMutableMap()
+                    batch.forEach { byTitle[it.title] = it }
+                    val orderedTitles = Section.DEFAULT_ORDER.map { it.label }
+                    accumulated.clear()
+                    accumulated.addAll(
+                        orderedTitles.mapNotNull { byTitle[it] } +
+                        byTitle.values.filter { it.title !in orderedTitles }
                     )
+                    categorySections = accumulated.toList()
+                    _ui.update {
+                        it.copy(
+                            isRefreshing  = false,
+                            isCacheLoaded = true,
+                            featured      = if (firstBatch) pickFeatured(accumulated)
+                                            else it.featured.ifEmpty { pickFeatured(accumulated) },
+                            feedRows      = buildFeedRows(accumulated),
+                            genres        = genres.ifEmpty { it.genres },
+                        )
+                    }
+                    firstBatch = false
+                    categorySectionsEmitted = true
                 }
-                categorySectionsEmitted = true
             } catch (e: Exception) {
-                _ui.update {
-                    it.copy(isRefreshing = false, error = friendlyBrowseError(e))
-                }
+                _ui.update { it.copy(isRefreshing = false, error = friendlyBrowseError(e)) }
             }
         }
     }
@@ -265,38 +339,88 @@ class BrowseViewModel @Inject constructor(
         if (_ui.value.isLoadingMore || isInfiniteExhausted) return
         viewModelScope.launch {
             _ui.update { it.copy(isLoadingMore = true) }
-            try {
+
+            // Collect all tmdbIds already shown — across Section rows and InfinitePages
+            val sectionIds = _ui.value.feedRows
+                .filterIsInstance<FeedRow.Section>()
+                .flatMap { it.section.items }.map { it.tmdbId }.toSet()
+            val infiniteIds = _ui.value.feedRows
+                .filterIsInstance<FeedRow.InfinitePage>()
+                .flatMap { it.items }.map { it.tmdbId }.toSet()
+            val existingIds = sectionIds + infiniteIds
+
+            // ── Tier 1: Try cache first ─────────────────────────────────────
+            //
+            // PAGE SIZE = 10 (not 20) — intentionally smaller so Coil has time
+            // to actually fetch the thumbnails for the current row before the next
+            // row appears. Dumping 20 items instantly floods the image pipeline and
+            // the user sees a wall of placeholders rather than smooth progressive reveal.
+            //
+            // If cache has ≥ 10 unseen items → show them, no TMDB call.
+            // If cache is thinner → fall through to TMDB.
+            val cacheItems = try {
+                repo.getCachePageExcluding(
+                    excludeIds = existingIds,
+                    limit = 10,  // one crisp row — Coil-friendly page size
+                )
+            } catch (_: Exception) { emptyList() }
+
+            if (cacheItems.size >= 10) {
                 val nextPage = infinitePage + 1
-                val items: List<Media> = if (nextPage % 2 == 0) {
-                    repo.discoverMovies(genreId = null, page = nextPage)
-                } else {
-                    repo.discoverTv(genreId = null, page = nextPage)
-                }
-                if (items.isEmpty()) {
-                    isInfiniteExhausted = true
-                    _ui.update { it.copy(isLoadingMore = false) }
-                    return@launch
-                }
                 infinitePage = nextPage
-                // Filter out any tmdbIds already present in earlier infinite rows so
-                // the same card never appears twice in the feed. TMDB's movie/TV discover
-                // endpoints can overlap when alternating between the two on consecutive pages.
-                val existingIds = _ui.value.feedRows
-                    .filterIsInstance<FeedRow.InfinitePage>()
-                    .flatMap { it.items }
-                    .map { it.tmdbId }
-                    .toSet()
-                val dedupedItems = items.filter { it.tmdbId !in existingIds }
-                if (dedupedItems.isEmpty()) {
-                    isInfiniteExhausted = true
-                    _ui.update { it.copy(isLoadingMore = false) }
+                val newRow = FeedRow.InfinitePage(cacheItems, nextPage)
+                _ui.update { st -> st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false) }
+                return@launch
+            }
+
+            // ── Tier 2: Cache exhausted — call TMDB ─────────────────────────
+            // With exponential-backoff retry to survive rate-limit bursts from
+            // concurrent Home batch calls (40 req/10s TMDB limit per API key).
+            val retryDelaysMs = longArrayOf(0L, 400L, 1200L)
+            var lastException: Exception? = null
+            for (delayMs in retryDelaysMs) {
+                if (delayMs > 0) delay(delayMs)
+                try {
+                    val nextPage = infinitePage + 1
+                    val items: List<Media> = if (nextPage % 2 == 0) {
+                        repo.discoverMovies(genreId = null, page = nextPage)
+                    } else {
+                        repo.discoverTv(genreId = null, page = nextPage)
+                    }
+                    if (items.isEmpty()) {
+                        isInfiniteExhausted = true
+                        _ui.update { it.copy(isLoadingMore = false) }
+                        return@launch
+                    }
+                    infinitePage = nextPage
+                    val dedupedItems = items.filter { it.tmdbId !in existingIds }
+                    if (dedupedItems.isEmpty()) {
+                        isInfiniteExhausted = true
+                        _ui.update { it.copy(isLoadingMore = false) }
+                        return@launch
+                    }
+                    val newRow = FeedRow.InfinitePage(dedupedItems, nextPage)
+                    _ui.update { st ->
+                        st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false)
+                    }
                     return@launch
+                } catch (e: Exception) {
+                    lastException = e
                 }
-                val newRow = FeedRow.InfinitePage(dedupedItems, nextPage)
+            }
+            // All retries failed: show cache leftovers if any, swallow error silently —
+            // the user sees a subtle skeleton row briefly then the row quietly disappears.
+            // No crash, no error screen, no broken UI.
+            if (cacheItems.isNotEmpty()) {
+                val nextPage = infinitePage + 1
+                infinitePage = nextPage
                 _ui.update { st ->
-                    st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false)
+                    st.copy(feedRows = st.feedRows + FeedRow.InfinitePage(cacheItems, nextPage), isLoadingMore = false)
                 }
-            } catch (_: Exception) {
+            } else {
+                // Silently stop scrolling — network down, cache empty.
+                // isInfiniteExhausted = true so we don't keep hammering.
+                isInfiniteExhausted = true
                 _ui.update { it.copy(isLoadingMore = false) }
             }
         }
@@ -644,7 +768,25 @@ val d = LocalDimensions.current
                             }
                         }
 
+                        // ── Infinite scroll load-more skeleton ────────────────────────
+                        // Shows a full skeleton row (not just a spinner at the edge) so
+                        // the user sees a meaningful "more coming" signal, and Coil has
+                        // time to fetch thumbnails for items already on screen before we
+                        // add another row. LoadMoreSkeleton wraps SkeletonRowLoader which
+                        // shimmer-animates independently for each card.
                         if (ui.isLoadingMore) {
+                            item(key = "loadMoreSkHeader") {
+                                Box(
+                                    Modifier.fillMaxWidth()
+                                        .padding(start = d.screenHorizPad, top = d.spaceLg, bottom = d.spaceSm),
+                                ) {
+                                    Box(
+                                        Modifier.width(120.dp).height(d.spaceMd - d.spaceXxs)
+                                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(d.spaceXs))
+                                            .background(BgSurface)
+                                    )
+                                }
+                            }
                             item(key = "loadMoreSkeleton") { LoadMoreSkeleton() }
                         }
                     }

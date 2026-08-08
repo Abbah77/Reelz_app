@@ -56,7 +56,6 @@ private sealed class CdnResult {
 class RemoteConfigRepository @Inject constructor(
     private val cacheDao: RemoteConfigCacheDao,  // Room — single source of truth
     private val gson: Gson,
-    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
 ) {
     private val tag = "RemoteConfig"
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -80,17 +79,13 @@ class RemoteConfigRepository @Inject constructor(
 
     /**
      * Called once from ReelzApp.onCreate().
-     * Reads Room first, then falls back to bundled assets — never touches the network.
+     * Reads Room cache only — never touches the network.
+     * If no cache exists (first install), readiness is NO_CONFIG and
+     * ReelzApp immediately calls sync() to fetch and decrypt the live config.
      */
     suspend fun loadLocalConfig() {
         val found = loadFromCache()
-        if (found) {
-            _readiness.value = ConfigReadiness.READY
-        } else {
-            // Try bundled fallback asset so app works on first install without internet
-            val fallbackLoaded = loadBundledFallback()
-            _readiness.value = if (fallbackLoaded) ConfigReadiness.READY else ConfigReadiness.NO_CONFIG
-        }
+        _readiness.value = if (found) ConfigReadiness.READY else ConfigReadiness.NO_CONFIG
     }
 
     fun syncInBackground() {
@@ -158,10 +153,22 @@ class RemoteConfigRepository @Inject constructor(
     private suspend fun tryCdn(index: Int, url: String): CdnResult {
         return try {
             Log.d(tag, "Trying CDN[$index]: $url")
-            val (json, status) = fetchRaw(url)
+            val (raw, status) = fetchRaw(url)
 
-            if (json == null) {
+            if (raw == null) {
                 return CdnResult.Skip("HTTP $status")
+            }
+
+            // The CDN hosts an AES-256-CBC + zlib encrypted blob (version byte 2).
+            // ConfigCrypto.decrypt() uses the key from the native C++ library so the
+            // key never appears in Kotlin bytecode / dex. If the payload starts with
+            // '{' it is unencrypted plain JSON (dev/fallback CDN) — accept it as-is.
+            val json = if (raw.trimStart().startsWith("{")) {
+                Log.w(tag, "CDN[$index] returned plain JSON — expected encrypted payload")
+                raw
+            } else {
+                ConfigCrypto.decrypt(raw.trim())
+                    ?: return CdnResult.Skip("Decryption failed — wrong key or corrupted payload")
             }
 
             val schemaVersion = extractSchemaVersion(json)
@@ -283,30 +290,6 @@ class RemoteConfigRepository @Inject constructor(
         }
     }
 
-    /**
-     * Load bundled fallback_config.json from assets.
-     * Shipped with the APK — TMDB keys are blanked out but backend URLs are valid.
-     * The app is functional on first install even without internet.
-     * ConfigSyncWorker replaces it with the live config on first successful sync.
-     */
-    private fun loadBundledFallback(): Boolean {
-        return try {
-            val fallback = context.assets.open("fallback_config.json")
-                .bufferedReader().readText()
-            val parsed = safeGson.fromJson(fallback, RemoteConfig::class.java)
-            if (parsed != null) {
-                _config.value = parsed
-                Log.d(tag, "Loaded bundled fallback config — app functional without internet")
-                true
-            } else {
-                Log.e(tag, "Bundled fallback_config.json failed to parse")
-                false
-            }
-        } catch (e: Exception) {
-            Log.e(tag, "loadBundledFallback: ${e.message}")
-            false
-        }
-    }
 
     private suspend fun persistToCache(json: String, version: Int) {
         cacheDao.upsert(

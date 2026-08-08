@@ -30,6 +30,6 @@ Java_com_axio_reelz_remoteconfig_ConfigCrypto_nativeKey(
         jobject /* this */) {
     // ⚠️ Replace this with your actual 32-character AES-256 key before release.
     // Generate one with: python3 -c "import secrets; print(secrets.token_urlsafe(24))"
-    const char* key = "your-32-byte-key-here!!!!!!!!!!!";
+    const char* key = "2CjS1NSDXBSXswTzQVSyH3OHcGfcml0h";
     return env->NewStringUTF(key);
 }

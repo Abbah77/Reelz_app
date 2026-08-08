@@ -54,9 +54,24 @@ object AppModule {
     @Provides @Singleton @Named("tmdb")
     fun provideTmdbOkHttp(remoteConfig: RemoteConfigRepository): OkHttpClient {
         val tmdbAuthInterceptor = Interceptor { chain ->
+            // activeTmdbKey() returns null when config hasn't loaded yet (first install,
+            // fallback has no keys). Poll with a short sleep rather than firing with an
+            // empty key — an empty api_key always returns HTTP 401, which surfaces as a
+            // visible error on every screen. We wait up to 5s total (50 x 100ms) which
+            // is more than enough for a CDN sync to complete (~300-800ms on mobile).
+            val key = run {
+                var k = remoteConfig.activeTmdbKey()
+                var waited = 0
+                while (k == null && waited < 5_000) {
+                    Thread.sleep(100)
+                    waited += 100
+                    k = remoteConfig.activeTmdbKey()
+                }
+                k
+            }
             val original = chain.request()
             val url = original.url.newBuilder()
-                .addQueryParameter("api_key", remoteConfig.activeTmdbKey().orEmpty())
+                .addQueryParameter("api_key", key.orEmpty())
                 .build()
             chain.proceed(original.newBuilder().url(url).build())
         }

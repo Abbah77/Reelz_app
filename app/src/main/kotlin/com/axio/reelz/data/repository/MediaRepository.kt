@@ -9,6 +9,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
@@ -39,6 +40,18 @@ class MediaRepository @Inject constructor(
         detailCache.put(detail.tmdbId, Pair(detail, System.currentTimeMillis()))
     }
 
+    // ── Cache freshness ───────────────────────────────────────────────────────
+
+    /**
+     * How many milliseconds ago the freshest catalog section was cached.
+     * Returns Long.MAX_VALUE if no catalog rows exist (forces a refresh).
+     */
+    suspend fun cacheAgeMs(): Long {
+        val newest = cachedMediaDao.getNewestSectionTimestamp()
+        return if (newest == 0L) Long.MAX_VALUE
+        else System.currentTimeMillis() - newest
+    }
+
     // ── Home sections ─────────────────────────────────────────────────────────
 
     suspend fun hasCachedData(): Boolean = cachedMediaDao.count() > 0
@@ -46,58 +59,98 @@ class MediaRepository @Inject constructor(
     suspend fun getHomeSectionsFromCacheOnly(): List<HomeSection> = buildSectionsFromCache()
 
     suspend fun getHomeSectionsFromNetwork(): List<HomeSection> {
-        val sections = fetchHomeSectionsFromNetwork()
-        cacheHomeSections(sections)
-        return sections
+        val all = mutableListOf<HomeSection>()
+        streamHomeSections { batch -> all.addAll(batch) }
+        return all
     }
 
     suspend fun getHomeSections(forceRefresh: Boolean = false): List<HomeSection> {
         val cacheCount = cachedMediaDao.count()
-        if (!forceRefresh && cacheCount > 0) {
-            return buildSectionsFromCache()
-        }
+        if (!forceRefresh && cacheCount > 0) return buildSectionsFromCache()
         return try {
-            val sections = fetchHomeSectionsFromNetwork()
-            cacheHomeSections(sections)
-            sections
+            getHomeSectionsFromNetwork()
         } catch (e: Exception) {
-            if (cacheCount > 0) buildSectionsFromCache()
-            else throw e
+            if (cacheCount > 0) buildSectionsFromCache() else throw e
         }
     }
 
     /**
-     * Fetch all home sections concurrently — each section is a separate async call.
-     * Individual failures don't kill other sections; they emit emptyList() gracefully.
-     * 21 concurrent calls, all keyed by the same TMDB connection pool.
+     * Fetch all 21 home sections in 3 batches of 7, with a 300ms gap between batches.
+     *
+     * WHY BATCHED:
+     *   TMDB rate-limits at 40 req/10s per API key. With only 3 keys, firing all 21
+     *   calls simultaneously can saturate the rate-limit window and cause any request
+     *   that arrives immediately after (e.g. Explore's discoverMovies call) to fail
+     *   with a 429. Batching keeps the burst ≤ 7 req/key per window and leaves
+     *   headroom for other screens.
+     *
+     * WHY STREAMING (onBatch callback):
+     *   Each batch completes and emits to the UI before the next batch starts.
+     *   The skeleton loading stays visible until Batch 1 resolves (~400ms), then
+     *   sections populate progressively — exactly like a staggered reveal.
+     *   No single large wait before anything appears.
+     *
+     * Batch layout (priority order — highest-value sections first):
+     *   Batch 1 — Trending, New Releases, Popular Movies, Hot TV, Top Rated, K-Drama, Anime
+     *   Batch 2 — Indian, Nollywood, C-Drama, Action, Comedy, Romance, Horror
+     *   Batch 3 — Crime, Drama, Turkish, Documentary, Family, Sci-Fi, African
      */
-    private suspend fun fetchHomeSectionsFromNetwork(): List<HomeSection> = coroutineScope {
-        val jobs = mapOf(
-            Section.TRENDING      to async { runCatching { api.getTrendingMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.NEW_RELEASES  to async { runCatching { api.getNowPlayingMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.POPULAR_MOVIES to async { runCatching { api.getPopularMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.HOT_TV        to async { runCatching { api.getPopularTv().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
-            Section.TOP_RATED     to async { runCatching { api.getTopRatedMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.KDRAMA        to async { runCatching { api.getKDrama().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
-            Section.ANIME         to async { runCatching { api.getAnime().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
-            Section.INDIAN        to async { runCatching { api.getIndianMovies().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.NOLLYWOOD     to async { runCatching { api.getNollywood().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.CDRAMA        to async { runCatching { api.getCDrama().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
-            Section.ACTION        to async { runCatching { api.discoverMovies(28).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.COMEDY        to async { runCatching { api.discoverMovies(35).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.ROMANCE       to async { runCatching { api.discoverMovies(10749).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.HORROR        to async { runCatching { api.discoverMovies(27).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.CRIME         to async { runCatching { api.discoverMovies(80).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.DRAMA         to async { runCatching { api.discoverMovies(18).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.TURKISH       to async { runCatching { api.getTurkishDrama().results.map { it.toMedia(MediaType.TV) } }.getOrDefault(emptyList()) },
-            Section.DOCUMENTARY   to async { runCatching { api.discoverMovies(99).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.FAMILY        to async { runCatching { api.discoverMovies(10751).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.SCIFI         to async { runCatching { api.discoverMovies(878).results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
-            Section.AFRICAN       to async { runCatching { api.getAfricanContent().results.map { it.toMedia(MediaType.MOVIE) } }.getOrDefault(emptyList()) },
+    suspend fun streamHomeSections(onBatch: suspend (List<HomeSection>) -> Unit) {
+        val batches: List<List<Pair<Section, suspend () -> List<Media>>>> = listOf(
+            // ── Batch 1: highest priority (hero candidates live here) ─────────
+            listOf(
+                Section.TRENDING       to { api.getTrendingMovies().results.map  { it.toMedia(MediaType.MOVIE) } },
+                Section.NEW_RELEASES   to { api.getNowPlayingMovies().results.map { it.toMedia(MediaType.MOVIE) } },
+                Section.POPULAR_MOVIES to { api.getPopularMovies().results.map   { it.toMedia(MediaType.MOVIE) } },
+                Section.HOT_TV         to { api.getPopularTv().results.map       { it.toMedia(MediaType.TV)    } },
+                Section.TOP_RATED      to { api.getTopRatedMovies().results.map  { it.toMedia(MediaType.MOVIE) } },
+                Section.KDRAMA         to { api.getKDrama().results.map          { it.toMedia(MediaType.TV)    } },
+                Section.ANIME          to { api.getAnime().results.map           { it.toMedia(MediaType.TV)    } },
+            ),
+            // ── Batch 2: regional + genre picks ──────────────────────────────
+            listOf(
+                Section.INDIAN         to { api.getIndianMovies().results.map    { it.toMedia(MediaType.MOVIE) } },
+                Section.NOLLYWOOD      to { api.getNollywood().results.map       { it.toMedia(MediaType.MOVIE) } },
+                Section.CDRAMA         to { api.getCDrama().results.map          { it.toMedia(MediaType.TV)    } },
+                Section.ACTION         to { api.discoverMovies(28).results.map   { it.toMedia(MediaType.MOVIE) } },
+                Section.COMEDY         to { api.discoverMovies(35).results.map   { it.toMedia(MediaType.MOVIE) } },
+                Section.ROMANCE        to { api.discoverMovies(10749).results.map{ it.toMedia(MediaType.MOVIE) } },
+                Section.HORROR         to { api.discoverMovies(27).results.map   { it.toMedia(MediaType.MOVIE) } },
+            ),
+            // ── Batch 3: deep catalogue ───────────────────────────────────────
+            listOf(
+                Section.CRIME          to { api.discoverMovies(80).results.map   { it.toMedia(MediaType.MOVIE) } },
+                Section.DRAMA          to { api.discoverMovies(18).results.map   { it.toMedia(MediaType.MOVIE) } },
+                Section.TURKISH        to { api.getTurkishDrama().results.map    { it.toMedia(MediaType.TV)    } },
+                Section.DOCUMENTARY    to { api.discoverMovies(99).results.map   { it.toMedia(MediaType.MOVIE) } },
+                Section.FAMILY         to { api.discoverMovies(10751).results.map{ it.toMedia(MediaType.MOVIE) } },
+                Section.SCIFI          to { api.discoverMovies(878).results.map  { it.toMedia(MediaType.MOVIE) } },
+                Section.AFRICAN        to { api.getAfricanContent().results.map  { it.toMedia(MediaType.MOVIE) } },
+            ),
         )
-        jobs.mapNotNull { (section, deferred) ->
-            val items = deferred.await()
-            if (items.isEmpty()) null else HomeSection(section.label, items)
+
+        val allSections = mutableListOf<HomeSection>()
+
+        batches.forEachIndexed { batchIndex, entries ->
+            // 300ms gap between batches — lets the rate-limit window partially reset
+            // and gives Explore (and other screens) headroom to fire their own calls.
+            if (batchIndex > 0) delay(300)
+
+            val batchSections = coroutineScope {
+                entries.map { (section, fetch) ->
+                    async {
+                        val items = runCatching { fetch() }.getOrDefault(emptyList())
+                        if (items.isEmpty()) null else HomeSection(section.label, items)
+                    }
+                }.mapNotNull { it.await() }
+            }
+
+            if (batchSections.isNotEmpty()) {
+                allSections.addAll(batchSections)
+                onBatch(batchSections)
+                // Cache each batch immediately so even a partial load is persisted
+                cacheHomeSections(batchSections)
+            }
         }
     }
 
@@ -159,6 +212,105 @@ class MediaRepository @Inject constructor(
         if (total > 10_000) {
             cachedMediaDao.evictOldest(total - 10_000)
         }
+    }
+
+    // ── Cache-first infinite scroll ───────────────────────────────────────────
+
+    /**
+     * Returns up to [limit] catalog-sourced cached items whose tmdbId is NOT in [excludeIds],
+     * ordered by popularity. Used by BrowseViewModel.loadMoreInfinite() to serve cached
+     * content before hitting TMDB. The exclusion is applied in Kotlin because Room struggles
+     * with large NOT IN sets — the raw SQL page is fetched then filtered in memory.
+     */
+    suspend fun getCachePageExcluding(excludeIds: Set<Int>, limit: Int = 20): List<Media> {
+        var offset = 0
+        val result = mutableListOf<CachedMedia>()
+        // Page through in batches of 100 until we collect enough or exhaust cache
+        while (result.size < limit) {
+            val batch = cachedMediaDao.getPopularPage(limit = 100, offset = offset)
+            if (batch.isEmpty()) break
+            result.addAll(batch.filter { it.tmdbId !in excludeIds })
+            offset += 100
+            if (result.size >= limit) break
+        }
+        return result.take(limit).map { it.toMedia() }
+    }
+
+    // ── Explore cache query ───────────────────────────────────────────────────
+
+    /**
+     * Answer an ExploreFilters query entirely from the local Room cache.
+     *
+     * Covers: mediaType, genreIds (any-match), language, ratingFrom, yearFrom, yearTo,
+     *         voteCount minimum (for vote_average sort), and all sort orders.
+     *
+     * Does NOT cover: runtimeFrom/runtimeTo, originCountry — those fields are not
+     * stored in CachedMedia, so callers that use them will see a partial result and
+     * should fall through to TMDB.
+     *
+     * Returns empty list if the cache has no rows at all for the media type.
+     */
+    suspend fun queryExploreFromCache(
+        mediaType: String,
+        genreIds: Set<Int> = emptySet(),
+        sortBy: String = "popularity.desc",
+        yearFrom: Int? = null,
+        yearTo: Int? = null,
+        ratingFrom: Float? = null,
+        language: String? = null,
+    ): List<Media> {
+        var rows = cachedMediaDao.getByMediaType(mediaType)
+        if (rows.isEmpty()) return emptyList()
+
+        // Genre filter — keep rows that share at least one genre with the filter set
+        if (genreIds.isNotEmpty()) {
+            rows = rows.filter { cached ->
+                val ids: List<Int> = try {
+                    com.google.gson.Gson().fromJson(
+                        cached.genreIds,
+                        object : com.google.gson.reflect.TypeToken<List<Int>>() {}.type,
+                    ) ?: emptyList()
+                } catch (_: Exception) { emptyList() }
+                ids.any { it in genreIds }
+            }
+        }
+
+        // Language filter
+        if (language != null) {
+            rows = rows.filter { it.originalLanguage == language }
+        }
+
+        // Rating floor
+        if (ratingFrom != null) {
+            rows = rows.filter { it.voteAverage >= ratingFrom }
+        }
+
+        // Year range — releaseDate is "YYYY-MM-DD" or "YYYY" or null
+        if (yearFrom != null) {
+            rows = rows.filter { cached ->
+                val yr = cached.releaseDate?.take(4)?.toIntOrNull() ?: 0
+                yr >= yearFrom
+            }
+        }
+        if (yearTo != null) {
+            rows = rows.filter { cached ->
+                val yr = cached.releaseDate?.take(4)?.toIntOrNull() ?: 9999
+                yr <= yearTo
+            }
+        }
+
+        // Sort
+        rows = when (sortBy) {
+            "popularity.desc"           -> rows.sortedByDescending { it.popularity }
+            "vote_average.desc"         -> rows.filter { it.voteCount >= 100 }
+                                               .sortedByDescending { it.voteAverage }
+            "primary_release_date.desc" -> rows.sortedByDescending { it.releaseDate ?: "" }
+            "primary_release_date.asc"  -> rows.sortedBy { it.releaseDate ?: "" }
+            "vote_count.desc"           -> rows.sortedByDescending { it.voteCount }
+            else                        -> rows.sortedByDescending { it.popularity }
+        }
+
+        return rows.map { it.toMedia() }
     }
 
     // ── Section tap recording (feed personalization) ───────────────────────────

@@ -72,6 +72,19 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
         appScope.launch {
             remoteConfig.loadLocalConfig()
 
+            // If local load produced no TMDB keys (first install, fallback has none),
+            // sync immediately — blocking — so keys are in memory before any screen
+            // fires TMDB API calls. The OkHttp interceptor calls activeTmdbKey() on
+            // every request; without this, first-install users always get api_key=""
+            // and see the Explore / Home error state.
+            if (remoteConfig.activeTmdbKey() == null) {
+                remoteConfig.sync()   // suspends until one CDN succeeds or all fail
+            } else {
+                // Keys already loaded from cache — kick off a background refresh to
+                // pick up any config changes, but don't block the startup sequence.
+                remoteConfig.syncInBackground()
+            }
+
             // Initialize ad engine — starts SDK + preloads all ad formats.
             // AdEngine itself checks ads.enabled and the AppLovin SDK key,
             // so this is a safe no-op until both are configured.

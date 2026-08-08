@@ -106,6 +106,40 @@ interface CachedMediaDao {
         AND tmdbId NOT IN (SELECT tmdbId FROM cached_media
         WHERE source = 'search' ORDER BY lastAccessedAt DESC LIMIT :keepCount)""")
     suspend fun evictOldestSearch(keepCount: Int)
+
+    /**
+     * Freshness check — returns the most recent sectionCachedAt across all catalog rows.
+     * Used by BrowseViewModel to decide whether a background TMDB refresh is needed.
+     * Returns 0L if the table is empty (treated as "never cached").
+     */
+    @Query("SELECT COALESCE(MAX(sectionCachedAt), 0) FROM cached_media WHERE source = 'catalog'")
+    suspend fun getNewestSectionTimestamp(): Long
+
+    /**
+     * Explore cache query — returns all cached rows for a given media type, ordered by
+     * popularity descending. Kotlin-side filtering is applied on top for genre, language,
+     * rating, and year — SQLite can't parse the JSON genreIds column natively.
+     */
+    @Query("SELECT * FROM cached_media WHERE mediaType = :mediaType ORDER BY popularity DESC")
+    suspend fun getByMediaType(mediaType: String): List<CachedMedia>
+
+    /**
+     * Infinite-scroll cache page — returns up to [limit] rows whose tmdbId is NOT in the
+     * already-shown set, ordered by popularity descending.
+     * Used by BrowseViewModel.loadMoreInfinite() to serve from cache before hitting TMDB.
+     *
+     * Note: Room cannot bind a List<Int> into a NOT IN clause with a @Query parameter
+     * directly for large lists reliably; we pass the exclusion as a subquery workaround
+     * using a joined temp approach. For simplicity and correctness we use the
+     * getByMediaType path and filter in Kotlin — see MediaRepository.getCachePageExcluding().
+     */
+    @Query("""
+        SELECT * FROM cached_media
+        WHERE source = 'catalog'
+        ORDER BY popularity DESC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getPopularPage(limit: Int, offset: Int): List<CachedMedia>
 }
 
 // ── Section personalization weights ───────────────────────────────────────────

@@ -40,7 +40,6 @@ android {
             version = "3.22.1"
         }
     }
-    }
 
     signingConfigs {
         create("release") {
