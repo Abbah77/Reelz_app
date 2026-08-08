@@ -180,17 +180,23 @@ class BrowseViewModel @Inject constructor(
                 // coroutine's own cache-first path in MediaRepository).
                 try {
                     val cached = repo.getHomeSectionsFromCacheOnly()
-                    categorySections = cached
-                    _ui.update {
-                        it.copy(
-                            isLoading              = false,
-                            isCacheLoaded          = true,
-                            featured               = pickFeatured(cached),
-                            feedRows               = buildFeedRows(cached),
-                            isBackgroundRefreshing = false,
-                        )
+                    if (cached.isNotEmpty()) {
+                        categorySections = cached
+                        _ui.update {
+                            it.copy(
+                                isLoading              = false,
+                                isCacheLoaded          = true,
+                                featured               = pickFeatured(cached),
+                                feedRows               = buildFeedRows(cached),
+                                isBackgroundRefreshing = false,
+                            )
+                        }
+                        categorySectionsEmitted = true
+                    } else {
+                        // hasCachedData() was true but all sections returned empty —
+                        // orphaned rows from a schema mismatch. Treat as no cache.
+                        _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
                     }
-                    categorySectionsEmitted = true
                 } catch (_: Exception) {
                     _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
                 }
@@ -213,7 +219,9 @@ class BrowseViewModel @Inject constructor(
                 val shouldRefresh = ageMs > 2 * 3_600_000L   // older than 2 hours
                 val showIndicator = ageMs > 12 * 3_600_000L  // older than 12 hours → show pill
 
-                if (!shouldRefresh) return@launch  // cache is fresh — done, no TMDB
+                // Only skip network if cache was actually displayed (categorySectionsEmitted).
+                // If sections came back empty (orphaned rows), we must still go to network.
+                if (!shouldRefresh && categorySectionsEmitted) return@launch
 
                 _ui.update { it.copy(isBackgroundRefreshing = showIndicator) }
 
@@ -608,6 +616,12 @@ fun BrowseScreen(
     // items (header + row), so "total - 8" gives ~4 sections of pre-load headroom.
     // This means loading starts well before the user reaches the visible end —
     // no hard-swipe needed.
+    //
+    // CRITICAL BUG FIX: skeleton items (skeletonBanner, skeletonRow1, skeletonRow2)
+    // are 3 LazyColumn items. total=3, lastVisible=2 → 2 >= 3-8 = -5 = TRUE.
+    // Without the isCacheLoaded guard, loadMoreInfinite() fires during the skeleton
+    // phase and hits TMDB for discover/movie?page=2 instead of ever showing cached
+    // home sections. This was the "empty app loop" on second open.
     val shouldLoadMore by remember {
         derivedStateOf {
             val info  = listState.layoutInfo
@@ -620,11 +634,9 @@ fun BrowseScreen(
         }
     }
 
-    // Re-run whenever shouldLoadMore flips OR isLoadingMore/isGenreLoading settle to false.
-    // This ensures a fresh check after each page finishes loading, so if the user is
-    // still near the bottom the next page kicks off automatically.
-    LaunchedEffect(shouldLoadMore, ui.isLoadingMore, ui.isGenreLoading) {
-        if (shouldLoadMore && !ui.isLoadingMore && !ui.isGenreLoading) {
+    // isCacheLoaded AND !isLoading gate prevents firing during skeleton phase.
+    LaunchedEffect(shouldLoadMore, ui.isLoadingMore, ui.isGenreLoading, ui.isCacheLoaded, ui.isLoading) {
+        if (shouldLoadMore && ui.isCacheLoaded && !ui.isLoading && !ui.isLoadingMore && !ui.isGenreLoading) {
             if (ui.selectedGenreId != null) vm.loadMoreGenre()
             else vm.loadMoreInfinite()
         }

@@ -60,7 +60,20 @@ class MediaRepository @Inject constructor(
 
     // ── Home sections ─────────────────────────────────────────────────────────
 
-    suspend fun hasCachedData(): Boolean = cachedMediaDao.count() > 0
+    /**
+     * Returns true only when the cache has USABLE data — i.e. at least one
+     * section that is in DEFAULT_ORDER has rows. A plain count() > 0 can be
+     * misleading: rows may all have an orphaned section id from an old schema,
+     * meaning buildSectionsFromCache() returns an empty list and the UI shows
+     * nothing forever (the "empty loop" bug). We probe the first 3 sections of
+     * DEFAULT_ORDER to confirm real data exists.
+     */
+    suspend fun hasCachedData(): Boolean {
+        if (cachedMediaDao.count() == 0) return false
+        // Verify at least one canonical section actually has rows
+        val probe = Section.DEFAULT_ORDER.take(3)
+        return probe.any { cachedMediaDao.getBySection(it.id, 1).isNotEmpty() }
+    }
 
     suspend fun getHomeSectionsFromCacheOnly(): List<HomeSection> = buildSectionsFromCache()
 
@@ -71,12 +84,12 @@ class MediaRepository @Inject constructor(
     }
 
     suspend fun getHomeSections(forceRefresh: Boolean = false): List<HomeSection> {
-        val cacheCount = cachedMediaDao.count()
-        if (!forceRefresh && cacheCount > 0) return buildSectionsFromCache()
+        val hasUsable = hasCachedData()
+        if (!forceRefresh && hasUsable) return buildSectionsFromCache()
         return try {
             getHomeSectionsFromNetwork()
         } catch (e: Exception) {
-            if (cacheCount > 0) buildSectionsFromCache() else throw e
+            if (hasUsable) buildSectionsFromCache() else throw e
         }
     }
 

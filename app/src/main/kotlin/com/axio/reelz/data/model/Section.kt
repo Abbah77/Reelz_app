@@ -48,7 +48,7 @@ enum class Section(
         val DEFAULT_ORDER = listOf(
             TRENDING, POPULAR_MOVIES, NEW_RELEASES, KDRAMA, NOLLYWOOD, INDIAN,
             HOT_TV, TOP_RATED, ACTION, TURKISH, ANIME, COMEDY, ROMANCE, CDRAMA,
-            HORROR, CRIME, DOCUMENTARY, AFRICAN, FAMILY, SCIFI,
+            HORROR, CRIME, DRAMA, DOCUMENTARY, AFRICAN, FAMILY, SCIFI,
         )
 
         fun fromId(id: String): Section? = values().firstOrNull { it.id == id }
