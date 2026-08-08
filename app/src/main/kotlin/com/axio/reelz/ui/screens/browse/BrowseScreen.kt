@@ -202,11 +202,6 @@ class BrowseViewModel @Inject constructor(
                 }
 
                 // ── Phase 1b: genres — parallel, never blocks feed display ────
-                //
-                // Launched separately so genres never delay the home feed.
-                // MediaRepository.getMovieGenres() is cache-first: on second open it
-                // reads Room in microseconds (no network). Only on first-ever install
-                // does it hit TMDB — and even then it doesn't block the feed.
                 launch {
                     try {
                         val genres = repo.getMovieGenres()
@@ -214,31 +209,42 @@ class BrowseViewModel @Inject constructor(
                     } catch (_: Exception) { /* genres stay empty — no genre bar shown */ }
                 }
 
-                // ── Phase 2: decide whether to refresh based on cache age ─────
-                val ageMs = try { repo.cacheAgeMs() } catch (_: Exception) { Long.MAX_VALUE }
-                val shouldRefresh = ageMs > 2 * 3_600_000L   // older than 2 hours
-                val showIndicator = ageMs > 12 * 3_600_000L  // older than 12 hours → show pill
+                // ── Phase 2: check which sections are actually stale ──────────
+                //
+                // ARCHITECTURE CHANGE: replaced the global 2-hour TTL that fired
+                // ALL 21 TMDB calls whenever the cache was >2h old. Every open after
+                // 2 hours would hammer TMDB even though most sections (Action, Comedy,
+                // Top Rated — 72h TTL) hadn't changed at all.
+                //
+                // Now we check per-section TTL (defined on each Section enum entry):
+                //   TRENDING / NEW_RELEASES = 24h
+                //   KDRAMA / ANIME / REGIONAL = 48h
+                //   ACTION / COMEDY / TOP_RATED = 72h
+                //
+                // staleSectionIds() runs 21 parallel Room queries (~5ms total) and
+                // returns ONLY the IDs that have exceeded their own TTL. We pass that
+                // set to streamHomeSections so it skips fresh sections entirely.
+                //
+                // Result: a user who opens the app 3 hours after first launch gets
+                // 0 TMDB calls (nothing is stale at 3h). At 25h they get ~7 calls
+                // (Trending + New Releases batch). At 49h maybe 14. At 73h all 21.
+                // The previous code always did 21 calls after 2h — every single time.
+                val staleIds = try { repo.staleSectionIds() } catch (_: Exception) { emptySet() }
 
-                // Only skip network if cache was actually displayed (categorySectionsEmitted).
-                // If sections came back empty (orphaned rows), we must still go to network.
-                if (!shouldRefresh && categorySectionsEmitted) return@launch
+                // Nothing stale and cache was displayed — we're done, no TMDB needed
+                if (staleIds.isEmpty() && categorySectionsEmitted) return@launch
 
+                val showIndicator = staleIds.isNotEmpty()
                 _ui.update { it.copy(isBackgroundRefreshing = showIndicator) }
 
-                // ── Phase 3: background TMDB stream — update content in-place ─
-                // Sections are merged by title but ORDER is preserved from what's
-                // already on screen (categorySections), so the list never reorders
-                // while the user is scrolling.
+                // ── Phase 3: refresh ONLY stale sections, merge in-place ──────
                 try {
                     val accumulated = categorySections.toMutableList()
-                    repo.streamHomeSections { batch ->
+                    repo.streamHomeSections(sectionFilter = staleIds.ifEmpty { null }) { batch ->
                         // Merge new content into existing positions (update, don't reorder)
                         val byTitle = accumulated.associateBy { it.title }.toMutableMap()
                         batch.forEach { byTitle[it.title] = it }
-                        // Preserve current on-screen order; append any brand-new sections at end
-                        val updatedInPlace = accumulated.map { existing ->
-                            byTitle[existing.title] ?: existing
-                        }
+                        val updatedInPlace = accumulated.map { byTitle[it.title] ?: it }
                         val newSections = batch.filter { new -> accumulated.none { it.title == new.title } }
                         accumulated.clear()
                         accumulated.addAll(updatedInPlace + newSections)
@@ -251,8 +257,6 @@ class BrowseViewModel @Inject constructor(
                                 isBackgroundRefreshing = showIndicator,
                                 featured               = pickFeatured(accumulated).ifEmpty { it.featured },
                                 feedRows               = buildFeedRows(accumulated),
-                                // genres intentionally NOT updated here — already handled
-                                // by the parallel Phase 1b coroutine above
                             )
                         }
                         categorySectionsEmitted = true

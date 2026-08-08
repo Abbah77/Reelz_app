@@ -97,6 +97,10 @@ interface CachedMediaDao {
     @Query("DELETE FROM cached_media WHERE section = :section AND sectionCachedAt < :keepNewerThan AND source = 'catalog'")
     suspend fun deleteOldSectionRows(section: String, keepNewerThan: Long)
 
+    /** Returns the most recent sectionCachedAt for a specific section (0 if none). */
+    @Query("SELECT COALESCE(MAX(sectionCachedAt), 0) FROM cached_media WHERE section = :section AND source = 'catalog'")
+    suspend fun getSectionTimestamp(section: String): Long
+
     /** Evict the oldest N rows globally (by lastAccessedAt) to enforce a total row cap. */
     @Query("DELETE FROM cached_media WHERE tmdbId IN (SELECT tmdbId FROM cached_media ORDER BY lastAccessedAt ASC LIMIT :count)")
     suspend fun evictOldest(count: Int)

@@ -114,7 +114,18 @@ class MediaRepository @Inject constructor(
      *   Batch 2 — Indian, Nollywood, C-Drama, Action, Comedy, Romance, Horror
      *   Batch 3 — Crime, Drama, Turkish, Documentary, Family, Sci-Fi, African
      */
-    suspend fun streamHomeSections(onBatch: suspend (List<HomeSection>) -> Unit) {
+    /**
+     * Fetch home sections from TMDB in 3 batches of 7, with a 300ms gap between.
+     *
+     * [sectionFilter] — when non-null, only sections whose ID is in this set are
+     * fetched. This is the key to avoiding unnecessary TMDB calls: callers pass
+     * the result of [staleSectionIds] so only actually-stale sections hit the network.
+     * Fresh sections are skipped entirely — their Room data stays on screen.
+     */
+    suspend fun streamHomeSections(
+        sectionFilter: Set<String>? = null,
+        onBatch: suspend (List<HomeSection>) -> Unit,
+    ) {
         val batches: List<List<Pair<Section, suspend () -> List<Media>>>> = listOf(
             // ── Batch 1: highest priority (hero candidates live here) ─────────
             listOf(
@@ -151,12 +162,15 @@ class MediaRepository @Inject constructor(
         val allSections = mutableListOf<HomeSection>()
 
         batches.forEachIndexed { batchIndex, entries ->
-            // 300ms gap between batches — lets the rate-limit window partially reset
-            // and gives Explore (and other screens) headroom to fire their own calls.
+            // Skip entire batch if none of its sections are stale
+            val filteredEntries = if (sectionFilter == null) entries
+                                  else entries.filter { (section, _) -> section.id in sectionFilter }
+            if (filteredEntries.isEmpty()) return@forEachIndexed
+
             if (batchIndex > 0) delay(300)
 
             val batchSections = coroutineScope {
-                entries.map { (section, fetch) ->
+                filteredEntries.map { (section, fetch) ->
                     async {
                         val items = runCatching { fetch() }.getOrDefault(emptyList())
                         if (items.isEmpty()) null else HomeSection(section.label, items)
@@ -174,7 +188,7 @@ class MediaRepository @Inject constructor(
     }
 
     /**
-     * Build sections from Room cache using the section column.
+     * Build sections from Room cache.
      * Applies personalized sort if the user has recorded any taps.
      * Falls back to Section.DEFAULT_ORDER for new users.
      */
@@ -188,7 +202,6 @@ class MediaRepository @Inject constructor(
             return (w.taps * 0.7f) + (recency * 30f)
         }
 
-        // Sort sections by user score; fall back to DEFAULT_ORDER for equal scores
         val orderedSections = if (weights.isEmpty()) {
             Section.DEFAULT_ORDER
         } else {
@@ -200,6 +213,27 @@ class MediaRepository @Inject constructor(
             if (items.isEmpty()) null
             else HomeSection(section.label, items.map { it.toMedia() })
         }
+    }
+
+    /**
+     * Returns the set of Section IDs whose cache is older than their per-section TTL.
+     *
+     * WHY per-section TTL instead of a global 2-hour wall:
+     *   Trending (TTL=24h) and New Releases (TTL=24h) change daily — but Action,
+     *   Comedy, Top Rated (TTL=72h) barely change at all. Refreshing all 21 sections
+     *   every 2 hours wastes 21 TMDB API calls on data that's identical to what's
+     *   already in Room. With per-section TTL we only hit TMDB for the sections that
+     *   are ACTUALLY stale — which on any given open is usually 0 or a handful.
+     *
+     *   The queries run in parallel so the staleness check itself is instant (~5ms).
+     */
+    suspend fun staleSectionIds(): Set<String> = coroutineScope {
+        Section.DEFAULT_ORDER.map { section ->
+            async {
+                val cachedAt = cachedMediaDao.getSectionTimestamp(section.id)
+                if (section.isSectionStale(cachedAt)) section.id else null
+            }
+        }.mapNotNull { it.await() }.toSet()
     }
 
     /**
