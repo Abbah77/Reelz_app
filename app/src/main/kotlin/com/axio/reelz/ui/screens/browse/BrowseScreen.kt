@@ -167,9 +167,19 @@ class BrowseViewModel @Inject constructor(
 
             if (hasCached) {
                 // ── Phase 1: instant cache display (always, 0ms) ──────────────
+                //
+                // KEY FIX: genres are NO LONGER fetched here. They were the hidden
+                // culprit: getMovieGenres() hit TMDB live, which meant the OkHttp
+                // interceptor ran while RemoteConfig might still be loading its Room
+                // cache — causing a 5-second busy-wait and freezing the entire UI.
+                //
+                // Genres are now loaded in a SEPARATE parallel coroutine below,
+                // completely off the critical path. The home feed appears immediately
+                // from Room with genres = whatever was already in state (empty on
+                // true first-open, populated from previous session via the genre
+                // coroutine's own cache-first path in MediaRepository).
                 try {
                     val cached = repo.getHomeSectionsFromCacheOnly()
-                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
                     categorySections = cached
                     _ui.update {
                         it.copy(
@@ -177,13 +187,25 @@ class BrowseViewModel @Inject constructor(
                             isCacheLoaded          = true,
                             featured               = pickFeatured(cached),
                             feedRows               = buildFeedRows(cached),
-                            genres                 = genres,
                             isBackgroundRefreshing = false,
                         )
                     }
                     categorySectionsEmitted = true
                 } catch (_: Exception) {
                     _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
+                }
+
+                // ── Phase 1b: genres — parallel, never blocks feed display ────
+                //
+                // Launched separately so genres never delay the home feed.
+                // MediaRepository.getMovieGenres() is cache-first: on second open it
+                // reads Room in microseconds (no network). Only on first-ever install
+                // does it hit TMDB — and even then it doesn't block the feed.
+                launch {
+                    try {
+                        val genres = repo.getMovieGenres()
+                        if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
+                    } catch (_: Exception) { /* genres stay empty — no genre bar shown */ }
                 }
 
                 // ── Phase 2: decide whether to refresh based on cache age ─────
@@ -200,7 +222,6 @@ class BrowseViewModel @Inject constructor(
                 // already on screen (categorySections), so the list never reorders
                 // while the user is scrolling.
                 try {
-                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
                     val accumulated = categorySections.toMutableList()
                     repo.streamHomeSections { batch ->
                         // Merge new content into existing positions (update, don't reorder)
@@ -222,7 +243,8 @@ class BrowseViewModel @Inject constructor(
                                 isBackgroundRefreshing = showIndicator,
                                 featured               = pickFeatured(accumulated).ifEmpty { it.featured },
                                 feedRows               = buildFeedRows(accumulated),
-                                genres                 = genres.ifEmpty { it.genres },
+                                // genres intentionally NOT updated here — already handled
+                                // by the parallel Phase 1b coroutine above
                             )
                         }
                         categorySectionsEmitted = true
@@ -235,9 +257,17 @@ class BrowseViewModel @Inject constructor(
             } else {
                 // ── No cache: skeleton shows until Batch 1 arrives (~400ms) ───
                 _ui.update { it.copy(isLoading = true, error = null) }
+
+                // Genres in parallel — cache-first so instant if previously saved
+                launch {
+                    try {
+                        val genres = repo.getMovieGenres()
+                        if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
+                    } catch (_: Exception) {}
+                }
+
                 var firstBatch = true
                 try {
-                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
                     val accumulated = mutableListOf<HomeSection>()
                     repo.streamHomeSections { batch ->
                         val byTitle = accumulated.associateBy { it.title }.toMutableMap()
@@ -256,7 +286,6 @@ class BrowseViewModel @Inject constructor(
                                 featured      = if (firstBatch) pickFeatured(accumulated)
                                                 else it.featured.ifEmpty { pickFeatured(accumulated) },
                                 feedRows      = buildFeedRows(accumulated),
-                                genres        = genres.ifEmpty { it.genres },
                             )
                         }
                         firstBatch = false
@@ -292,9 +321,17 @@ class BrowseViewModel @Inject constructor(
             infinitePage = 1
             isInfiniteExhausted = false
             categorySectionsEmitted = false
+
+            // Genres refresh in parallel — don't block the content stream
+            launch {
+                try {
+                    val genres = repo.getMovieGenres()
+                    if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
+                } catch (_: Exception) {}
+            }
+
             var firstBatch = true
             try {
-                val genres = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
                 val accumulated = mutableListOf<HomeSection>()
                 repo.streamHomeSections { batch ->
                     val byTitle = accumulated.associateBy { it.title }.toMutableMap()
@@ -313,7 +350,6 @@ class BrowseViewModel @Inject constructor(
                             featured      = if (firstBatch) pickFeatured(accumulated)
                                             else it.featured.ifEmpty { pickFeatured(accumulated) },
                             feedRows      = buildFeedRows(accumulated),
-                            genres        = genres.ifEmpty { it.genres },
                         )
                     }
                     firstBatch = false

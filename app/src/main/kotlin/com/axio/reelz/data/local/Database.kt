@@ -390,6 +390,23 @@ interface UserSessionDao {
     suspend fun clear()
 }
 
+// ── Cached genres ─────────────────────────────────────────────────────────────
+@Dao
+interface CachedGenreDao {
+    @Query("SELECT * FROM cached_genres WHERE mediaType = :type ORDER BY name ASC")
+    suspend fun getByType(type: String): List<com.axio.reelz.data.model.CachedGenre>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(genres: List<com.axio.reelz.data.model.CachedGenre>)
+
+    @Query("SELECT COUNT(*) FROM cached_genres WHERE mediaType = :type")
+    suspend fun count(type: String): Int
+
+    /** Returns the oldest cachedAtMs for this type — used to decide if a refresh is needed. */
+    @Query("SELECT COALESCE(MIN(cachedAtMs), 0) FROM cached_genres WHERE mediaType = :type")
+    suspend fun oldestTimestamp(type: String): Long
+}
+
 // ── Migration v1 → v2 ─────────────────────────────────────────────────────────
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -585,6 +602,23 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
     }
 }
 
+// ── Migration 12 → 13: cached_genres table ────────────────────────────────────
+// Genres are fetched from TMDB once then persisted here so BrowseScreen and
+// SearchScreen never block on a network call just to populate genre chips.
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS cached_genres (
+                id INTEGER PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                mediaType TEXT NOT NULL DEFAULT 'movie',
+                cachedAtMs INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_cached_genres_type ON cached_genres(mediaType)")
+    }
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 @Database(
     entities = [
@@ -599,9 +633,10 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
         UserSession::class,
         RecentSearch::class,
         RemoteConfigCache::class,  // v9: replaces DataStore config cache
-        com.axio.reelz.data.model.SectionWeight::class, // v12: feed personalization
+        com.axio.reelz.data.model.SectionWeight::class,  // v12: feed personalization
+        com.axio.reelz.data.model.CachedGenre::class,    // v13: genre chip persistence
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 @TypeConverters(com.axio.reelz.data.model.MediaConverters::class)
@@ -618,4 +653,5 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun recentSearchDao(): RecentSearchDao
     abstract fun remoteConfigCacheDao(): RemoteConfigCacheDao  // v9
     abstract fun sectionWeightDao(): SectionWeightDao          // v12
+    abstract fun cachedGenreDao(): CachedGenreDao              // v13
 }

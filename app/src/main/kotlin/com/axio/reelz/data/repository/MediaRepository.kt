@@ -2,6 +2,7 @@ package com.axio.reelz.data.repository
 
 import android.util.LruCache
 import com.axio.reelz.data.local.*
+import com.axio.reelz.data.local.CachedGenreDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.remote.api.TmdbApi
 import com.axio.reelz.data.remote.dto.*
@@ -23,6 +24,7 @@ class MediaRepository @Inject constructor(
     private val historyDao: WatchHistoryDao,
     private val likedDao: LikedDao,
     private val sectionWeightDao: SectionWeightDao,
+    private val cachedGenreDao: CachedGenreDao,
 ) {
 
     // ── Detail memory cache ───────────────────────────────────────────────────
@@ -339,8 +341,83 @@ class MediaRepository @Inject constructor(
     suspend fun getAnime(page: Int = 1): List<Media> =
         api.getAnime(page = page).results.map { it.toMedia(MediaType.TV) }
 
-    suspend fun getMovieGenres(): List<Genre> = api.getMovieGenres().genres.map { Genre(it.id, it.name) }
-    suspend fun getTvGenres(): List<Genre>    = api.getTvGenres().genres.map { Genre(it.id, it.name) }
+    // ── Genre accessors — cache-first, 7-day TTL ──────────────────────────────
+    //
+    // WHY:
+    //   BrowseViewModel.initLoad() previously called getMovieGenres() ON THE CRITICAL
+    //   PATH of the cache-display phase. That's a live TMDB network call — it blocks
+    //   the entire genre bar from appearing until the network round-trip completes.
+    //   On second open with no network it fails silently (genres = empty) but more
+    //   importantly it also ran concurrently with the OkHttp TMDB key interceptor
+    //   which itself blocks waiting for RemoteConfig to load — causing the whole
+    //   coroutine tree to suspend and the skeleton to loop forever.
+    //
+    //   Solution: Genres are nearly static (TMDB hasn't changed them in years).
+    //   We persist them in Room (cached_genres table) with a 7-day TTL.
+    //   - First install: no cache → fetches TMDB, saves to Room. Normal.
+    //   - Second+ open: Room has genres → returns instantly with ZERO network.
+    //   - Background refresh: if cache is older than 7 days, refreshes silently
+    //     AFTER the UI is already visible and populated.
+    //
+    //   Callers never need to change — same API, massively different behaviour.
+
+    private val GENRE_TTL_MS = 7 * 24 * 3_600_000L  // 7 days
+
+    /**
+     * Returns movie genres. Cache-first: returns Room data instantly on
+     * second+ opens. Falls back to TMDB on first install or if cache is empty.
+     * Triggers a silent background refresh if the cache is older than 7 days.
+     */
+    suspend fun getMovieGenres(): List<Genre> {
+        val cached = cachedGenreDao.getByType("movie")
+        if (cached.isNotEmpty()) {
+            // Kick off background refresh only if stale — never blocks the caller
+            val oldest = cachedGenreDao.oldestTimestamp("movie")
+            if (System.currentTimeMillis() - oldest > GENRE_TTL_MS) {
+                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { refreshMovieGenres() }
+                }
+            }
+            return cached.map { Genre(it.id, it.name) }
+        }
+        // First install — no cache yet — fetch and persist
+        return refreshMovieGenres()
+    }
+
+    /**
+     * Returns TV genres. Same cache-first logic as getMovieGenres().
+     */
+    suspend fun getTvGenres(): List<Genre> {
+        val cached = cachedGenreDao.getByType("tv")
+        if (cached.isNotEmpty()) {
+            val oldest = cachedGenreDao.oldestTimestamp("tv")
+            if (System.currentTimeMillis() - oldest > GENRE_TTL_MS) {
+                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { refreshTvGenres() }
+                }
+            }
+            return cached.map { Genre(it.id, it.name) }
+        }
+        return refreshTvGenres()
+    }
+
+    private suspend fun refreshMovieGenres(): List<Genre> {
+        val now = System.currentTimeMillis()
+        val genres = api.getMovieGenres().genres.map { Genre(it.id, it.name) }
+        cachedGenreDao.insertAll(genres.map {
+            com.axio.reelz.data.model.CachedGenre(id = it.id, name = it.name, mediaType = "movie", cachedAtMs = now)
+        })
+        return genres
+    }
+
+    private suspend fun refreshTvGenres(): List<Genre> {
+        val now = System.currentTimeMillis()
+        val genres = api.getTvGenres().genres.map { Genre(it.id, it.name) }
+        cachedGenreDao.insertAll(genres.map {
+            com.axio.reelz.data.model.CachedGenre(id = it.id, name = it.name, mediaType = "tv", cachedAtMs = now)
+        })
+        return genres
+    }
 
     // ── Advanced Discover (Explore screen) ───────────────────────────────────
     suspend fun discoverMoviesAdvanced(

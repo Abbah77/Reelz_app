@@ -319,6 +319,21 @@ data class UserSession(
     val cachedAtMs: Long = System.currentTimeMillis(),
 )
 
+// ── Genre cache ───────────────────────────────────────────────────────────────
+/**
+ * Persists movie genre list so BrowseScreen and SearchScreen never need a
+ * live TMDB call to populate the genre bar — they load instantly from Room.
+ * Genres are nearly static (TMDB only adds one every year or two) so a
+ * 7-day TTL is more than enough. cachedAtMs drives background refresh.
+ */
+@Entity(tableName = "cached_genres")
+data class CachedGenre(
+    @PrimaryKey val id: Int,
+    val name: String,
+    val mediaType: String = "movie",   // "movie" | "tv"
+    val cachedAtMs: Long = System.currentTimeMillis(),
+)
+
 // ── Type converters ───────────────────────────────────────────────────────────
 class MediaConverters {
     private val gson = Gson()
