@@ -13,6 +13,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -361,6 +365,10 @@ class MediaRepository @Inject constructor(
     //
     //   Callers never need to change — same API, massively different behaviour.
 
+    // Singleton scope for fire-and-forget background tasks (genre TTL refresh).
+    // SupervisorJob so a failed refresh never cancels other work.
+    private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val GENRE_TTL_MS = 7 * 24 * 3_600_000L  // 7 days
 
     /**
@@ -371,16 +379,12 @@ class MediaRepository @Inject constructor(
     suspend fun getMovieGenres(): List<Genre> {
         val cached = cachedGenreDao.getByType("movie")
         if (cached.isNotEmpty()) {
-            // Kick off background refresh only if stale — never blocks the caller
             val oldest = cachedGenreDao.oldestTimestamp("movie")
             if (System.currentTimeMillis() - oldest > GENRE_TTL_MS) {
-                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    runCatching { refreshMovieGenres() }
-                }
+                repoScope.launch { runCatching { refreshMovieGenres() } }
             }
             return cached.map { Genre(it.id, it.name) }
         }
-        // First install — no cache yet — fetch and persist
         return refreshMovieGenres()
     }
 
@@ -392,9 +396,7 @@ class MediaRepository @Inject constructor(
         if (cached.isNotEmpty()) {
             val oldest = cachedGenreDao.oldestTimestamp("tv")
             if (System.currentTimeMillis() - oldest > GENRE_TTL_MS) {
-                kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    runCatching { refreshTvGenres() }
-                }
+                repoScope.launch { runCatching { refreshTvGenres() } }
             }
             return cached.map { Genre(it.id, it.name) }
         }
