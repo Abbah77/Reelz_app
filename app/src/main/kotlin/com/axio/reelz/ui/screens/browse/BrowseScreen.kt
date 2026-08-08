@@ -140,22 +140,38 @@ class BrowseViewModel @Inject constructor(
     }
 
     /**
-     * Cache-first display strategy with age-gated background refresh:
+     * Cache-first display strategy. Simple 3-step state machine:
      *
-     *  Cache exists:
-     *    < 2h old  → Show cache instantly. Done. Zero TMDB calls.
-     *    2–12h old → Show cache instantly + silent background TMDB stream (no indicator).
-     *    > 12h old → Show cache instantly + TMDB stream + thin animated progress bar.
+     *  STEP 1 — Show cache immediately (0ms, no network).
+     *           If cache exists and has real sections → show it, done if nothing stale.
+     *           If cache is empty → show skeleton, go to STEP 3.
      *
-     *  No cache:
-     *    Skeleton → stream TMDB Batch 1 (~400ms) → progressive fill across 3 batches.
+     *  STEP 2 — Staleness check (per-section TTL, ~5ms Room queries, no network).
+     *           Compute which section IDs have exceeded their TTL.
+     *           If none stale → return, user already sees fresh content.
      *
-     *  Section order is PRESERVED during background refresh — content is updated in-place
-     *  for sections already on screen, preventing jarring reorder mid-session. The
-     *  personalized sort from SectionWeight only applies on fresh cache builds.
+     *  STEP 3 — Background TMDB refresh for ONLY the stale sections (or all, if no cache).
+     *           Results merge in-place. Fresh sections are never re-fetched.
+     *           If TMDB fails: if cache was shown, stay silent. If no cache, show error.
+     */
+    /**
+     * Cache-first display strategy. Simple 3-step state machine:
      *
-     *  Hero featured items are pulled from the top 2 items across the first 3 sections
-     *  (not always trending[0..5]) so the banner rotates across categories.
+     *  STEP 1 — Show cache immediately (0ms, no network).
+     *           If cache exists and has real sections → show it, done if nothing stale.
+     *           If cache is empty → show skeleton, go to STEP 3.
+     *
+     *  STEP 2 — Staleness check (per-section TTL, ~5ms Room queries, no network).
+     *           Compute which section IDs have exceeded their TTL.
+     *           If none stale → return, user already sees fresh content.
+     *
+     *  STEP 3 — Background TMDB refresh for ONLY the stale sections (or all, if no cache).
+     *           Results merge in-place. Fresh sections are never re-fetched.
+     *           If TMDB fails: if cache was shown, stay silent. If no cache, show error.
+     *
+     *  isLoading=true  → skeleton is visible (no cache yet)
+     *  isCacheLoaded=true → cache (or TMDB) content is on screen, skeleton hidden
+     *  isBackgroundRefreshing=true → thin progress bar while TMDB refreshes stale sections
      */
     private fun initLoad() {
         viewModelScope.launch {
@@ -163,149 +179,99 @@ class BrowseViewModel @Inject constructor(
             isInfiniteExhausted = false
             categorySectionsEmitted = false
 
-            val hasCached = try { repo.hasCachedData() } catch (_: Exception) { false }
+            // ── STEP 1: Load from Room (microseconds, always offline-safe) ────────
+            val cached = try { repo.getHomeSectionsFromCacheOnly() } catch (_: Exception) { emptyList() }
+            val hasCacheToShow = cached.isNotEmpty()
 
-            if (hasCached) {
-                // ── Phase 1: instant cache display (always, 0ms) ──────────────
-                //
-                // KEY FIX: genres are NO LONGER fetched here. They were the hidden
-                // culprit: getMovieGenres() hit TMDB live, which meant the OkHttp
-                // interceptor ran while RemoteConfig might still be loading its Room
-                // cache — causing a 5-second busy-wait and freezing the entire UI.
-                //
-                // Genres are now loaded in a SEPARATE parallel coroutine below,
-                // completely off the critical path. The home feed appears immediately
-                // from Room with genres = whatever was already in state (empty on
-                // true first-open, populated from previous session via the genre
-                // coroutine's own cache-first path in MediaRepository).
-                try {
-                    val cached = repo.getHomeSectionsFromCacheOnly()
-                    if (cached.isNotEmpty()) {
-                        categorySections = cached
-                        _ui.update {
-                            it.copy(
-                                isLoading              = false,
-                                isCacheLoaded          = true,
-                                featured               = pickFeatured(cached),
-                                feedRows               = buildFeedRows(cached),
-                                isBackgroundRefreshing = false,
-                            )
-                        }
-                        categorySectionsEmitted = true
-                    } else {
-                        // hasCachedData() was true but all sections returned empty —
-                        // orphaned rows from a schema mismatch. Treat as no cache.
-                        _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
-                    }
-                } catch (_: Exception) {
-                    _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
+            if (hasCacheToShow) {
+                categorySections = cached
+                categorySectionsEmitted = true
+                _ui.update {
+                    it.copy(
+                        isLoading              = false,
+                        isCacheLoaded          = true,
+                        error                  = null,
+                        featured               = pickFeatured(cached),
+                        feedRows               = buildFeedRows(cached),
+                        isBackgroundRefreshing = false,
+                    )
                 }
-
-                // ── Phase 1b: genres — parallel, never blocks feed display ────
-                launch {
-                    try {
-                        val genres = repo.getMovieGenres()
-                        if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
-                    } catch (_: Exception) { /* genres stay empty — no genre bar shown */ }
-                }
-
-                // ── Phase 2: check which sections are actually stale ──────────
-                //
-                // ARCHITECTURE CHANGE: replaced the global 2-hour TTL that fired
-                // ALL 21 TMDB calls whenever the cache was >2h old. Every open after
-                // 2 hours would hammer TMDB even though most sections (Action, Comedy,
-                // Top Rated — 72h TTL) hadn't changed at all.
-                //
-                // Now we check per-section TTL (defined on each Section enum entry):
-                //   TRENDING / NEW_RELEASES = 24h
-                //   KDRAMA / ANIME / REGIONAL = 48h
-                //   ACTION / COMEDY / TOP_RATED = 72h
-                //
-                // staleSectionIds() runs 21 parallel Room queries (~5ms total) and
-                // returns ONLY the IDs that have exceeded their own TTL. We pass that
-                // set to streamHomeSections so it skips fresh sections entirely.
-                //
-                // Result: a user who opens the app 3 hours after first launch gets
-                // 0 TMDB calls (nothing is stale at 3h). At 25h they get ~7 calls
-                // (Trending + New Releases batch). At 49h maybe 14. At 73h all 21.
-                // The previous code always did 21 calls after 2h — every single time.
-                val staleIds = try { repo.staleSectionIds() } catch (_: Exception) { emptySet() }
-
-                // Nothing stale and cache was displayed — we're done, no TMDB needed
-                if (staleIds.isEmpty() && categorySectionsEmitted) return@launch
-
-                val showIndicator = staleIds.isNotEmpty()
-                _ui.update { it.copy(isBackgroundRefreshing = showIndicator) }
-
-                // ── Phase 3: refresh ONLY stale sections, merge in-place ──────
-                try {
-                    val accumulated = categorySections.toMutableList()
-                    repo.streamHomeSections(sectionFilter = staleIds.ifEmpty { null }) { batch ->
-                        // Merge new content into existing positions (update, don't reorder)
-                        val byTitle = accumulated.associateBy { it.title }.toMutableMap()
-                        batch.forEach { byTitle[it.title] = it }
-                        val updatedInPlace = accumulated.map { byTitle[it.title] ?: it }
-                        val newSections = batch.filter { new -> accumulated.none { it.title == new.title } }
-                        accumulated.clear()
-                        accumulated.addAll(updatedInPlace + newSections)
-
-                        categorySections = accumulated.toList()
-                        _ui.update {
-                            it.copy(
-                                isLoading              = false,
-                                isCacheLoaded          = true,
-                                isBackgroundRefreshing = showIndicator,
-                                featured               = pickFeatured(accumulated).ifEmpty { it.featured },
-                                feedRows               = buildFeedRows(accumulated),
-                            )
-                        }
-                        categorySectionsEmitted = true
-                    }
-                    _ui.update { it.copy(isBackgroundRefreshing = false) }
-                } catch (_: Exception) {
-                    _ui.update { it.copy(isBackgroundRefreshing = false) }
-                }
-
             } else {
-                // ── No cache: skeleton shows until Batch 1 arrives (~400ms) ───
-                _ui.update { it.copy(isLoading = true, error = null) }
+                // No usable cache — show skeleton while we wait for TMDB
+                _ui.update { it.copy(isLoading = true, isCacheLoaded = false, error = null) }
+            }
 
-                // Genres in parallel — cache-first so instant if previously saved
-                launch {
-                    try {
-                        val genres = repo.getMovieGenres()
-                        if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
-                    } catch (_: Exception) {}
+            // Genres always in parallel — cache-first, never blocks anything
+            launch {
+                runCatching {
+                    val g = repo.getMovieGenres()
+                    if (g.isNotEmpty()) _ui.update { it.copy(genres = g) }
                 }
+            }
 
-                var firstBatch = true
-                try {
-                    val accumulated = mutableListOf<HomeSection>()
-                    repo.streamHomeSections { batch ->
-                        val byTitle = accumulated.associateBy { it.title }.toMutableMap()
-                        batch.forEach { byTitle[it.title] = it }
-                        val orderedTitles = Section.DEFAULT_ORDER.map { it.label }
-                        accumulated.clear()
-                        accumulated.addAll(
-                            orderedTitles.mapNotNull { byTitle[it] } +
-                            byTitle.values.filter { it.title !in orderedTitles }
+            // ── STEP 2: Staleness check (Room only, ~5ms) ─────────────────────────
+            // Which sections have exceeded their per-section TTL?
+            // If we had no cache at all, every section is stale → fetch all.
+            val staleIds: Set<String> = if (!hasCacheToShow) {
+                // No cache → need to fetch everything
+                Section.DEFAULT_ORDER.map { it.id }.toSet()
+            } else {
+                try { repo.staleSectionIds() } catch (_: Exception) { emptySet() }
+            }
+
+            // Cache shown, nothing stale → done, zero TMDB calls
+            if (staleIds.isEmpty()) return@launch
+
+            // Show subtle indicator only when user already sees content (not during skeleton)
+            if (hasCacheToShow) {
+                _ui.update { it.copy(isBackgroundRefreshing = true) }
+            }
+
+            // ── STEP 3: Fetch only stale sections from TMDB ───────────────────────
+            var firstNetworkBatch = true
+            try {
+                val accumulated = categorySections.toMutableList()
+
+                repo.streamHomeSections(sectionFilter = staleIds) { batch ->
+                    val byTitle = accumulated.associateBy { it.title }.toMutableMap()
+                    batch.forEach { byTitle[it.title] = it }
+                    val updatedInPlace = accumulated.map { byTitle[it.title] ?: it }
+                    val newSections   = batch.filter { n -> accumulated.none { it.title == n.title } }
+                    accumulated.clear()
+                    accumulated.addAll(updatedInPlace + newSections)
+                    categorySections = accumulated.toList()
+
+                    _ui.update {
+                        it.copy(
+                            isLoading              = false,
+                            isCacheLoaded          = true,
+                            isBackgroundRefreshing = hasCacheToShow, // keep indicator until all batches done
+                            error                  = null,
+                            featured               = if (firstNetworkBatch || it.featured.isEmpty())
+                                                         pickFeatured(accumulated)
+                                                     else it.featured,
+                            feedRows               = buildFeedRows(accumulated),
                         )
-                        categorySections = accumulated.toList()
-                        _ui.update {
-                            it.copy(
-                                isLoading     = false,
-                                isCacheLoaded = true,
-                                featured      = if (firstBatch) pickFeatured(accumulated)
-                                                else it.featured.ifEmpty { pickFeatured(accumulated) },
-                                feedRows      = buildFeedRows(accumulated),
-                            )
-                        }
-                        firstBatch = false
-                        categorySectionsEmitted = true
                     }
-                } catch (e: Exception) {
-                    if (firstBatch) {
-                        _ui.update { it.copy(isLoading = false, error = friendlyBrowseError(e)) }
+                    firstNetworkBatch = false
+                    categorySectionsEmitted = true
+                }
+                // All done — clear the progress indicator
+                _ui.update { it.copy(isBackgroundRefreshing = false) }
+
+            } catch (e: Exception) {
+                if (hasCacheToShow) {
+                    // Cache is on screen — TMDB failure is silent, just stop the indicator
+                    _ui.update { it.copy(isBackgroundRefreshing = false) }
+                } else {
+                    // Nothing to show — surface the error so user can retry
+                    _ui.update {
+                        it.copy(
+                            isLoading              = false,
+                            isCacheLoaded          = false,
+                            isBackgroundRefreshing = false,
+                            error                  = friendlyBrowseError(e),
+                        )
                     }
                 }
             }
