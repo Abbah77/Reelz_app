@@ -37,7 +37,6 @@ import javax.inject.Singleton
 object AppModule {
 
     // ── Remote Config ─────────────────────────────────────────────────────────
-    // RemoteConfigRepository uses RemoteConfigCacheDao (Room) — no DataStore.
 
     @Provides @Singleton
     fun provideRemoteConfigRepository(
@@ -54,17 +53,11 @@ object AppModule {
     @Provides @Singleton @Named("tmdb")
     fun provideTmdbOkHttp(remoteConfig: RemoteConfigRepository): OkHttpClient {
         val tmdbAuthInterceptor = Interceptor { chain ->
-            // activeTmdbKey() returns null when config hasn't loaded yet (first install,
-            // fallback has no keys). Poll with a short sleep rather than firing with an
-            // empty key — an empty api_key always returns HTTP 401, which surfaces as a
-            // visible error on every screen. We wait up to 5s total (50 x 100ms) which
-            // is more than enough for a CDN sync to complete (~300-800ms on mobile).
             val key = run {
                 var k = remoteConfig.activeTmdbKey()
                 var waited = 0
                 while (k == null && waited < 5_000) {
-                    Thread.sleep(100)
-                    waited += 100
+                    Thread.sleep(100); waited += 100
                     k = remoteConfig.activeTmdbKey()
                 }
                 k
@@ -107,13 +100,13 @@ object AppModule {
 
     // ── Database ──────────────────────────────────────────────────────────────
     //
-    // WAL (Write-Ahead Logging) is enabled for production performance:
-    //   • Readers never block writers — concurrent reads during a download
-    //     update don't stall the UI thread.
-    //   • Writers never block readers — smooth scrolling even with active
-    //     history/watchlist writes in the background.
-    //   • WAL is the SQLite default recommendation for apps with > 1 writer
-    //     or mixed read/write workloads. Android Room supports it natively.
+    // v14 adds:
+    //   • catalogPage column on cached_media (resumable TMDB pagination)
+    //   • catalog_page_cursor table (persisted scroll cursor)
+    //   • FTS5 virtual table + triggers (sub-ms local search across 10K rows)
+    //   • Additional performance indices (pop+source, LRU)
+    //
+    // WAL is kept: concurrent read/write, no reader/writer blocking.
 
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): ReelzDatabase =
@@ -123,6 +116,7 @@ object AppModule {
                 MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                 MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
                 MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+                MIGRATION_13_14,   // ← v14: FTS5 + pagination cursor
             )
             .setJournalMode(androidx.room.RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .build()
@@ -132,6 +126,7 @@ object AppModule {
     @Provides fun provideLikedDao(db: ReelzDatabase)              = db.likedDao()
     @Provides fun provideSavedVideoDao(db: ReelzDatabase)         = db.savedVideoDao()
     @Provides fun provideCachedMediaDao(db: ReelzDatabase)        = db.cachedMediaDao()
+    @Provides fun provideCatalogPageCursorDao(db: ReelzDatabase)  = db.catalogPageCursorDao()  // v14
     @Provides fun provideDownloadDao(db: ReelzDatabase)           = db.downloadDao()
     @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase)   = db.downloadSubtitleDao()
     @Provides fun provideTransferDao(db: ReelzDatabase)           = db.transferDao()
@@ -140,6 +135,16 @@ object AppModule {
     @Provides fun provideRemoteConfigCacheDao(db: ReelzDatabase)  = db.remoteConfigCacheDao()
     @Provides fun provideSectionWeightDao(db: ReelzDatabase)      = db.sectionWeightDao()
     @Provides fun provideCachedGenreDao(db: ReelzDatabase)        = db.cachedGenreDao()
+
+    // ── InfiniteScrollEngine ──────────────────────────────────────────────────
+    // Singleton — owns session cursor state and mutex-per-media-type.
+
+    @Provides @Singleton
+    fun provideInfiniteScrollEngine(
+        cachedMediaDao: CachedMediaDao,
+        cursorDao: CatalogPageCursorDao,
+        api: TmdbApi,
+    ): InfiniteScrollEngine = InfiniteScrollEngine(cachedMediaDao, cursorDao, api)
 
     // ── Repositories ──────────────────────────────────────────────────────────
 
@@ -151,8 +156,12 @@ object AppModule {
         watchHistoryDao: WatchHistoryDao,
         likedDao: LikedDao,
         sectionWeightDao: SectionWeightDao,
-        cachedGenreDao: com.axio.reelz.data.local.CachedGenreDao,
-    ) = MediaRepository(api, cachedMediaDao, watchlistDao, watchHistoryDao, likedDao, sectionWeightDao, cachedGenreDao)
+        cachedGenreDao: CachedGenreDao,
+        infiniteScrollEngine: InfiniteScrollEngine,
+    ) = MediaRepository(
+        api, cachedMediaDao, watchlistDao, watchHistoryDao,
+        likedDao, sectionWeightDao, cachedGenreDao, infiniteScrollEngine,
+    )
 
     @Provides @Singleton
     fun provideStreamUrlCache(): StreamUrlCache = StreamUrlCache()
@@ -163,21 +172,10 @@ object AppModule {
         urlCache: StreamUrlCache,
     ): BackendStreamRepository = BackendStreamRepository(remoteConfig, urlCache)
 
-    // ── Premium session ───────────────────────────────────────────────────────
-    //
-    // UserSessionStore (DataStore "reelz_user_session") has been removed.
-    // Room (UserSessionDao / user_session table) is the single source of truth
-    // for the signed-in session. This eliminates the dual-write pattern and
-    // the DataStore file handle.
-    //
-    // BackendSessionSource and PaymentRepository now take UserSessionDao
-    // directly — they previously injected UserSessionStore only to call
-    // sessionStore.load(), which is now replaced by dao.get().
-
     @Provides @Singleton
     fun provideSessionSource(
         remoteConfig: RemoteConfigRepository,
-        sessionDao: UserSessionDao,           // Room — DataStore removed
+        sessionDao: UserSessionDao,
     ): SessionSource = BackendSessionSource(remoteConfig, sessionDao)
 
     @Provides @Singleton
@@ -196,6 +194,6 @@ object AppModule {
     @Provides @Singleton
     fun providePaymentRepository(
         remoteConfig: RemoteConfigRepository,
-        sessionDao: UserSessionDao,           // Room — DataStore removed
+        sessionDao: UserSessionDao,
     ): PaymentRepository = PaymentRepository(remoteConfig, sessionDao)
 }

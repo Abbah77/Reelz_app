@@ -147,9 +147,14 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
                     .build()
             }
             .diskCache {
+                // ~350MB soft target — Coil's LRU eviction keeps it near this size.
+                // We do NOT hard-stop at exactly 350MB: inserting a new 8MB poster
+                // when at 349MB is fine. Coil evicts older entries back toward the
+                // target automatically. This matches the local-first philosophy:
+                // soft limits with headroom beat hard limits with edge-case crashes.
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(350L * 1024 * 1024)  // 350MB — upgraded from 256MB
+                    .maxSizeBytes(350L * 1024 * 1024)
                     .build()
             }
             .okHttpClient {

@@ -39,6 +39,7 @@ import coil.compose.AsyncImage
 import com.axio.reelz.BuildConfig
 import com.axio.reelz.data.local.WatchlistDao
 import com.axio.reelz.data.model.*
+import com.axio.reelz.data.model.CatalogPage
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.ui.Route
 import com.axio.reelz.ui.components.*
@@ -299,6 +300,7 @@ class BrowseViewModel @Inject constructor(
             infinitePage = 1
             isInfiniteExhausted = false
             categorySectionsEmitted = false
+            repo.resetInfiniteCursor()  // Reset engine session cursor on explicit refresh
 
             // Genres refresh in parallel — don't block the content stream
             launch {
@@ -354,88 +356,75 @@ class BrowseViewModel @Inject constructor(
         viewModelScope.launch {
             _ui.update { it.copy(isLoadingMore = true) }
 
-            // Collect all tmdbIds already shown — across Section rows and InfinitePages
-            val sectionIds = _ui.value.feedRows
-                .filterIsInstance<FeedRow.Section>()
-                .flatMap { it.section.items }.map { it.tmdbId }.toSet()
-            val infiniteIds = _ui.value.feedRows
-                .filterIsInstance<FeedRow.InfinitePage>()
-                .flatMap { it.items }.map { it.tmdbId }.toSet()
-            val existingIds = sectionIds + infiniteIds
+            // Collect all tmdbIds already shown so the engine can dedup
+            val existingIds = _ui.value.feedRows
+                .flatMap { row ->
+                    when (row) {
+                        is FeedRow.Section      -> row.section.items.map { it.tmdbId }
+                        is FeedRow.InfinitePage -> row.items.map { it.tmdbId }
+                        else                    -> emptyList()
+                    }
+                }.toSet()
 
-            // ── Tier 1: Try cache first ─────────────────────────────────────
+            // ── Unified local-first engine ────────────────────────────────────
             //
-            // PAGE SIZE = 10 (not 20) — intentionally smaller so Coil has time
-            // to actually fetch the thumbnails for the current row before the next
-            // row appears. Dumping 20 items instantly floods the image pipeline and
-            // the user sees a wall of placeholders rather than smooth progressive reveal.
+            // The engine handles all three tiers internally:
+            //   Tier 1 → Room cache (0ms, offline-safe, PAGE_SIZE = 12)
+            //   Tier 2 → TMDB with exponential-backoff retry
+            //   Tier 3 → Exhausted (cache empty + network failed/exhausted)
             //
-            // If cache has ≥ 10 unseen items → show them, no TMDB call.
-            // If cache is thinner → fall through to TMDB.
-            val cacheItems = try {
-                repo.getCachePageExcluding(
-                    excludeIds = existingIds,
-                    limit = 10,  // one crisp row — Coil-friendly page size
-                )
-            } catch (_: Exception) { emptyList() }
+            // PAGE_SIZE = 12 is Coil-friendly: images for the current row have
+            // time to load before the next row appears, preventing black-card walls.
+            //
+            // The engine alternates movie/TV pages for variety without any logic
+            // here — callers stay clean. Persisted TMDB cursor means we never
+            // re-fetch pages already seen, even after a cold restart.
+            //
+            // Prefetch: fire ahead-of-time warming 2 pages before we show them.
 
-            if (cacheItems.size >= 10) {
-                val nextPage = infinitePage + 1
-                infinitePage = nextPage
-                val newRow = FeedRow.InfinitePage(cacheItems, nextPage)
-                _ui.update { st -> st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false) }
-                return@launch
-            }
+            val page = repo.getNextInfinitePage(
+                mediaType  = "movie",
+                excludeIds = existingIds,
+            )
 
-            // ── Tier 2: Cache exhausted — call TMDB ─────────────────────────
-            // With exponential-backoff retry to survive rate-limit bursts from
-            // concurrent Home batch calls (40 req/10s TMDB limit per API key).
-            val retryDelaysMs = longArrayOf(0L, 400L, 1200L)
-            var lastException: Exception? = null
-            for (delayMs in retryDelaysMs) {
-                if (delayMs > 0) delay(delayMs)
-                try {
-                    val nextPage = infinitePage + 1
-                    val items: List<Media> = if (nextPage % 2 == 0) {
-                        repo.discoverMovies(genreId = null, page = nextPage)
-                    } else {
-                        repo.discoverTv(genreId = null, page = nextPage)
+            when (page) {
+                is CatalogPage.FromCache, is CatalogPage.FromNetwork -> {
+                    val items = when (page) {
+                        is CatalogPage.FromCache   -> page.items
+                        is CatalogPage.FromNetwork -> page.items
+                        else                       -> emptyList()
+                    }
+                    val pageIndex = when (page) {
+                        is CatalogPage.FromCache   -> page.pageIndex
+                        is CatalogPage.FromNetwork -> page.pageIndex
+                        else                       -> infinitePage + 1
                     }
                     if (items.isEmpty()) {
                         isInfiniteExhausted = true
                         _ui.update { it.copy(isLoadingMore = false) }
                         return@launch
                     }
-                    infinitePage = nextPage
-                    val dedupedItems = items.filter { it.tmdbId !in existingIds }
-                    if (dedupedItems.isEmpty()) {
-                        isInfiniteExhausted = true
-                        _ui.update { it.copy(isLoadingMore = false) }
-                        return@launch
-                    }
-                    val newRow = FeedRow.InfinitePage(dedupedItems, nextPage)
+                    infinitePage = pageIndex
                     _ui.update { st ->
-                        st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false)
+                        st.copy(
+                            feedRows    = st.feedRows + FeedRow.InfinitePage(items, pageIndex),
+                            isLoadingMore = false,
+                        )
                     }
-                    return@launch
-                } catch (e: Exception) {
-                    lastException = e
+                    // Fire prefetch for next 2 pages — warms Room so next scroll is instant
+                    launch {
+                        repo.prefetchAhead(
+                            mediaType  = "movie",
+                            excludeIds = existingIds + items.map { it.tmdbId }.toSet(),
+                        )
+                    }
                 }
-            }
-            // All retries failed: show cache leftovers if any, swallow error silently —
-            // the user sees a subtle skeleton row briefly then the row quietly disappears.
-            // No crash, no error screen, no broken UI.
-            if (cacheItems.isNotEmpty()) {
-                val nextPage = infinitePage + 1
-                infinitePage = nextPage
-                _ui.update { st ->
-                    st.copy(feedRows = st.feedRows + FeedRow.InfinitePage(cacheItems, nextPage), isLoadingMore = false)
+                is CatalogPage.Exhausted -> {
+                    // Cache empty + TMDB failed or has no more pages.
+                    // Mark exhausted so we stop hammering. UI shows nothing new — no crash.
+                    isInfiniteExhausted = true
+                    _ui.update { it.copy(isLoadingMore = false) }
                 }
-            } else {
-                // Silently stop scrolling — network down, cache empty.
-                // isInfiniteExhausted = true so we don't keep hammering.
-                isInfiniteExhausted = true
-                _ui.update { it.copy(isLoadingMore = false) }
             }
         }
     }

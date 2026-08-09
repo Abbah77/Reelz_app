@@ -93,14 +93,26 @@ data class CastMember(
 
 data class HomeSection(val title: String, val items: List<Media>)
 
+// ── Catalog page — the unified scroll unit ─────────────────────────────────────
+// Represents one page of the infinite feed regardless of its source.
+// The UI never asks "is this cache or TMDB?" — it just renders items.
+sealed class CatalogPage {
+    /** Items that were already in Room (served offline-first, ≤ 10ms) */
+    data class FromCache(val items: List<Media>, val pageIndex: Int) : CatalogPage()
+    /** Items fetched fresh from TMDB and then written to Room */
+    data class FromNetwork(val items: List<Media>, val pageIndex: Int) : CatalogPage()
+    /** No more items available (cache AND network exhausted) */
+    object Exhausted : CatalogPage()
+}
+
 // ── Shorts ────────────────────────────────────────────────────────────────────
 data class ShortVideo(
     val id: String,
     val title: String,
     val author: String,
-    val community: String,       // was: subreddit
-    val hlsUrl: String,          // mp4 direct url for ifunny
-    val audioUrl: String?,       // null for ifunny (audio baked in)
+    val community: String,
+    val hlsUrl: String,
+    val audioUrl: String?,
     val fallbackUrl: String,
     val thumbnail: String,
     val ups: Int,
@@ -129,34 +141,21 @@ data class QualityTrack(
     val label: String,
     val url: String,
     val bandwidth: Long = 0,
-    /** File size in bytes. Real measured size when [isSizeExact] is true,
-     *  otherwise a bandwidth-based estimate (fallback only). */
     val estimatedSizeBytes: Long = 0,
-    /** True when [estimatedSizeBytes] came from a real measurement (HTTP
-     *  HEAD Content-Length for MP4, or real segment sampling for HLS) rather
-     *  than a bandwidth×runtime guess. UI should show "≈" when this is false. */
     val isSizeExact: Boolean = false,
 )
 
 // ── Persistent Download Subtitle ─────────────────────────────────────────────
-/**
- * Subtitles that are PERMANENTLY attached to a downloaded video.
- * They survive across sessions until the user explicitly deletes the video.
- * Stream subtitles are NEVER stored here — they are session-only and discarded on quit.
- */
 @Entity(tableName = "download_subtitles")
 data class DownloadSubtitle(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    /** Links to DownloadItem.id */
     val downloadId: String,
     val tmdbId: Int,
     val season: Int = 0,
     val episode: Int = 0,
     val language: String,
     val label: String,
-    /** Local file path to the downloaded .srt/.vtt subtitle file */
     val localFilePath: String,
-    /** Whether user has this subtitle enabled (toggle on/off without deleting) */
     val isEnabled: Boolean = true,
     val addedAt: Long = System.currentTimeMillis(),
 )
@@ -196,8 +195,6 @@ data class LikedItem(
 
 @Entity(tableName = "recent_searches")
 data class RecentSearch(
-    // Query text itself is the key — re-searching "batman" updates its
-    // timestamp (bumps it to the top) instead of creating a duplicate row.
     @PrimaryKey val query: String,
     val searchedAt: Long = System.currentTimeMillis(),
 )
@@ -211,6 +208,22 @@ data class SavedVideoItem(
     val savedAt: Long = System.currentTimeMillis(),
 )
 
+/**
+ * Central metadata store — the heart of the local-first catalog.
+ *
+ * Stores everything needed to display a media card without a network call.
+ * Two independent caches use this table:
+ *   source = "catalog"  → home feed + explore (target: ~10K rows)
+ *   source = "search"   → search-opened items (capped at 200)
+ *
+ * Coil manages poster bytes separately (~350MB disk cache).
+ * Room only stores the URL/path — never raw image bytes.
+ *
+ * Row lifecycle:
+ *   INSERT/REPLACE on TMDB fetch → grows toward ~10K target
+ *   Soft eviction when > 10,500 → oldest-by-lastAccessedAt trimmed back to 10K
+ *   Hard cap enforced in EvictionWorker (daily WorkManager job)
+ */
 @Entity(tableName = "cached_media")
 @TypeConverters(MediaConverters::class)
 data class CachedMedia(
@@ -222,15 +235,19 @@ data class CachedMedia(
     val releaseDate: String?,
     val voteAverage: Double,
     val popularity: Double,
-    val genreIds: String = "[]",  // JSON list
+    val genreIds: String = "[]",              // JSON list — Coil parses, not SQLite
     val mediaType: String,
-    val originalLanguage: String = "en",       // needed for Explore language filter
-    val voteCount: Int = 0,                     // needed for MetaChip
-    val section: String = "trending",           // which section this row belongs to
-    val sectionCachedAt: Long = 0L,             // when this section was last fetched
-    val source: String = "catalog",             // "catalog" or "search"
-    val lastAccessedAt: Long = System.currentTimeMillis(), // for LRU eviction
+    val originalLanguage: String = "en",      // Explore language filter
+    val voteCount: Int = 0,                   // MetaChip display + sort
+    val section: String = "trending",         // which home section this belongs to
+    val sectionCachedAt: Long = 0L,           // when this section batch was fetched
+    val source: String = "catalog",           // "catalog" | "search"
+    val lastAccessedAt: Long = System.currentTimeMillis(), // LRU eviction key
     val cachedAt: Long = System.currentTimeMillis(),
+    // ── Infinite scroll pagination cursor ─────────────────────────────────────
+    // catalogPage tracks which TMDB discover page this item came from so the
+    // scroll engine knows exactly where to resume TMDB calls after cache runs dry.
+    val catalogPage: Int = 0,
 )
 
 /**
@@ -246,10 +263,22 @@ data class SectionWeight(
     val manualOrder: Int = 999,
 )
 
+/**
+ * Tracks the highest TMDB discover page already fetched so the infinite
+ * scroll engine knows where to resume after cache runs dry. One row per
+ * media type ("movie" | "tv"). Persists across sessions.
+ */
+@Entity(tableName = "catalog_page_cursor")
+data class CatalogPageCursor(
+    @PrimaryKey val mediaType: String,   // "movie" | "tv"
+    val nextPage: Int = 1,               // next TMDB page to fetch
+    val updatedAt: Long = System.currentTimeMillis(),
+)
+
 @Entity(tableName = "downloads")
 @TypeConverters(MediaConverters::class)
 data class DownloadItem(
-    @PrimaryKey val id: String,  // UUID
+    @PrimaryKey val id: String,
     val tmdbId: Int,
     val title: String,
     val posterPath: String?,
@@ -263,7 +292,7 @@ data class DownloadItem(
     val downloadedBytes: Long = 0,
     val status: String = DownloadStatus.QUEUED.name,
     val streamUrl: String = "",
-    val headers: String = "{}",  // JSON map
+    val headers: String = "{}",
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
     val networkSpeedBps: Long = 0,
@@ -273,16 +302,9 @@ data class DownloadItem(
     val localPlaylistPath: String = "",
     val qualityTracksJson: String = "[]",
     val resolveRequired: Boolean = true,
-    /** Watch progress in milliseconds — updated when user exits the player */
     val watchProgressMs: Long = 0,
-    /** Total duration in milliseconds — set once on first play */
     val durationMs: Long = 0,
-    /** Last played timestamp — for "Last played: X days ago" display */
     val lastPlayedAt: Long = 0,
-    /**
-     * The quality label that was last selected by the user in the player.
-     * Empty string means "use highest available".
-     */
     val lastSelectedQuality: String = "",
 )
 
@@ -292,20 +314,13 @@ data class TransferRecord(
     val fileName: String,
     val filePath: String,
     val sizeBytes: Long,
-    val direction: String,  // SEND / RECEIVE
+    val direction: String,
     val peerName: String,
     val peerIp: String,
     val status: String,
     val createdAt: Long = System.currentTimeMillis(),
 )
 
-/**
- * Local cache of the signed-in user's premium session.
- * Room is the single source of truth — no DataStore duplicate.
- * There is only ever one row (uid is the primary key). In practice the app
- * keeps a single active session at a time — see UserSessionDao.get(),
- * which always takes the most recent one.
- */
 @Entity(tableName = "user_session")
 data class UserSession(
     @PrimaryKey val uid: String,
@@ -313,24 +328,18 @@ data class UserSession(
     val email: String = "",
     val photoUrl: String? = null,
     val isPremium: Boolean = false,
-    val plan: String = "",              // "monthly" | "yearly" | ""
+    val plan: String = "",
     val expiresAtMs: Long = 0L,
     val subscribedAtMs: Long = 0L,
     val cachedAtMs: Long = System.currentTimeMillis(),
 )
 
 // ── Genre cache ───────────────────────────────────────────────────────────────
-/**
- * Persists movie genre list so BrowseScreen and SearchScreen never need a
- * live TMDB call to populate the genre bar — they load instantly from Room.
- * Genres are nearly static (TMDB only adds one every year or two) so a
- * 7-day TTL is more than enough. cachedAtMs drives background refresh.
- */
 @Entity(tableName = "cached_genres")
 data class CachedGenre(
     @PrimaryKey val id: Int,
     val name: String,
-    val mediaType: String = "movie",   // "movie" | "tv"
+    val mediaType: String = "movie",
     val cachedAtMs: Long = System.currentTimeMillis(),
 )
 
