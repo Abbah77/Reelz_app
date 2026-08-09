@@ -21,6 +21,7 @@ import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.QualityTrack
+import com.axio.reelz.data.model.fromJsonSafe
 // NativeBridge removed — M3U8 parsing now pure Kotlin
 import com.axio.reelz.stream.BackendStreamRepository
 import dagger.hilt.android.AndroidEntryPoint
