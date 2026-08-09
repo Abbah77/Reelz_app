@@ -115,19 +115,11 @@ interface CachedMediaDao {
     """)
     suspend fun getPopularPage(limit: Int, offset: Int): List<CachedMedia>
 
-    // ── Search — FTS-backed fast text search ──────────────────────────────────
-    // Uses the fts_cached_media virtual table for sub-millisecond text search
-    // across all 10K rows with MATCH syntax.
-    @Query("""
-        SELECT cm.* FROM cached_media cm
-        INNER JOIN fts_cached_media fts ON cm.tmdbId = fts.rowid
-        WHERE fts_cached_media MATCH :query
-        ORDER BY cm.popularity DESC
-        LIMIT :limit
-    """)
-    suspend fun searchFts(query: String, limit: Int = 40): List<CachedMedia>
-
-    // Fallback LIKE search when FTS is unavailable
+    // ── Search — LIKE fallback (Room-validated, always compiles) ─────────────
+    // FTS5 queries cannot use @Query — Room KSP validates SQL at compile time
+    // against the static schema, which does not include virtual tables like
+    // fts_cached_media (those only exist at runtime after migration runs).
+    // FTS5 is executed via raw SupportSQLiteDatabase in LocalSearchHelper.
     @Query("""
         SELECT * FROM cached_media
         WHERE title LIKE '%' || :query || '%'

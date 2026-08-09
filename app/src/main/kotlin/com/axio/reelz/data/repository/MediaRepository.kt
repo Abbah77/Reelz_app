@@ -29,6 +29,7 @@ class MediaRepository @Inject constructor(
     private val sectionWeightDao: SectionWeightDao,
     private val cachedGenreDao: CachedGenreDao,
     private val infiniteScrollEngine: InfiniteScrollEngine,
+    private val localSearchHelper: LocalSearchHelper,
 ) {
 
     // ── Detail memory cache (session-only, 12h TTL, 50 entries) ──────────────
@@ -281,33 +282,15 @@ class MediaRepository @Inject constructor(
     // ── Search — local-first, FTS5-powered ───────────────────────────────────
 
     /**
-     * Local-first search against the Room FTS5 index.
+     * Local-first search via FTS5 (executed through LocalSearchHelper to bypass
+     * Room KSP compile-time validation of virtual table queries).
      *
-     * Returns results in < 5ms for any query against the full 10K cache.
-     * Works completely offline. Called immediately on each keystroke (after debounce).
-     *
-     * FTS5 MATCH syntax:
-     *   "batman"   → all forms of "batman" (case-insensitive, diacritic-folded)
-     *   "the bat*" → prefix search (the bat, batman, batmobile…)
-     *
-     * We build a safe MATCH query: each word gets prefix wildcard so partial
-     * typing ("bat" matches "batman") feels instant and responsive.
+     * Returns results in < 5ms against the full 10K cache. Works offline.
+     * Falls back to LIKE search automatically if FTS5 isn't ready yet.
      */
     suspend fun searchLocal(query: String, limit: Int = 40): List<Media> {
         if (query.isBlank()) return emptyList()
-
-        // Build FTS5-safe MATCH query: "bat man" → "bat* man*"
-        val matchQuery = query.trim()
-            .split("\\s+".toRegex())
-            .filter { it.isNotBlank() }
-            .joinToString(" ") { "${it.replace("\"", "")}*" }
-
-        return try {
-            cachedMediaDao.searchFts(matchQuery, limit).map { it.toMedia() }
-        } catch (_: Exception) {
-            // FTS unavailable (e.g. new install before migration) — fallback to LIKE
-            cachedMediaDao.searchLike(query.trim(), limit).map { it.toMedia() }
-        }
+        return localSearchHelper.search(query, limit).map { it.toMedia() }
     }
 
     /**

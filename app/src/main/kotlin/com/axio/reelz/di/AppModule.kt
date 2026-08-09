@@ -146,6 +146,16 @@ object AppModule {
         api: TmdbApi,
     ): InfiniteScrollEngine = InfiniteScrollEngine(cachedMediaDao, cursorDao, api)
 
+    // ── LocalSearchHelper ─────────────────────────────────────────────────────
+    // Executes FTS5 queries via raw SupportSQLiteDatabase — bypasses Room KSP
+    // validation which rejects @Query on virtual tables at compile time.
+
+    @Provides @Singleton
+    fun provideLocalSearchHelper(
+        db: ReelzDatabase,
+        dao: CachedMediaDao,
+    ): LocalSearchHelper = LocalSearchHelper(db, dao)
+
     // ── Repositories ──────────────────────────────────────────────────────────
 
     @Provides @Singleton
@@ -158,9 +168,11 @@ object AppModule {
         sectionWeightDao: SectionWeightDao,
         cachedGenreDao: CachedGenreDao,
         infiniteScrollEngine: InfiniteScrollEngine,
+        localSearchHelper: LocalSearchHelper,
     ) = MediaRepository(
         api, cachedMediaDao, watchlistDao, watchHistoryDao,
         likedDao, sectionWeightDao, cachedGenreDao, infiniteScrollEngine,
+        localSearchHelper,
     )
 
     @Provides @Singleton
