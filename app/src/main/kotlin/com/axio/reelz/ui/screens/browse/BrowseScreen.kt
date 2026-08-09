@@ -406,6 +406,14 @@ class BrowseViewModel @Inject constructor(
                     }
                     infinitePage = pageIndex
                     _ui.update { st ->
+                        // Guard against duplicate pageIndex (can happen when cache and
+                        // network both return the same page, or rapid scroll triggers
+                        // two concurrent loads). Duplicate pages cause identical
+                        // LazyColumn keys → IllegalArgumentException crash.
+                        val alreadyPresent = st.feedRows.any {
+                            it is FeedRow.InfinitePage && it.page == pageIndex
+                        }
+                        if (alreadyPresent) return@update st.copy(isLoadingMore = false)
                         st.copy(
                             feedRows    = st.feedRows + FeedRow.InfinitePage(items, pageIndex),
                             isLoadingMore = false,
@@ -760,13 +768,17 @@ val d = LocalDimensions.current
                                 }
                                 is FeedRow.InfinitePage -> {
                                     val label = if (row.page % 2 == 0) "More Movies" else "More Series"
-                                    item(key = "inf_hdr_${row.page}") { SectionHeader(label, "") }
-                                    item(key = "inf_row_${row.page}") {
+                                    // Use feedRowIdx (stable list position) as the key, not row.page,
+                                    // because the engine can return the same pageIndex twice (cache hit
+                                    // then network hit on same page), which produces duplicate keys and
+                                    // crashes with IllegalArgumentException.
+                                    item(key = "inf_hdr_$feedRowIdx") { SectionHeader(label, "") }
+                                    item(key = "inf_row_$feedRowIdx") {
                                         LazyRow(
                                             contentPadding = PaddingValues(horizontal = d.screenHorizPad),
                                             horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                                         ) {
-                                            items(row.items, key = { "${row.page}_${it.tmdbId}" }) { m ->
+                                            items(row.items, key = { "${feedRowIdx}_${it.tmdbId}" }) { m ->
                                                 MediaRowCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
                                             }
                                         }
