@@ -2,7 +2,6 @@ package com.axio.reelz.data.repository
 
 import android.content.Context
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.axio.reelz.data.local.DownloadDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.service.DownloadService

@@ -35,6 +35,11 @@
 -keepclassmembers class * {
     @com.google.gson.annotations.SerializedName <fields>;
 }
+# TypeToken: preserve generic signatures on all anonymous subclasses so R8
+# does not strip the type argument — fixes "TypeToken must be created with a
+# type argument" IllegalStateException in release builds (Gson 2.10+).
+-keep class com.google.gson.reflect.TypeToken { *; }
+-keep class * extends com.google.gson.reflect.TypeToken
 
 # ── Media3 / ExoPlayer ────────────────────────────────────────────────────────
 -keep class androidx.media3.** { *; }

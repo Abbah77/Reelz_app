@@ -7,6 +7,14 @@ import androidx.room.TypeConverters
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
+// ── Gson helpers (R8-safe) ────────────────────────────────────────────────────
+// Using inline reified so the TypeToken subclass is materialized at each
+// call-site during compilation, rather than as an anonymous inner class whose
+// generic signature R8 might erase in release builds.
+internal inline fun <reified T> Gson.fromJsonSafe(json: String?): T? =
+    if (json.isNullOrBlank()) null
+    else fromJson(json, object : TypeToken<T>() {}.type)
+
 // ── Enums ─────────────────────────────────────────────────────────────────────
 enum class MediaType   { MOVIE, TV }
 enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
@@ -348,10 +356,8 @@ class MediaConverters {
     private val gson = Gson()
     @TypeConverter fun fromIntList(v: List<Int>?): String = gson.toJson(v ?: emptyList<Int>())
     @TypeConverter fun toIntList(v: String?): List<Int> =
-        if (v.isNullOrBlank()) emptyList()
-        else gson.fromJson(v, object : TypeToken<List<Int>>() {}.type)
+        gson.fromJsonSafe<List<Int>>(v) ?: emptyList()
     @TypeConverter fun fromMap(v: Map<String, String>?): String = gson.toJson(v ?: emptyMap<String,String>())
     @TypeConverter fun toMap(v: String?): Map<String, String> =
-        if (v.isNullOrBlank()) emptyMap()
-        else gson.fromJson(v, object : TypeToken<Map<String, String>>() {}.type)
+        gson.fromJsonSafe<Map<String, String>>(v) ?: emptyMap()
 }

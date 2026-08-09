@@ -6,7 +6,6 @@ import com.axio.reelz.data.model.*
 import com.axio.reelz.data.remote.api.TmdbApi
 import com.axio.reelz.data.remote.dto.*
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -252,7 +251,7 @@ class MediaRepository @Inject constructor(
         if (genreIds.isNotEmpty()) {
             rows = rows.filter { cached ->
                 val ids: List<Int> = try {
-                    Gson().fromJson(cached.genreIds, object : TypeToken<List<Int>>() {}.type) ?: emptyList()
+                    Gson().fromJsonSafe<List<Int>>(cached.genreIds) ?: emptyList()
                 } catch (_: Exception) { emptyList() }
                 ids.any { it in genreIds }
             }
@@ -622,7 +621,7 @@ fun CachedMedia.toMedia() = Media(
     releaseDate = releaseDate, voteAverage = voteAverage,
     voteCount = voteCount,
     popularity = popularity,
-    genreIds = Gson().fromJson(genreIds, object : TypeToken<List<Int>>() {}.type) ?: emptyList(),
+    genreIds = Gson().fromJsonSafe<List<Int>>(genreIds) ?: emptyList(),
     mediaType = if (mediaType == "TV") MediaType.TV else MediaType.MOVIE,
     originalLanguage = originalLanguage,
 )

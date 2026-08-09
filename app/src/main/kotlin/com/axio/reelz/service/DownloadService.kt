@@ -14,7 +14,6 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.axio.reelz.data.local.DownloadDao
 import com.axio.reelz.data.local.DownloadMetadataWriter
 import com.axio.reelz.data.local.DownloadPaths
@@ -835,7 +834,7 @@ class DownloadService : Service() {
         } catch (_: Exception) { emptyMap() }
 
     private fun parseQualityTracks(json: String): List<QualityTrack> =
-        try { gson.fromJson(json, object : com.google.gson.reflect.TypeToken<List<QualityTrack>>() {}.type) }
+        try { gson.fromJsonSafe<List<QualityTrack>>(json) ?: emptyList() }
         catch (_: Exception) { emptyList() }
 
     private fun fetchText(url: String, headers: Map<String, String>): String {
