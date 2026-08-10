@@ -5,21 +5,16 @@ import androidx.room.Room
 import com.google.gson.Gson
 import com.axio.reelz.data.local.*
 import com.axio.reelz.data.remote.api.TmdbApi
-import com.axio.reelz.data.remote.api.OpenSubtitlesApi
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.data.repository.BackendAuthRepository
 import com.axio.reelz.data.repository.BackendSessionSource
-import com.axio.reelz.data.repository.ManualGrantSessionSource
-import com.axio.reelz.data.repository.OpenSubtitlesRepository
 import com.axio.reelz.data.repository.PaymentRepository
 import com.axio.reelz.data.repository.SessionSource
 import com.axio.reelz.data.repository.UserSessionRepository
 import com.axio.reelz.remoteconfig.PremiumGate
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
-import com.axio.reelz.scanner.DirectScanner
-import com.axio.reelz.scanner.SourceRegistry
-import com.axio.reelz.scanner.StreamEngine
-import com.axio.reelz.scanner.StreamResultCache
+import com.axio.reelz.stream.BackendStreamRepository
+import com.axio.reelz.stream.StreamUrlCache
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -41,44 +36,21 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object AppModule {
 
-    // ── Source health / stats ────────────────────────────────────────────────
-    // Was previously missing entirely: SourceStatsTracker existed in the
-    // codebase (persistent per-source success/failure + timing stats) but
-    // had no @Provides for the bare SharedPreferences its constructor
-    // needs, and was never called anywhere — so it could not even be
-    // constructed by Hilt, let alone used. This provider plus the wiring
-    // in SourceRegistry/StreamEngine are what actually activate it.
-    @Provides @Singleton @Named("sourceStats")
-    fun provideSourceStatsPrefs(
-        @ApplicationContext ctx: Context,
-    ): android.content.SharedPreferences =
-        ctx.getSharedPreferences("reelz_source_stats", Context.MODE_PRIVATE)
-
     // ── Remote Config ─────────────────────────────────────────────────────────
+    // RemoteConfigRepository uses RemoteConfigCacheDao (Room) — no DataStore.
 
     @Provides @Singleton
     fun provideRemoteConfigRepository(
-        @ApplicationContext ctx: Context,
+        cacheDao: RemoteConfigCacheDao,
         gson: Gson,
-    ): RemoteConfigRepository = RemoteConfigRepository(ctx, gson)
+    ): RemoteConfigRepository = RemoteConfigRepository(cacheDao, gson)
 
     @Provides @Singleton
     fun providePremiumGate(remoteConfig: RemoteConfigRepository): PremiumGate =
         PremiumGate(remoteConfig)
 
-    @Provides @Singleton
-    fun provideSourceRegistry(
-        remoteConfig: RemoteConfigRepository,
-        stats: com.axio.reelz.scanner.SourceStatsTracker,
-    ): SourceRegistry =
-        SourceRegistry(remoteConfig, stats)
-
     // ── OkHttp clients ────────────────────────────────────────────────────────
 
-    /**
-     * TMDB client — API key is now resolved dynamically from remote config.
-     * The interceptor reads the live key on every request so key rotation is instant.
-     */
     @Provides @Singleton @Named("tmdb")
     fun provideTmdbOkHttp(remoteConfig: RemoteConfigRepository): OkHttpClient {
         val tmdbAuthInterceptor = Interceptor { chain ->
@@ -119,23 +91,37 @@ object AppModule {
     fun provideTmdbApi(retrofit: Retrofit): TmdbApi = retrofit.create(TmdbApi::class.java)
 
     // ── Database ──────────────────────────────────────────────────────────────
+    //
+    // WAL (Write-Ahead Logging) is enabled for production performance:
+    //   • Readers never block writers — concurrent reads during a download
+    //     update don't stall the UI thread.
+    //   • Writers never block readers — smooth scrolling even with active
+    //     history/watchlist writes in the background.
+    //   • WAL is the SQLite default recommendation for apps with > 1 writer
+    //     or mixed read/write workloads. Android Room supports it natively.
 
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): ReelzDatabase =
         Room.databaseBuilder(ctx, ReelzDatabase::class.java, "reelz.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            .addMigrations(
+                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
+                MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+            )
+            .setJournalMode(androidx.room.RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .build()
 
-    @Provides fun provideWatchlistDao(db: ReelzDatabase)        = db.watchlistDao()
-    @Provides fun provideWatchHistoryDao(db: ReelzDatabase)     = db.watchHistoryDao()
-    @Provides fun provideLikedDao(db: ReelzDatabase)            = db.likedDao()
-    @Provides fun provideSavedVideoDao(db: ReelzDatabase)       = db.savedVideoDao()
-    @Provides fun provideCachedMediaDao(db: ReelzDatabase)      = db.cachedMediaDao()
-    @Provides fun provideDownloadDao(db: ReelzDatabase)         = db.downloadDao()
-    @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase) = db.downloadSubtitleDao()
-    @Provides fun provideTransferDao(db: ReelzDatabase)         = db.transferDao()
-    @Provides fun provideUserSessionDao(db: ReelzDatabase)      = db.userSessionDao()
-    @Provides fun provideRecentSearchDao(db: ReelzDatabase)     = db.recentSearchDao()
+    @Provides fun provideWatchlistDao(db: ReelzDatabase)          = db.watchlistDao()
+    @Provides fun provideWatchHistoryDao(db: ReelzDatabase)       = db.watchHistoryDao()
+    @Provides fun provideLikedDao(db: ReelzDatabase)              = db.likedDao()
+    @Provides fun provideSavedVideoDao(db: ReelzDatabase)         = db.savedVideoDao()
+    @Provides fun provideCachedMediaDao(db: ReelzDatabase)        = db.cachedMediaDao()
+    @Provides fun provideDownloadDao(db: ReelzDatabase)           = db.downloadDao()
+    @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase)   = db.downloadSubtitleDao()
+    @Provides fun provideTransferDao(db: ReelzDatabase)           = db.transferDao()
+    @Provides fun provideUserSessionDao(db: ReelzDatabase)        = db.userSessionDao()
+    @Provides fun provideRecentSearchDao(db: ReelzDatabase)       = db.recentSearchDao()
+    @Provides fun provideRemoteConfigCacheDao(db: ReelzDatabase)  = db.remoteConfigCacheDao()
 
     // ── Repositories ──────────────────────────────────────────────────────────
 
@@ -148,71 +134,31 @@ object AppModule {
         likedDao: LikedDao,
     ) = MediaRepository(api, cachedMediaDao, watchlistDao, watchHistoryDao, likedDao)
 
-    // ── Stream engine ─────────────────────────────────────────────────────────
+    @Provides @Singleton
+    fun provideStreamUrlCache(): StreamUrlCache = StreamUrlCache()
 
     @Provides @Singleton
-    fun provideStreamResultCache() = StreamResultCache()
-
-    @Provides @Singleton
-    fun provideStreamEngine(
-        @ApplicationContext ctx: Context,
-        directScanner: DirectScanner,
-        cache: StreamResultCache,
-        sourceRegistry: SourceRegistry,
-        stats: com.axio.reelz.scanner.SourceStatsTracker,
-    ) = StreamEngine(ctx, directScanner, cache, sourceRegistry, stats)
-
-    // ── OpenSubtitles ─────────────────────────────────────────────────────────
-
-    /**
-     * API key resolved at injection time from remote config.
-     * Falls back to the compile-time key if remote config hasn't loaded yet.
-     */
-    @Provides @Singleton @Named("osApiKey")
-    fun provideOsApiKey(remoteConfig: RemoteConfigRepository): String =
-        remoteConfig.activeOsKey().orEmpty()
-
-    @Provides @Singleton @Named("osUserAgent")
-    fun provideOsUserAgent(): String = "Reelz v2.0"
-
-    @Provides @Singleton @Named("opensubtitles")
-    fun provideOsOkHttp(): OkHttpClient = OkHttpClient.Builder()
-        .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
-
-    @Provides @Singleton
-    fun provideOpenSubtitlesApi(@Named("opensubtitles") client: OkHttpClient): OpenSubtitlesApi =
-        Retrofit.Builder()
-            .baseUrl("https://api.opensubtitles.com/api/v1/")
-            .client(client)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(OpenSubtitlesApi::class.java)
-
-    @Provides @Singleton
-    fun provideOpenSubtitlesRepository(
-        api: OpenSubtitlesApi,
-        @Named("osApiKey") apiKey: String,
-        @Named("osUserAgent") userAgent: String,
-    ) = OpenSubtitlesRepository(api, apiKey, userAgent)
+    fun provideBackendStreamRepository(
+        remoteConfig: RemoteConfigRepository,
+        urlCache: StreamUrlCache,
+    ): BackendStreamRepository = BackendStreamRepository(remoteConfig, urlCache)
 
     // ── Premium session ───────────────────────────────────────────────────────
+    //
+    // UserSessionStore (DataStore "reelz_user_session") has been removed.
+    // Room (UserSessionDao / user_session table) is the single source of truth
+    // for the signed-in session. This eliminates the dual-write pattern and
+    // the DataStore file handle.
+    //
+    // BackendSessionSource and PaymentRepository now take UserSessionDao
+    // directly — they previously injected UserSessionStore only to call
+    // sessionStore.load(), which is now replaced by dao.get().
 
-    /**
-     * Production: BackendSessionSource — talks to the FastAPI backend on Render.
-     * Falls back to local cache (24 h TTL). If backend is unreachable, returns
-     * null and PremiumGate defaults to FREE (Rule 6: fail safe).
-     *
-     * To revert to the no-backend flow during development, swap this for:
-     *   ManualGrantSessionSource(remoteConfig)
-     */
     @Provides @Singleton
     fun provideSessionSource(
         remoteConfig: RemoteConfigRepository,
-        store: UserSessionStore,
-    ): SessionSource = BackendSessionSource(remoteConfig, store)
+        sessionDao: UserSessionDao,           // Room — DataStore removed
+    ): SessionSource = BackendSessionSource(remoteConfig, sessionDao)
 
     @Provides @Singleton
     fun provideBackendAuthRepository(
@@ -221,16 +167,15 @@ object AppModule {
 
     @Provides @Singleton
     fun provideUserSessionRepository(
-        store: UserSessionStore,
         dao: UserSessionDao,
         sessionSource: SessionSource,
         backendAuth: BackendAuthRepository,
         premiumGate: PremiumGate,
-    ): UserSessionRepository = UserSessionRepository(store, dao, sessionSource, backendAuth, premiumGate)
+    ): UserSessionRepository = UserSessionRepository(dao, sessionSource, backendAuth, premiumGate)
 
     @Provides @Singleton
     fun providePaymentRepository(
         remoteConfig: RemoteConfigRepository,
-        store: UserSessionStore,
-    ): PaymentRepository = PaymentRepository(remoteConfig, store)
+        sessionDao: UserSessionDao,           // Room — DataStore removed
+    ): PaymentRepository = PaymentRepository(remoteConfig, sessionDao)
 }

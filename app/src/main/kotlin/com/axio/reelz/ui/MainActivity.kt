@@ -82,7 +82,7 @@ class MainActivity : ComponentActivity() {
 
                 when (readiness) {
 
-                    // ── Still reading DataStore — show nothing (splash is still up) ──
+                    // ── Still reading Room config cache — show nothing (splash is still up) ──
                     ConfigReadiness.LOADING -> {
                         Box(Modifier.fillMaxSize().background(Bg))
                     }

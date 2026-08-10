@@ -15,7 +15,7 @@ import com.axio.reelz.data.repository.UserSessionRepository
 import com.axio.reelz.remoteconfig.ConfigSyncWorker
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
 import com.axio.reelz.ads.AdEngine
-import com.axio.reelz.scanner.WebViewScanner
+// WebViewScanner removed
 import com.axio.reelz.service.DownloadService
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import dagger.hilt.android.HiltAndroidApp
@@ -54,13 +54,8 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
 
-        // Cap concurrent WebView scans to 1 on low-RAM devices — this was
-        // previously declared in WebViewScanner but never actually called,
-        // so every device (regardless of RAM) was running the default of
-        // 2 concurrent WebView instances during source resolution.
-        val activityManager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
-        val isLowRam = activityManager?.isLowRamDevice == true
-        WebViewScanner.setMaxConcurrentScans(if (isLowRam) 1 else 2)
+        // WebView scanner removed — stream resolution is now server-side.
+        // No concurrent WebView management needed.
 
         // Crashlytics auto-initializes from google-services.json, but tagging
         // the app version as a custom key makes it possible to tell "which
@@ -81,6 +76,10 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
             // AdEngine itself checks ads.enabled and the AppLovin SDK key,
             // so this is a safe no-op until both are configured.
             adEngine.initialize(this@ReelzApp)
+
+            // Warm up ad frequency counters from DataStore so caps survive
+            // cold starts. Must come after initialize() so the engine is ready.
+            adEngine.loadPersistedCounters()
 
             // Load any previously cached premium session — instant, local only.
             // PremiumGate is ready with the correct state before any screen renders.

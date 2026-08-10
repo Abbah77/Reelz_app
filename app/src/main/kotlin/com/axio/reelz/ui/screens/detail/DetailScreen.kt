@@ -41,8 +41,7 @@ import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.remoteconfig.PremiumGate
-import com.axio.reelz.scanner.NativeBridge
-import com.axio.reelz.scanner.StreamEngine
+import com.axio.reelz.stream.BackendStreamRepository
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.downloads.formatSize
 import com.axio.reelz.ui.screens.player.PlayerActivity
@@ -120,7 +119,7 @@ class DetailViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val downloadRepo: DownloadRepository,
     private val downloadDao: DownloadDao,
-    private val engine: StreamEngine,
+    private val streamRepo: BackendStreamRepository,
     private val adEngine: com.axio.reelz.ads.AdEngine,
     private val premiumGate: PremiumGate,
     @javax.inject.Named("download") private val httpClient: okhttp3.OkHttpClient,
@@ -138,6 +137,7 @@ class DetailViewModel @Inject constructor(
         // Download sheet state
         val showDownloadSheet: Boolean = false,
         val downloadQualities: List<QualityTrack> = emptyList(),
+        val alreadyDownloadedQualities: Set<String> = emptySet(),
         val isResolvingQualities: Boolean = false,
         val downloadEnqueued: Boolean = false,
         /**
@@ -169,6 +169,12 @@ class DetailViewModel @Inject constructor(
         val showDownloadCapSheet: Boolean = false,
         /** True when a free user tapped a quality above their tier's resolution cap. */
         val showResolutionLockSheet: Boolean = false,
+        /**
+         * Set of keys ("tmdbId_season_episode" or "tmdbId_0_0" for movies)
+         * that already have a non-ERROR download. Used to show IconDownloaded
+         * instead of IconDownloadCloud on the episode/movie download button.
+         */
+        val downloadedKeys: Set<String> = emptySet(),
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -180,7 +186,6 @@ class DetailViewModel @Inject constructor(
      * UPGRADE P1: Cached stream result from the first resolve() call in openDownloadSheet().
      * Reused in enqueueDownload() to eliminate the duplicate engine.resolve() call.
      */
-    private var cachedStreamResult: com.axio.reelz.data.model.StreamResult? = null
 
     /**
      * Per-label stream mapping (label -> the StreamResult/source that actually
@@ -191,15 +196,9 @@ class DetailViewModel @Inject constructor(
      * wasn't the most recently discovered one. Cleared/rebuilt each time the
      * sheet opens for a (possibly different) title.
      */
-    private val streamForLabel = HashMap<String, com.axio.reelz.data.model.StreamResult>()
 
-    /**
-     * UPGRADE P9: Pre-resolved stream started in background after detail loads.
-     * Used if available when user taps Play or Download.
-     */
+    /** Pre-resolved stream — set in background after detail loads. */
     internal var preResolvedStream: com.axio.reelz.data.model.StreamResult? = null
-    /** Live prefetch state from the engine — exposed so the composable can read it on tap. */
-    val enginePrefetchState get() = engine.prefetchState
 
     /**
      * Pre-parsed quality list from the master playlist.
@@ -211,6 +210,20 @@ class DetailViewModel @Inject constructor(
 
     private fun qualityKey(tmdbId: Int, season: Int = 0, episode: Int = 0) =
         "${tmdbId}_${season}_${episode}"
+
+    /** Observe all non-ERROR downloads and push their keys into UiState so the
+     *  episode/movie download button can show IconDownloaded in real time. */
+    fun observeDownloads() {
+        viewModelScope.launch {
+            downloadDao.getAll().collect { items ->
+                val keys = items
+                    .filter { it.status != DownloadStatus.ERROR.name }
+                    .map { "${it.tmdbId}_${it.season}_${it.episode}" }
+                    .toSet()
+                _ui.update { it.copy(downloadedKeys = keys) }
+            }
+        }
+    }
 
     fun load(tmdbId: Int, mediaType: MediaType) {
         viewModelScope.launch {
@@ -240,7 +253,9 @@ class DetailViewModel @Inject constructor(
                     loadEpisodes(tmdbId, 1)
                 }
 
-                // Stage 2 — heavy extras (credits, videos, similar) in background
+                // Stage 2 — heavy extras (credits, videos, similar) in background.
+                // Stage 3 (stream pre-resolve) is nested here so imdbId is guaranteed
+                // available before resolveFirst() is called.
                 viewModelScope.launch {
                     try {
                         val extras = repo.getDetailExtras(tmdbId, mediaType)
@@ -248,51 +263,38 @@ class DetailViewModel @Inject constructor(
                     } catch (_: Exception) {
                         _ui.update { it.copy(extrasLoading = false) }
                     }
-                }
 
-                // Stage 3 — kick off prefetch via engine (fires the racing resolver in background).
-                // The engine exposes prefetchState: StateFlow so the player subscribes to it
-                // and starts playing the moment the result arrives — no duplicate network call.
-                engine.prefetch(viewModelScope, tmdbId, mediaType)
-
-                // Also subscribe here so we can populate preResolvedStream / preResolvedQualities
-                // for the download sheet (same result, zero extra work).
-                viewModelScope.launch {
-                    engine.prefetchState
-                        .filter { it is com.axio.reelz.scanner.PrefetchState.Ready }
-                        .take(1)
-                        .collect { state ->
-                            val stream = (state as com.axio.reelz.scanner.PrefetchState.Ready).result
+                    // Stage 3 — pre-resolve stream after extras (and imdbId) are available.
+                    // resolveFirst() returns on the first stream event so preResolvedStream
+                    // is available quickly. Download qualities and subtitles are collected
+                    // into preResolvedQualities as they arrive on the same connection.
+                    try {
+                        val d = _ui.value.detail
+                        val year = d?.releaseDate?.take(4)?.toIntOrNull()
+                        val key = qualityKey(tmdbId)
+                        val stream = streamRepo.resolveFirst(
+                            tmdbId    = tmdbId,
+                            mediaType = mediaType,
+                            title     = d?.title ?: "",
+                            imdbId    = d?.imdbId,   // now available after Stage 2
+                            year      = year,
+                            onDownload = { track ->
+                                val current = (preResolvedQualities[key] ?: emptyList()).toMutableList()
+                                if (current.none { it.url == track.url }) {
+                                    current.add(track)
+                                    preResolvedQualities[key] = current
+                                }
+                            },
+                        )
+                        if (stream != null) {
                             preResolvedStream = stream
-                            try {
-                                var qualities = when {
-                                    stream.qualities.isNotEmpty() -> normalizeQualities(
-                                        stream.qualities,
-                                        _ui.value.detail?.runtime,
-                                    )
-                                    stream.isHls -> parseMasterPlaylist(
-                                        stream.url, stream.headers,
-                                        _ui.value.detail?.runtime,
-                                    )
-                                    else -> emptyList()
+                            if (preResolvedQualities[key].isNullOrEmpty()) {
+                                preResolvedQualities[key] = stream.qualities.ifEmpty {
+                                    listOf(QualityTrack(stream.quality.ifBlank { "Auto" }, stream.url))
                                 }
-                                if (qualities.isEmpty()) {
-                                    // No variant ladder — single real quality. Use the
-                                    // source's own reported quality label if it looks like
-                                    // a real resolution (free — no network call), otherwise
-                                    // fall back to a bandwidth tier / "Best available".
-                                    qualities = listOf(
-                                        com.axio.reelz.scanner.QualityListParsing.probeSingleQuality(
-                                            url = stream.url,
-                                            headers = stream.headers,
-                                            runtimeMinutes = _ui.value.detail?.runtime,
-                                            knownLabelHint = stream.quality,
-                                        )
-                                    )
-                                }
-                                preResolvedQualities[qualityKey(tmdbId)] = qualities
-                            } catch (_: Exception) {}
+                            }
                         }
+                    } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
                 _ui.update { it.copy(isLoading = false, error = friendlyDetailError(e)) }
@@ -360,162 +362,69 @@ class DetailViewModel @Inject constructor(
         episodeTitle: String,
         detail: MediaDetail,
     ) {
-        val targetLabels = setOf("1080p", "720p", "480p", "360p", "240p")
-
-        // ── Sheet opens THIS SAME FRAME — no spinner, no wait. ──────────────
-        // isResolvingQualities is no longer used to gate the whole sheet
-        // behind a spinner; it's kept (defaulted false-equivalent below via
-        // skeleton rows) only for the true empty-list case at the very end.
         _ui.update {
             it.copy(
                 showDownloadSheet           = true,
                 downloadQualities           = emptyList(),
+                alreadyDownloadedQualities  = emptySet(),
                 isResolvingQualities        = false,
-                pendingQualityLabels        = targetLabels,
-                downloadEnqueued             = false,
+                pendingQualityLabels        = emptySet(),
+                downloadEnqueued            = false,
                 pendingDownloadSeason       = season,
                 pendingDownloadEpisode      = episode,
                 pendingDownloadTitle        = episodeTitle.ifBlank { detail.title },
-                // Read once per sheet-open — config is the source of truth.
-                // This is intentionally the DOWNLOAD-specific cap, separate
-                // from streaming: streaming has no resolution gate (ads are
-                // the monetization lever there), downloads are the one
-                // place a free/premium quality split applies, since no ad
-                // can be served offline.
                 maxDownloadResolutionHeight = premiumGate.maxDownloadResolutionHeight()
                     .let { h -> if (h <= 0) Int.MAX_VALUE else h },
             )
         }
 
+        // Load already-downloaded qualities for this content in background
+        viewModelScope.launch {
+            val downloaded = downloadRepo.getDownloadedQualities(tmdbId, season, episode)
+            val qualityLabels = downloaded.map { it.quality }.toSet()
+            _ui.update { it.copy(alreadyDownloadedQualities = qualityLabels) }
+        }
+
         val key = qualityKey(tmdbId, season, episode)
 
-        // ── Instant fast path: if we already parsed this title's qualities in
-        // the background, show them immediately as real rows, skeletons for
-        // the rest — then still let the live flow below top up anything
-        // missing (e.g. a source with a resolution the pre-resolved one
-        // didn't have) exactly like before, just incrementally now.
-        streamForLabel.clear()
+        // Fast path: use qualities resolved in background when detail loaded
         preResolvedQualities[key]?.let { cached ->
-            cachedStreamResult = preResolvedStream
-            preResolvedStream?.let { s -> cached.forEach { t -> streamForLabel[t.label] = s } }
-            _ui.update {
-                it.copy(
-                    downloadQualities    = cached,
-                    pendingQualityLabels = targetLabels - cached.map { t -> t.label }.toSet(),
-                )
+            if (cached.isNotEmpty()) {
+                _ui.update { it.copy(downloadQualities = cached) }
+                return
             }
         }
 
-        // Labels no source has ruled out yet — starts as "unknown, could be
-        // any of the 5" and narrows down as each responding source reports
-        // its actual ladder. A label only keeps a skeleton row once EVERY
-        // source that has responded so far either found it or hasn't been
-        // heard from yet; the moment every source that HAS responded agrees
-        // a label doesn't exist, its skeleton is retired instead of waiting
-        // out the full timeout. This is what stops the sheet from always
-        // showing 5 rows when a title only ever has 3 or 4.
-        val stillPossible = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-        stillPossible.addAll(targetLabels)
-        // The cached/pre-resolved rows above are already confirmed real —
-        // keep them "possible" (they'll just get filtered out of the pending
-        // set by "already have it" below) but nothing needs removing here.
-
-        // ── Live, incremental resolution — every quality found from ANY
-        // source (DirectScanner first, WebView fallback kept for JS-only
-        // sources) is shown the instant it's found, not batched. Skeleton
-        // rows for labels not yet found stay visible and simply get replaced
-        // one at a time. This never removes/relocks a quality — only adds.
+        // POST /download — returns all deduplicated per-resolution links in one shot.
         viewModelScope.launch {
             try {
-                engine.resolveAllQualitiesForDownloadFlow(
-                    tmdbId = tmdbId,
+                val detail = _ui.value.detail
+                val releaseYear = detail?.releaseDate
+                    ?.take(4)?.toIntOrNull()
+                val tracks = streamRepo.resolveDownloadLinks(
+                    tmdbId    = tmdbId,
                     mediaType = mediaType,
-                    season = season,
-                    episode = episode,
-                    targetLabels = targetLabels,
-                ).collect { found ->
-                    // Ignore late results if the sheet moved on to a different title.
-                    if (!_ui.value.showDownloadSheet ||
-                        _ui.value.pendingDownloadSeason != season ||
-                        _ui.value.pendingDownloadEpisode != episode) return@collect
-
-                    val current = _ui.value.downloadQualities
-                    val alreadyHad = current.any { it.label == found.track.label }
-
-                    // A responding source's ladder is real evidence: any target
-                    // label it did NOT include is a label THIS source doesn't
-                    // have. We only drop a label's skeleton once we've narrowed
-                    // it down this way and it's still not found by anyone.
-                    if (found.sourceLadderLabels.isNotEmpty()) {
-                        val missingFromThisSource = targetLabels - found.sourceLadderLabels
-                        // Don't drop labels we already have real rows for.
-                        stillPossible.removeAll(missingFromThisSource - current.map { it.label }.toSet())
-                    }
-
-                    if (alreadyHad) {
-                        // Already have this label as a real row — still apply the
-                        // narrowed pending set below in case this source told us
-                        // about other labels it lacks.
-                        _ui.update {
-                            it.copy(pendingQualityLabels = stillPossible - current.map { t -> t.label }.toSet())
-                        }
-                        return@collect
-                    }
-
-                    // "Best available" (probeSingleQuality's last-resort fallback,
-                    // used only when NO resolution signal exists at all) has no
-                    // confirmed height — it must never be placed into one of the
-                    // 5 fixed resolution slots, since we cannot know which one it
-                    // actually corresponds to. Drop it here rather than risk it
-                    // rendering under the wrong label.
-                    if (found.track.label == "Best available") return@collect
-
-                    val updated = (current + found.track)
-                        .sortedByDescending { trackHeightPx(it.label) }
-
-                    cachedStreamResult = found.stream
-                    streamForLabel[found.track.label] = found.stream
-                    preResolvedQualities[key] = updated
-                    stillPossible.add(found.track.label) // confirmed real, not just "possible"
-
-                    _ui.update {
-                        it.copy(
-                            downloadQualities    = updated,
-                            pendingQualityLabels = stillPossible - updated.map { t -> t.label }.toSet(),
-                        )
-                    }
+                    title     = detail?.title ?: "",
+                    season    = season,
+                    episode   = episode,
+                    imdbId    = detail?.imdbId,
+                    year      = releaseYear,
+                )
+                if (tracks.isNotEmpty()) {
+                    val normalized = normalizeQualities(tracks, _ui.value.detail?.runtime)
+                    preResolvedQualities[key] = normalized
+                    _ui.update { it.copy(downloadQualities = normalized, pendingQualityLabels = emptySet()) }
+                } else {
+                    val fallbackUrl = preResolvedStream?.url ?: ""
+                    val fallback = listOf(QualityTrack("Best available", fallbackUrl))
+                    _ui.update { it.copy(downloadQualities = fallback, pendingQualityLabels = emptySet()) }
                 }
-            } catch (e: Exception) {
-                // A collection error never wipes rows already shown — just stop
-                // waiting for more. Only clear pending skeletons.
-                _ui.update { it.copy(pendingQualityLabels = emptySet()) }
-            } finally {
-                // Whatever the flow found (possibly nothing) is final now —
-                // remaining skeleton labels quietly disappear rather than spin
-                // forever, matching the flow's own hard cap.
-                //
-                // Exception: if the ENTIRE scan finished and confirmed ZERO
-                // real resolutions (every source either failed or only ever
-                // returned the unplaceable "Best available" signal), show a
-                // single fallback row so downloading isn't silently impossible.
-                // This is the ONLY place "Best available" is allowed to reach
-                // the UI — always alone, never alongside a real numbered slot,
-                // so it can never be confused with a specific resolution.
-                val stream = cachedStreamResult
-                if (_ui.value.downloadQualities.isEmpty() && stream != null) {
-                    val fallback = QualityTrack("Best available", "")
-                    streamForLabel["Best available"] = stream
-                    _ui.update { it.copy(downloadQualities = listOf(fallback)) }
-                }
+            } catch (_: Exception) {
                 _ui.update { it.copy(pendingQualityLabels = emptySet()) }
             }
         }
     }
 
-    /** Best-effort headers to use for size sampling: take the first source's headers. */
-    private fun cachedHeadersFor(
-        merged: List<Pair<QualityTrack, com.axio.reelz.data.model.StreamResult>>,
-    ): Map<String, String> = merged.firstOrNull()?.second?.headers ?: emptyMap()
 
     fun dismissDownloadSheet() {
         _ui.update { it.copy(showDownloadSheet = false, downloadEnqueued = false) }
@@ -535,15 +444,8 @@ class DetailViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // UPGRADE P1: Use CACHED stream result — no second engine.resolve() call.
-            // The cachedStreamResult was stored when openDownloadSheet() ran.
-            // This eliminates the 10–20 second wait after quality selection.
-            // Use the headers belonging to whichever source actually produced
-            // THIS track, not just whichever source responded most recently —
-            // otherwise a download could pair one source's headers/referer
-            // with a different source's stream URL and fail or get blocked.
-            val cachedHeaders = streamForLabel[track.label]?.headers
-                ?: cachedStreamResult?.headers ?: emptyMap()
+            // Use headers from the pre-resolved stream (set when detail loaded).
+            val cachedHeaders = preResolvedStream?.headers ?: emptyMap()
             val qualityTracks = _ui.value.downloadQualities
 
             downloadRepo.enqueue(
@@ -565,16 +467,6 @@ class DetailViewModel @Inject constructor(
     }
 
     /**
-     * UPGRADE P2 + P3 + P14: Fast M3U8 master playlist parser.
-     *
-     * Uses NativeBridge (C++) for single-pass parsing — 10–50x faster than Kotlin loop.
-     * Uses bandwidth × runtime for size estimation — ZERO extra network calls.
-     * Falls back to a 2-hour estimate when runtime is unavailable.
-     * Uses the injected shared OkHttpClient — warm connections, DNS cache, HTTP/2.
-     *
-     * Result: quality list appears in < 200ms after master playlist is fetched.
-     */
-    /**
      * Normalizes a pre-resolved quality list:
      *  - Assigns bandwidth-tier labels when label is "Auto" or blank.
      *  - Ensures estimatedSizeBytes is always computed.
@@ -588,76 +480,70 @@ class DetailViewModel @Inject constructor(
             runtimeMinutes != null && runtimeMinutes > 0 -> runtimeMinutes * 60L
             else -> 7200L
         }
+        // Resolution order for sorting — highest first.
+        // Tracks from /download already have plain labels like "1080p" or
+        // "1080p · Hindi". We sort by the numeric height extracted from the
+        // label prefix so that bandwidth=0 (download links) sort correctly.
+        val resOrder = listOf("2160p", "1080p", "720p", "480p", "360p", "240p")
+
+        fun resIndex(label: String): Int =
+            resOrder.indexOfFirst { label.startsWith(it) }.takeIf { it >= 0 } ?: 99
+
+        fun estimatedBitrateForLabel(label: String): Long = when {
+            label.startsWith("2160") -> 15_000_000L
+            label.startsWith("1080") -> 5_000_000L
+            label.startsWith("720")  -> 2_500_000L
+            label.startsWith("480")  -> 1_000_000L
+            label.startsWith("360")  ->   600_000L
+            label.startsWith("240")  ->   300_000L
+            else                     ->         0L
+        }
+
         return tracks.map { track ->
             val label = when {
-                track.label != "Auto" && track.label.isNotBlank() -> track.label
+                // Already has a real label — keep it.
+                track.label.isNotBlank() && track.label != "Auto" -> track.label
+                // Bandwidth-based inference (HLS tracks from the stream ladder).
                 track.bandwidth >= 8_000_000 -> "1080p"
                 track.bandwidth >= 4_000_000 -> "1080p"
                 track.bandwidth >= 2_000_000 -> "720p"
                 track.bandwidth >= 1_000_000 -> "480p"
                 track.bandwidth >= 400_000   -> "360p"
                 track.bandwidth >  0         -> "240p"
+                // Download links have bandwidth=0 but may have a real file size.
+                // Rough thresholds for a 2-hour film (varies ±40% by codec/source):
+                //   4K  ≥ 20 GB,  1080p ≥ 4 GB,  720p ≥ 1.5 GB,
+                //   480p ≥ 700 MB, 360p ≥ 350 MB
+                track.estimatedSizeBytes >= 20_000_000_000L -> "2160p"
+                track.estimatedSizeBytes >=  4_000_000_000L -> "1080p"
+                track.estimatedSizeBytes >=  1_500_000_000L -> "720p"
+                track.estimatedSizeBytes >=    700_000_000L -> "480p"
+                track.estimatedSizeBytes >=    350_000_000L -> "360p"
+                track.estimatedSizeBytes >              0L  -> "240p"
+                // No signal at all — keep "Auto" as last resort.
                 else -> "Auto"
             }
+            val effectiveBitrate = track.bandwidth.takeIf { it > 0 }
+                ?: estimatedBitrateForLabel(label)
             val size = when {
                 track.estimatedSizeBytes > 0 -> track.estimatedSizeBytes
-                track.bandwidth > 0 -> ((track.bandwidth * runtimeSec) / 8L * 55L) / 100L
+                effectiveBitrate > 0 -> ((effectiveBitrate * runtimeSec) / 8L * 55L) / 100L
                 else -> 0L
             }
             track.copy(label = label, estimatedSizeBytes = size)
         }
+        // Dedup: keep one entry per label (prefer the one with a real size)
         .groupBy { it.label }
-        .map { (_, v) -> v.maxByOrNull { it.bandwidth }!! }
-        .sortedByDescending { it.bandwidth }
+        .map { (_, v) -> v.maxByOrNull { it.estimatedSizeBytes }!! }
+        // Sort highest resolution first; dubs after English at same resolution
+        .sortedWith(compareBy(
+            { resIndex(it.label) },
+            { if (it.label.contains("·")) 1 else 0 },
+        ))
     }
 
-    private suspend fun parseMasterPlaylist(
-        masterUrl: String,
-        headers: Map<String, String>,
-        runtimeMinutes: Int? = null,
-    ): List<QualityTrack> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        try {
-            val req = okhttp3.Request.Builder().url(masterUrl).apply {
-                headers.forEach { (k, v) -> addHeader(k, v) }
-            }.build()
-            val body = httpClient.newCall(req).execute().use { it.body?.string() } ?: return@withContext emptyList()
-
-            // UPGRADE P3: NativeBridge C++ parsing — single linear pass
-            val rawVariants = com.axio.reelz.scanner.NativeBridge.variants(body, masterUrl)
-            if (rawVariants.isEmpty()) return@withContext emptyList()
-
-            // UPGRADE P2: Bandwidth-based size estimation — ZERO extra network calls.
-            // estimatedBytes = (bandwidth_bps × runtime_seconds × 0.55) / 8
-            // Apply 0.55 correction: declared HLS bandwidth is peak/theoretical;
-            // real encoded streams average ~55% of declared.
-            // Fallback to 2-hour runtime (7200s) when TMDB doesn't supply one.
-            val runtimeSec = when {
-                runtimeMinutes != null && runtimeMinutes > 0 -> runtimeMinutes * 60L
-                else -> 7200L  // 2-hour fallback so size is always shown
-            }
-
-            rawVariants.map { variant ->
-                // Fix "Auto" labels using bandwidth tiers when no resolution was parsed
-                val fixedLabel = when {
-                    variant.label != "Auto" && variant.label.isNotBlank() -> variant.label
-                    variant.bandwidth >= 8_000_000 -> "1080p"
-                    variant.bandwidth >= 4_000_000 -> "1080p"
-                    variant.bandwidth >= 2_000_000 -> "720p"
-                    variant.bandwidth >= 1_000_000 -> "480p"
-                    variant.bandwidth >= 400_000   -> "360p"
-                    variant.bandwidth >  0          -> "240p"
-                    else -> "Auto"
-                }
-                val estimatedSize = if (variant.bandwidth > 0) {
-                    ((variant.bandwidth * runtimeSec) / 8L * 55L) / 100L
-                } else 0L
-                variant.copy(label = fixedLabel, estimatedSizeBytes = estimatedSize)
-            }
-            .groupBy { it.label }
-            .map { (_, v) -> v.maxByOrNull { it.bandwidth }!! }
-            .sortedByDescending { it.bandwidth }
-        } catch (_: Exception) { emptyList() }
-    }
+    // parseMasterPlaylist removed — quality ladder now comes from the backend
+    // in the resolve/download response. No HLS fetch needed client-side.
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -673,18 +559,19 @@ fun DetailScreen(
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
 
-    LaunchedEffect(tmdbId) { vm.load(tmdbId, mediaType) }
+    LaunchedEffect(tmdbId) {
+        vm.load(tmdbId, mediaType)
+        vm.observeDownloads()
+    }
 
     fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
         val d = ui.detail ?: return
 
         // Helper so both the ad-dismissed path and the direct path share one call-site
         fun startPlayerActivity() {
-            // Check engine's live prefetchState first — handles the race where the
-            // subscriber coroutine has not updated preResolvedStream yet but the engine
-            // already finished. Either path avoids a second resolve() in the player.
+            // Use pre-resolved stream if background resolve finished; otherwise
+            // PlayerViewModel will call the backend on init (one POST, milliseconds).
             val readyStream = vm.preResolvedStream
-                ?: (vm.enginePrefetchState.value as? com.axio.reelz.scanner.PrefetchState.Ready)?.result
             ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
                 putExtra("tmdbId",     d.tmdbId)
                 putExtra("mediaType",  d.mediaType.name)
@@ -732,6 +619,7 @@ fun DetailScreen(
                 onDownloadEpisode = { s, e, name ->
                     vm.openDownloadSheet(tmdbId, mediaType, s, e, name)
                 },
+                downloadedKeys = ui.downloadedKeys,
             )
         }
 
@@ -752,6 +640,7 @@ fun DetailScreen(
                 isLoading          = ui.isResolvingQualities,
                 enqueued           = ui.downloadEnqueued,
                 maxResolutionHeight = ui.maxDownloadResolutionHeight,
+                alreadyDownloadedQualities = ui.alreadyDownloadedQualities,
                 onDismiss          = { vm.dismissDownloadSheet() },
                 onSelectQuality    = { track -> vm.enqueueDownload(ctx, track) },
                 onLockedQualityTap = { vm.openResolutionLockSheet() },
@@ -802,6 +691,11 @@ fun DownloadQualitySheet(
      * each one quietly disappears or turns into a real row as it's found.
      */
     pendingLabels: Set<String> = emptySet(),
+    /**
+     * Quality labels already downloaded for this content.
+     * These are shown with a "Downloaded" badge and cannot be re-downloaded.
+     */
+    alreadyDownloadedQualities: Set<String> = emptySet(),
 ) {
     val d = LocalDimensions.current
     // Scrim
@@ -908,174 +802,118 @@ fun DownloadQualitySheet(
                     Spacer(Modifier.height(d.spaceMd + d.spaceXs))
 
                     qualities.forEachIndexed { index, track ->
-                        // Human-readable label from resolution code
-                        val descLabel = when {
-                            track.label.startsWith("1080") -> "Full HD"
-                            track.label.startsWith("720")  -> "HD"
-                            track.label.startsWith("480")  -> "Standard"
-                            track.label.startsWith("360")  -> "Low"
-                            track.label.startsWith("240")  -> "Very Low"
-                            track.label == "Best available"-> "Best"
-                            else                           -> "Standard"
-                        }
-                        val isBest    = index == 0
-                        val isSmall   = index == qualities.lastIndex && qualities.size > 1
-                        // Free tier sees every quality (never hidden — hiding makes the
-                        // feature look broken/missing) but anything above the config
-                        // cap is locked behind Premium with a clear, factual nudge,
-                        // matching the subtitle drawer's upsell pattern elsewhere in
-                        // the player. trackHeightPx("Auto"/"Best available") resolves
-                        // to Int.MAX_VALUE, so an unlabeled "best" track is correctly
-                        // treated as top-tier rather than silently unlocked.
-                        val isLocked  = trackHeightPx(track.label) > maxResolutionHeight
+                        // Resolution lock is driven ONLY by config.json via PremiumGate.
+                        // The app has zero authority here — it just reads maxResolutionHeight.
+                        val isLocked      = trackHeightPx(track.label) > maxResolutionHeight
+                        val isDownloaded  = alreadyDownloadedQualities.contains(track.label)
 
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(d.radiusLg - d.spaceXs))
-                                .background(if (isLocked) GlassSm else if (isBest) Brand.copy(.07f) else BgRaised)
-                                .border(
-                                    width = if (!isLocked && isBest) d.borderMed else d.borderThin,
-                                    color = if (isLocked) GlassBorderMd else if (isBest) Brand.copy(.35f) else GlassBorderMd,
-                                    shape = RoundedCornerShape(d.radiusLg - d.spaceXs),
+                                .background(
+                                    when {
+                                        isDownloaded -> Success.copy(.08f)
+                                        isLocked     -> GlassSm
+                                        else         -> BgRaised
+                                    }
                                 )
-                                .clickable {
+                                .border(
+                                    d.borderThin,
+                                    if (isDownloaded) Success.copy(.25f) else GlassBorderMd,
+                                    RoundedCornerShape(d.radiusLg - d.spaceXs),
+                                )
+                                .clickable(enabled = !isDownloaded) {
                                     if (isLocked) onLockedQualityTap() else onSelectQuality(track)
                                 }
-                                .padding(horizontal = d.spaceLg, vertical = d.spaceLg - d.spaceXs),
+                                .padding(horizontal = d.spaceLg, vertical = d.spaceLg),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXs),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceLg),
                         ) {
-                            // Resolution badge
-                            Box(
-                                Modifier
-                                    .width(d.avatarMd + d.spaceMd - d.spaceXxs)
-                                    .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                                    .background(if (isLocked) GlassSm else if (isBest) Brand.copy(.18f) else GlassSm)
-                                    .border(
-                                        d.borderThin,
-                                        if (isLocked) GlassBorderMd else if (isBest) Brand.copy(.4f) else GlassBorderMd,
-                                        RoundedCornerShape(d.radiusMd - d.spaceXxs),
-                                    )
-                                    .padding(vertical = d.spaceSm + d.spaceXxs),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    track.label,
-                                    color = if (isLocked) White40 else if (isBest) Brand else White,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = (d.textMd.value + 1).sp,
-                                )
-                            }
+                            // Exact resolution label from the backend — no rewriting
+                            Text(
+                                track.label,
+                                color = when {
+                                    isDownloaded -> Success.copy(.8f)
+                                    isLocked     -> White40
+                                    else         -> White
+                                },
+                                fontWeight = FontWeight.Bold,
+                                fontSize = d.textLg,
+                                modifier = Modifier.weight(1f),
+                            )
 
-                            // Description + size
-                            Column(Modifier.weight(1f)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
-                                ) {
-                                    Text(
-                                        descLabel,
-                                        color = if (isLocked) White40 else White,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = (d.textMd.value + 1).sp,
-                                    )
-                                    when {
-                                        isLocked -> {
-                                            Row(
-                                                Modifier
-                                                    .clip(RoundedCornerShape(d.spaceXs))
-                                                    .background(Brand.copy(.15f))
-                                                    .border(d.borderThin, Brand.copy(.35f), RoundedCornerShape(d.spaceXs))
-                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
-                                            ) {
-                                                Icon(IconLock, null, tint = Brand, modifier = Modifier.size(d.iconXs - 1.dp))
-                                                Text(
-                                                    "PREMIUM",
-                                                    color = Brand,
-                                                    fontSize = d.textXxs,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    letterSpacing = 0.5.sp,
-                                                )
-                                            }
-                                        }
-                                        isBest -> {
-                                            Box(
-                                                Modifier
-                                                    .clip(RoundedCornerShape(d.spaceXs))
-                                                    .background(Brand.copy(.15f))
-                                                    .border(d.borderThin, Brand.copy(.3f), RoundedCornerShape(d.spaceXs))
-                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
-                                            ) {
-                                                Text(
-                                                    "BEST",
-                                                    color = Brand,
-                                                    fontSize = d.textXxs,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    letterSpacing = 0.5.sp,
-                                                )
-                                            }
-                                        }
-                                        isSmall -> {
-                                            Box(
-                                                Modifier
-                                                    .clip(RoundedCornerShape(d.spaceXs))
-                                                    .background(GlassSm)
-                                                    .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.spaceXs))
-                                                    .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
-                                            ) {
-                                                Text(
-                                                    "SMALLEST",
-                                                    color = White40,
-                                                    fontSize = d.textXxs,
-                                                    fontWeight = FontWeight.Bold,
-                                                    letterSpacing = 0.5.sp,
-                                                )
-                                            }
-                                        }
+                            // Right side: Downloaded badge, file size OR premium lock badge
+                            when {
+                                isDownloaded -> {
+                                    Row(
+                                        Modifier
+                                            .clip(RoundedCornerShape(d.spaceXs))
+                                            .background(Success.copy(.15f))
+                                            .border(d.borderThin, Success.copy(.35f), RoundedCornerShape(d.spaceXs))
+                                            .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
+                                    ) {
+                                        Text("✓", color = Success, fontSize = d.textXxs, fontWeight = FontWeight.ExtraBold)
+                                        Text(
+                                            "Downloaded",
+                                            color = Success,
+                                            fontSize = d.textXxs,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 0.3.sp,
+                                        )
                                     }
                                 }
-                                Spacer(Modifier.height(d.spaceXxs + 1.dp))
-                                when {
-                                    isLocked ->
+                                isLocked -> {
+                                    Row(
+                                        Modifier
+                                            .clip(RoundedCornerShape(d.spaceXs))
+                                            .background(Brand.copy(.15f))
+                                            .border(d.borderThin, Brand.copy(.35f), RoundedCornerShape(d.spaceXs))
+                                            .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
+                                    ) {
+                                        Icon(IconLock, null, tint = Brand, modifier = Modifier.size(d.iconXs - 1.dp))
                                         Text(
-                                            "Upgrade to download in this quality",
-                                            color = White40,
-                                            fontSize = d.textSm,
+                                            "PREMIUM",
+                                            color = Brand,
+                                            fontSize = d.textXxs,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            letterSpacing = 0.5.sp,
                                         )
-                                    track.estimatedSizeBytes > 0 ->
-                                        Text(
-                                            // Real measured size (HEAD Content-Length for MP4, or
-                                            // real segment sampling for HLS) shows plain — it's exact.
-                                            // Only the bandwidth-based fallback gets the "~" prefix.
-                                            if (track.isSizeExact) formatSize(track.estimatedSizeBytes)
-                                            else "~${formatSize(track.estimatedSizeBytes)}",
-                                            color = if (isBest) Brand.copy(.8f) else White60,
-                                            fontSize = d.textMd,
-                                            fontWeight = if (isBest) FontWeight.SemiBold else FontWeight.Normal,
-                                        )
-                                    track.bandwidth > 0 ->
-                                        Text(
-                                            "${"%.1f".format(track.bandwidth / 1_000_000.0)} Mbps",
-                                            color = White40,
-                                            fontSize = d.textSm,
-                                        )
+                                    }
+                                }
+                                track.estimatedSizeBytes > 0 -> {
+                                    Text(
+                                        if (track.isSizeExact) formatSize(track.estimatedSizeBytes)
+                                        else "~${formatSize(track.estimatedSizeBytes)}",
+                                        color = White60,
+                                        fontSize = d.textSm,
+                                    )
                                 }
                             }
 
-                            // Download / lock arrow
                             Icon(
-                                if (isLocked) IconLock else IconDownloadCloud,
+                                when {
+                                    isDownloaded -> IconCheckCircle
+                                    isLocked     -> IconLock
+                                    else         -> IconDownloadCloud
+                                },
                                 null,
-                                tint = if (isLocked) White40 else if (isBest) Brand else White40,
-                                modifier = Modifier.size(if (isLocked) d.iconMd - 2.dp else d.iconMd + 2.dp),
+                                tint = when {
+                                    isDownloaded -> Success.copy(.7f)
+                                    isLocked     -> White40
+                                    else         -> White60
+                                },
+                                modifier = Modifier.size(d.iconMd),
                             )
                         }
 
                         if (index < qualities.lastIndex || pendingLabels.isNotEmpty()) Spacer(Modifier.height(d.spaceMd))
                     }
+
 
                     // ── Skeleton placeholder rows for labels still being searched ──
                     // Sorted by resolution height so they slot into roughly the right
@@ -1287,6 +1125,7 @@ private fun DetailContent(
     onSimilarClick: (Int, MediaType) -> Unit,
     onDownloadMovie: () -> Unit,
     onDownloadEpisode: (Int, Int, String) -> Unit,
+    downloadedKeys: Set<String> = emptySet(),
 ) {
     val d = LocalDimensions.current
     val detail  = ui.detail!!
@@ -1360,14 +1199,21 @@ private fun DetailContent(
                         modifier = Modifier.weight(1f),
                         icon     = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconMd)) },
                     )
-                    // ── Download button (movies only, like MovieBox) ────────
+                    // ── Download button (movies only) ──────────────────────
+                    val movieDownloaded = "${detail.tmdbId}_0_0" in downloadedKeys
                     OutlinedButton(
-                        onClick  = onDownloadMovie,
+                        onClick  = if (movieDownloaded) ({}) else onDownloadMovie,
                         shape    = RoundedCornerShape(d.radiusPill),
-                        border   = BorderStroke(d.borderThin, GlassBorderMd),
+                        border   = BorderStroke(d.borderThin, if (movieDownloaded) Color(0xFF30D158).copy(.5f) else GlassBorderMd),
                         modifier = Modifier.height(d.buttonHeightMd),
+                        enabled  = !movieDownloaded,
                     ) {
-                        Icon(IconDownloadCloud, null, tint = White80, modifier = Modifier.size(d.iconMd - 2.dp))
+                        Icon(
+                            if (movieDownloaded) IconDownloaded else IconDownloadCloud,
+                            contentDescription = if (movieDownloaded) "Offline" else "Download",
+                            tint = if (movieDownloaded) Color(0xFF30D158) else White80,
+                            modifier = Modifier.size(d.iconMd - 2.dp),
+                        )
                     }
                 }
                 // Watchlist button
@@ -1461,10 +1307,12 @@ private fun DetailContent(
                 item { Box(Modifier.fillMaxWidth().height(d.spaceXxl * 3.75f), Alignment.Center) { CinematicSpinner() } }
             } else {
                 items(ui.episodes, key = { it.id }) { ep ->
+                    val epKey = "${detail.tmdbId}_${ep.seasonNumber}_${ep.episodeNumber}"
                     EpisodeRow(
-                        episode   = ep,
-                        onClick   = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
-                        onDownload = { onDownloadEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        episode      = ep,
+                        onClick      = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        onDownload   = { onDownloadEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
+                        isDownloaded = epKey in downloadedKeys,
                     )
                 }
             }
@@ -1514,6 +1362,7 @@ fun EpisodeRow(
     episode: Episode,
     onClick: () -> Unit,
     onDownload: () -> Unit = {},
+    isDownloaded: Boolean = false,
 ) {
     val d = LocalDimensions.current
     Row(
@@ -1524,8 +1373,13 @@ fun EpisodeRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs),
     ) {
+        // Thumbnail — taller so episode stills are clearly visible
         Box(
-            Modifier.width(d.avatarLg + d.spaceXxl - d.spaceXs).height(d.continueCardThumbHeight - d.spaceMd + d.spaceXxs).clip(RoundedCornerShape(d.radiusMd)).background(BgRaised),
+            Modifier
+                .width(d.avatarLg + d.spaceXxl)
+                .height(d.continueCardThumbHeight)
+                .clip(RoundedCornerShape(d.radiusMd))
+                .background(BgRaised),
         ) {
             if (episode.stillPath != null) {
                 AsyncImage(
@@ -1534,9 +1388,33 @@ fun EpisodeRow(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
+            } else {
+                // Fallback gradient when no still is available
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(listOf(BgRaised, BgCard))
+                    ),
+                    Alignment.Center,
+                ) {
+                    Icon(IconMovieSlate, null, tint = White20, modifier = Modifier.size(d.iconLg))
+                }
             }
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
-                Icon(IconPlayCircle, null, tint = White.copy(.8f), modifier = Modifier.size(d.iconLg))
+            // Play overlay
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(.28f)), Alignment.Center) {
+                Icon(IconPlayCircle, null, tint = White.copy(.85f), modifier = Modifier.size(d.iconLg))
+            }
+            // "Offline" badge when already downloaded
+            if (isDownloaded) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(d.spaceXxs + 1.dp)
+                        .clip(RoundedCornerShape(d.radiusSm))
+                        .background(Color(0xFF30D158).copy(.9f))
+                        .padding(horizontal = d.spaceXs, vertical = d.spaceXxs),
+                ) {
+                    Text("Offline", color = Color.White, fontSize = (d.textXxs.value - 0.5f).sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
         Column(Modifier.weight(1f)) {
@@ -1548,9 +1426,18 @@ fun EpisodeRow(
                 Text("${it}m", color = White40, fontSize = d.textXxs)
             }
         }
-        // Download icon for each episode
-        IconButton(onClick = onDownload, modifier = Modifier.size(d.buttonHeightSm)) {
-            Icon(IconDownloadCloud, null, tint = White60, modifier = Modifier.size(d.iconMd - 2.dp))
+        // Download icon: shows IconDownloaded (green) if owned, otherwise normal cloud icon
+        IconButton(
+            onClick = if (isDownloaded) ({}) else onDownload,
+            modifier = Modifier.size(d.buttonHeightSm),
+            enabled = !isDownloaded,
+        ) {
+            Icon(
+                if (isDownloaded) IconDownloaded else IconDownloadCloud,
+                contentDescription = if (isDownloaded) "Offline" else "Download",
+                tint = if (isDownloaded) Color(0xFF30D158) else White60,
+                modifier = Modifier.size(d.iconMd - 2.dp),
+            )
         }
         Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconMd))
     }

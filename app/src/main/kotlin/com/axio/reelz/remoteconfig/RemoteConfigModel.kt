@@ -5,26 +5,33 @@ import com.google.gson.annotations.SerializedName
 // ── Fully decoded config ──────────────────────────────────────────────────────
 
 data class RemoteConfig(
-    val meta: MetaConfig                                        = MetaConfig(),
-    val tmdb: TmdbConfig?                                       = null,
-    val subtitles: SubtitlesConfig?                             = null,
-    val ads: AdsConfig?                                         = null,
-    @SerializedName("stream_sources") val streamSources: List<StreamSourceConfig> = emptyList(),
-    @SerializedName("user_agents")    val userAgents: UserAgentsConfig             = UserAgentsConfig(),
-    val scanner: ScannerConfig                                  = ScannerConfig(),
-    @SerializedName("feature_flags") val featureFlags: FeatureFlags               = FeatureFlags(),
-    val shorts: ShortsConfig                                    = ShortsConfig(),
-    val tiers: TiersConfig                                      = TiersConfig(),
-    val premium: PremiumConfig                                  = PremiumConfig(),
-    val backend: BackendConfig                                  = BackendConfig(),
+    val meta: MetaConfig                                         = MetaConfig(),
+    val tmdb: TmdbConfig?                                        = null,
+    val ads: AdsConfig?                                          = null,
+    @SerializedName("feature_flags") val featureFlags: FeatureFlags = FeatureFlags(),
+    val shorts: ShortsConfig                                     = ShortsConfig(),
+    val tiers: TiersConfig                                       = TiersConfig(),
+    val premium: PremiumConfig                                   = PremiumConfig(),
+    val backend: BackendConfig                                   = BackendConfig(),
+    // stream_sources, subtitles, user_agents, scanner removed —
+    // all source/subtitle/UA config lives on the backend now.
 )
 
 /**
  * Backend connection config — comes from config.json, never hardcoded in the app.
- * The app reads only backend_url from here; all secrets live server-side only.
+ *
+ * Three backend URLs, each serving a separate concern:
+ *   backend_url  → auth / subscription (already live)
+ *   stream_url   → stream / download / subtitle engine (new backend)
+ *   shorts_url   → shorts feed backend (new backend, future)
+ *
+ * All secrets live server-side. The app only holds these URLs.
+ * Edit config.json to point to new deployments — no app update needed.
  */
 data class BackendConfig(
     @SerializedName("backend_url") val backendUrl: String = "",
+    @SerializedName("stream_url")  val streamUrl: String  = "",
+    @SerializedName("shorts_url")  val shortsUrl: String  = "",
 ) {
     // config.json sometimes ends up with backend_url missing its scheme
     // (e.g. "tt-b577.onrender.com" instead of "https://tt-b577.onrender.com")
@@ -69,19 +76,6 @@ data class ApiKey(
     val enabled: Boolean = true,
 )
 
-data class SubtitlesConfig(
-    val providers: List<SubtitleProvider> = emptyList(),
-)
-
-data class SubtitleProvider(
-    val id: String        = "",
-    val name: String      = "",
-    val enabled: Boolean  = false,
-    val keys: List<ApiKey> = emptyList(),
-    @SerializedName("base_url")    val baseUrl: String   = "",
-    @SerializedName("user_agent")  val userAgent: String = "",
-    @SerializedName("daily_limit") val dailyLimit: Int   = 20,
-)
 
 data class AdsConfig(
     val enabled: Boolean = false,
@@ -128,37 +122,8 @@ data class AdNetwork(
     @SerializedName("vast_tag_url")    val vastTagUrl: String     = "",
 )
 
-data class StreamSourceConfig(
-    val id: String       = "",
-    val name: String     = "",
-    val enabled: Boolean = false,
-    val priority: Int    = 99,
-    @SerializedName("requires_js")  val requiresJs: Boolean  = false,
-    @SerializedName("url_patterns") val urlPatterns: UrlPatterns = UrlPatterns(),
-    val headers: Map<String, String> = emptyMap(),
-    val referer: String = "",
-    val origin: String  = "",
-)
 
-data class UrlPatterns(
-    val movie: String = "",
-    val tv: String    = "",
-)
 
-data class UserAgentsConfig(
-    @SerializedName("chrome_android")  val chromeAndroid: String  = "",
-    @SerializedName("chrome_desktop")  val chromeDesktop: String  = "",
-    @SerializedName("firefox_android") val firefoxAndroid: String = "",
-)
-
-data class ScannerConfig(
-    @SerializedName("direct_timeout_ms")  val directTimeoutMs: Long  = 2000,
-    @SerializedName("webview_timeout_ms") val webviewTimeoutMs: Long = 18000,
-    @SerializedName("global_timeout_ms")  val globalTimeoutMs: Long  = 25000,
-    @SerializedName("stagger_ms")         val staggerMs: Long        = 150,
-    @SerializedName("m3u8_pattern")       val m3u8Pattern: String    = "",
-    @SerializedName("mp4_pattern")        val mp4Pattern: String     = "",
-)
 
 data class FeatureFlags(
     @SerializedName("subtitles_enabled")   val subtitlesEnabled: Boolean   = true,

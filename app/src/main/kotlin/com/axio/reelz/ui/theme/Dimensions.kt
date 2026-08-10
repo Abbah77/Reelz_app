@@ -110,7 +110,12 @@ data class ReelzDimensions(
     val sectionAccentWidth: Dp,
     val sectionAccentHeight: Dp,
 
+    // ── Progress / seek bar ───────────────────────────────────────────────────
+    // Deliberately kept as a flat (non-scaled) 2 dp — ultra-thin like Netflix /
+    // YouTube. It does not scale with screen size because the thin aesthetic is
+    // the design intent regardless of device class.
     val progressBarHeight: Dp,
+
     val pageIndicatorWidth: Dp,
     val pageIndicatorWidthSelected: Dp,
     val pageIndicatorHeight: Dp,
@@ -126,7 +131,6 @@ data class ReelzDimensions(
 // Factory — builds tokens from shortest screen width
 // ─────────────────────────────────────────────────────────────────────────────
 private fun buildDimensions(sw: Int): ReelzDimensions {
-    // scale factor: 1.0 at sw=360, interpolated up/down
     val s = when {
         sw < 320  -> 0.82f
         sw < 360  -> 0.90f
@@ -225,7 +229,12 @@ private fun buildDimensions(sw: Int): ReelzDimensions {
         sectionAccentWidth  = (3.dp).s(),
         sectionAccentHeight = (15.dp).s(),
 
-        progressBarHeight = (3.dp).s(),
+        // ── Ultra-thin seek bar (2 dp, fixed — same on every screen) ─────────
+        // Intentionally NOT scaled. Netflix, YouTube, and Prime Video all use
+        // a ~2 dp line regardless of screen size. Scaling it up on tablets would
+        // look amateurish and chunky.
+        progressBarHeight = 2.dp,
+
         pageIndicatorWidth = (5.dp).s(),
         pageIndicatorWidthSelected = (20.dp).s(),
         pageIndicatorHeight = (5.dp).s(),

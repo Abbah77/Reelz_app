@@ -167,6 +167,69 @@ interface DownloadDao {
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: String)
+
+    /**
+     * Returns the first non-ERROR download for this content WITH the exact quality.
+     * Used for per-quality duplicate guard — allows different resolutions of same movie.
+     */
+    @Query("""
+        SELECT * FROM downloads
+        WHERE tmdbId  = :tmdbId
+          AND season  = :season
+          AND episode = :episode
+          AND quality = :quality
+          AND status  != 'ERROR'
+        LIMIT 1
+    """)
+    suspend fun findExisting(tmdbId: Int, season: Int, episode: Int, quality: String = ""): DownloadItem?
+
+    /**
+     * All non-ERROR downloads for this content (any quality).
+     * Used to show all downloaded resolutions of the same movie/episode.
+     */
+    @Query("""
+        SELECT * FROM downloads
+        WHERE tmdbId  = :tmdbId
+          AND season  = :season
+          AND episode = :episode
+          AND status  != 'ERROR'
+        ORDER BY quality DESC
+    """)
+    fun getAllForContent(tmdbId: Int, season: Int, episode: Int): Flow<List<DownloadItem>>
+
+    /**
+     * All non-ERROR downloads for this content (suspend version for one-shot reads).
+     */
+    @Query("""
+        SELECT * FROM downloads
+        WHERE tmdbId  = :tmdbId
+          AND season  = :season
+          AND episode = :episode
+          AND status  != 'ERROR'
+        ORDER BY quality DESC
+    """)
+    suspend fun getAllForContentOnce(tmdbId: Int, season: Int, episode: Int): List<DownloadItem>
+
+    /** Update watch progress when user exits the player. */
+    @Query("""
+        UPDATE downloads
+        SET watchProgressMs = :progressMs,
+            durationMs      = :durationMs,
+            lastPlayedAt    = :lastPlayedAt,
+            lastSelectedQuality = :lastSelectedQuality
+        WHERE tmdbId  = :tmdbId
+          AND season  = :season
+          AND episode = :episode
+    """)
+    suspend fun updateWatchProgress(
+        tmdbId: Int,
+        season: Int,
+        episode: Int,
+        progressMs: Long,
+        durationMs: Long,
+        lastPlayedAt: Long = System.currentTimeMillis(),
+        lastSelectedQuality: String = "",
+    )
 }
 
 // ── Download Subtitles ────────────────────────────────────────────────────────
@@ -343,6 +406,86 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+// ── Migration v7 → v8: multi-resolution + watch progress fields ───────────────
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE downloads ADD COLUMN watchProgressMs INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN lastPlayedAt INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN lastSelectedQuality TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+// ── Migration v8 → v9: remote config cache moved from DataStore → Room ────────
+// Removes dependency on the reelz_remote_cfg DataStore file.
+// Config is now stored as a single-row table with proper migration support.
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS remote_config_cache (
+                id INTEGER PRIMARY KEY NOT NULL DEFAULT 1,
+                config_json TEXT NOT NULL DEFAULT '{}',
+                fetched_at_ms INTEGER NOT NULL DEFAULT 0,
+                config_version INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+    }
+}
+
+
+// ── Migration v9 → v10: production indices for high-frequency query paths ────
+// Adding indices here (not in entity annotations) so they ship as a proper
+// migration and don't cause a destructive rebuild on existing installs.
+//
+// Indices added:
+//   • downloads(tmdbId, season, episode) — findExisting(), getAllForContent()
+//   • watch_history(watchedAt)           — getPage(), getRecent()
+//   • cached_media(mediaType, popularity)— getByType()
+//   • watchlist(addedAt)                 — getAll() reactive flow
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Downloads: composite index for per-content queries (duplicate check,
+        // getAllForContent). Without this, every duplicate guard does a full
+        // table scan — gets painful with thousands of downloads.
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_downloads_content
+            ON downloads(tmdbId, season, episode)
+        """.trimIndent())
+
+        // Watch history: ordering index so the paginated history and recent
+        // history queries don't sort the full table on every load.
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_watch_history_at
+            ON watch_history(watchedAt DESC)
+        """.trimIndent())
+
+        // Cached media: composite index for the getByType() query which filters
+        // on mediaType and orders by popularity. Covers both clauses in one scan.
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_cached_media_type_pop
+            ON cached_media(mediaType, popularity DESC)
+        """.trimIndent())
+
+        // Watchlist: ordering index for the reactive getAll() flow.
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_watchlist_added
+            ON watchlist(addedAt DESC)
+        """.trimIndent())
+
+        // Liked media: same pattern.
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_liked_media_at
+            ON liked_media(likedAt DESC)
+        """.trimIndent())
+
+        // Saved videos: same pattern.
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_saved_videos_at
+            ON saved_videos(savedAt DESC)
+        """.trimIndent())
+    }
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 @Database(
     entities = [
@@ -356,8 +499,9 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         DownloadSubtitle::class,
         UserSession::class,
         RecentSearch::class,
+        RemoteConfigCache::class,  // v9: replaces DataStore config cache
     ],
-    version = 7,
+    version = 10,
     exportSchema = false,
 )
 @TypeConverters(com.axio.reelz.data.model.MediaConverters::class)
@@ -372,4 +516,5 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun transferDao(): TransferDao
     abstract fun userSessionDao(): UserSessionDao
     abstract fun recentSearchDao(): RecentSearchDao
+    abstract fun remoteConfigCacheDao(): RemoteConfigCacheDao  // v9
 }

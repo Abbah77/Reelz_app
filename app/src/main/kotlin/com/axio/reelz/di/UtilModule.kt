@@ -1,13 +1,10 @@
 package com.axio.reelz.di
 
-import android.content.Context
-import android.content.SharedPreferences
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
-import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
@@ -18,8 +15,7 @@ object UtilModule {
         .serializeNulls()
         .setLenient()
         .create()
-
-    @Provides @Singleton
-    fun provideSharedPrefs(@ApplicationContext ctx: Context): SharedPreferences =
-        ctx.getSharedPreferences("reelz_prefs", Context.MODE_PRIVATE)
+    // SharedPreferences (reelz_prefs) removed — it was provided but never
+    // injected anywhere in the app. All scalar preferences now live in
+    // AppPreferencesStore (DataStore) or Room.
 }

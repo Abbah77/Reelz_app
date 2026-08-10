@@ -2,7 +2,6 @@ package com.axio.reelz.data.repository
 
 import android.util.Log
 import com.axio.reelz.data.local.UserSessionDao
-import com.axio.reelz.data.local.UserSessionStore
 import com.axio.reelz.data.model.UserSession
 import com.axio.reelz.remoteconfig.PremiumGate
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
@@ -55,7 +54,7 @@ class ManualGrantSessionSource @Inject constructor(
  * ─────────────────────
  * The heart of the premium system. Local-first by design:
  *
- *   1. COLD START      → load from local DataStore/Room instantly, update UI,
+ *   1. COLD START      → load from local Room instantly, update UI,
  *                        then refresh in background (only if cache is stale).
  *   2. SIGN-IN         → save basic profile to show name/avatar instantly,
  *                        exchange id_token with backend (background), update session.
@@ -71,8 +70,7 @@ class ManualGrantSessionSource @Inject constructor(
  */
 @Singleton
 class UserSessionRepository @Inject constructor(
-    private val store: UserSessionStore,
-    private val dao: UserSessionDao,
+    private val dao: UserSessionDao,          // Room — single source of truth
     private val sessionSource: SessionSource,
     private val backendAuth: BackendAuthRepository,
     private val premiumGate: PremiumGate,
@@ -85,12 +83,15 @@ class UserSessionRepository @Inject constructor(
     fun currentSessionOrNull(): UserSession? = premiumGate.currentSession()
 
     /**
-     * Call once from Application.onCreate(). Reads local DataStore/Room only —
-     * never touches the network. Sets PremiumGate so every screen has a state
-     * before any background work starts.
+     * Call once from Application.onCreate(). Reads Room only — never touches
+     * the network. Sets PremiumGate so every screen has a state before any
+     * background work starts.
+     *
+     * UserSessionStore (DataStore) removed — Room is the single source of truth.
+     * The DataStore file (reelz_user_session) is no longer written or read.
      */
     suspend fun loadLocalSession() {
-        val cached = store.load() ?: dao.get()
+        val cached = dao.get()
         premiumGate.update(cached)
         Log.d(TAG, "Loaded local session: premium=${cached?.isPremium} uid=${cached?.uid?.take(8)}")
     }
@@ -122,7 +123,7 @@ class UserSessionRepository @Inject constructor(
             photoUrl   = photoUrl,
             cachedAtMs = System.currentTimeMillis(),
         )
-        store.save(basicSession)
+        dao.upsert(basicSession)   // Room only — DataStore removed
         premiumGate.update(basicSession)
         Log.i(TAG, "Sign-in: profile saved instantly for ${email.take(6)}...")
 
@@ -150,8 +151,7 @@ class UserSessionRepository @Inject constructor(
                     subscribedAtMs = if (authResult.isPremium) System.currentTimeMillis() else 0L,
                     cachedAtMs     = System.currentTimeMillis(),
                 )
-                store.save(resolved)
-                dao.upsert(resolved)
+                dao.upsert(resolved)   // Room only
                 premiumGate.update(resolved)
                 Log.i(TAG, "Backend session resolved: premium=${authResult.isPremium}")
                 return
@@ -182,7 +182,7 @@ class UserSessionRepository @Inject constructor(
      * callers don't need to throttle this themselves.
      */
     suspend fun refreshCurrentSession() {
-        val current = store.load() ?: return
+        val current = dao.get() ?: return   // Room only
         Log.d(TAG, "Refreshing session for uid=${current.uid.take(8)}...")
         refreshFromSource(current.uid, current.name, current.email, current.photoUrl)
     }
@@ -197,7 +197,7 @@ class UserSessionRepository @Inject constructor(
             sessionSource.fetch(email)
         } catch (e: Exception) {
             Log.e(TAG, "SessionSource.fetch failed: ${e.message}")
-            null // Rule 6: fail safe toward free
+            null // fail safe toward free
         }
 
         val resolved = UserSession(
@@ -212,15 +212,13 @@ class UserSessionRepository @Inject constructor(
             cachedAtMs     = System.currentTimeMillis(),
         )
 
-        store.save(resolved)
-        dao.upsert(resolved)
+        dao.upsert(resolved)   // Room only — DataStore removed
         premiumGate.update(resolved)
         Log.d(TAG, "Session refreshed: premium=${resolved.isPremium}")
     }
 
     suspend fun signOut() {
-        store.clear()
-        dao.clear()
+        dao.clear()            // Room only
         premiumGate.update(null)
         Log.i(TAG, "Signed out — session cleared")
     }

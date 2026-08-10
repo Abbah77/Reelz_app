@@ -254,6 +254,17 @@ data class DownloadItem(
     val localPlaylistPath: String = "",
     val qualityTracksJson: String = "[]",
     val resolveRequired: Boolean = true,
+    /** Watch progress in milliseconds — updated when user exits the player */
+    val watchProgressMs: Long = 0,
+    /** Total duration in milliseconds — set once on first play */
+    val durationMs: Long = 0,
+    /** Last played timestamp — for "Last played: X days ago" display */
+    val lastPlayedAt: Long = 0,
+    /**
+     * The quality label that was last selected by the user in the player.
+     * Empty string means "use highest available".
+     */
+    val lastSelectedQuality: String = "",
 )
 
 @Entity(tableName = "transfer_history")
@@ -270,12 +281,11 @@ data class TransferRecord(
 )
 
 /**
- * Local cache of the signed-in user's premium session. Belt + suspenders with
- * UserSessionStore (DataStore): DataStore for instant synchronous-style reads
- * in ViewModels, Room for structured queries and to survive DataStore corruption
- * edge cases. There is only ever one row (uid is the primary key, but in
- * practice the app keeps a single active session at a time — see
- * UserSessionDao.get(), which always takes the most recent one).
+ * Local cache of the signed-in user's premium session.
+ * Room is the single source of truth — no DataStore duplicate.
+ * There is only ever one row (uid is the primary key). In practice the app
+ * keeps a single active session at a time — see UserSessionDao.get(),
+ * which always takes the most recent one.
  */
 @Entity(tableName = "user_session")
 data class UserSession(
