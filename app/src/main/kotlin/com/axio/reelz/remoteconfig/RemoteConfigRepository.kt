@@ -234,11 +234,16 @@ class RemoteConfigRepository @Inject constructor(
             ?.maxByOrNull { it.weight }
             ?.key
 
-    // activeOsKey() removed — OpenSubtitles key now lives on the backend
-    // activeStreamSources() removed — stream sources are backend config, not app config
+    fun activeOsKey(): String? =
+        _config.value?.subtitles?.providers
+            ?.firstOrNull { it.id == "opensubtitles" && it.enabled }
+            ?.keys?.filter { it.enabled }?.maxByOrNull { it.weight }?.key
 
-    /** Returns the full live config snapshot. */
-    fun current(): RemoteConfig       = _config.value ?: RemoteConfig()
+    fun activeStreamSources(): List<StreamSourceConfig> =
+        _config.value?.streamSources
+            ?.filter { it.enabled }
+            ?.sortedBy { it.priority }
+            ?: emptyList()
 
     fun featureFlags(): FeatureFlags  = _config.value?.featureFlags ?: FeatureFlags()
     fun meta(): MetaConfig            = _config.value?.meta ?: MetaConfig()
@@ -335,12 +340,12 @@ class RemoteConfigRepository @Inject constructor(
      * Returns a human-readable error string if invalid, null if OK.
      */
     private fun validateConfig(cfg: RemoteConfig): String? {
-        if (cfg.backend.backendUrl.isBlank() && cfg.backend.streamUrl.isBlank())
-            return "backend has no urls configured"
+        if (cfg.backend.backendUrl.isBlank())
+            return "backend.backend_url is blank"
         if (cfg.tmdb == null || cfg.tmdb.keys.filter { it.enabled }.isEmpty())
             return "tmdb has no enabled keys"
-        // stream_sources in config.json are now optional — the backend engine
-        // handles source resolution server-side. We no longer need them in the app.
+        if (cfg.streamSources.filter { it.enabled }.isEmpty())
+            return "stream_sources has no enabled sources"
         return null
     }
 

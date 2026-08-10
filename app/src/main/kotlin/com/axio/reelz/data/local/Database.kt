@@ -167,69 +167,6 @@ interface DownloadDao {
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: String)
-
-    /**
-     * Returns the first non-ERROR download for this content WITH the exact quality.
-     * Used for per-quality duplicate guard — allows different resolutions of same movie.
-     */
-    @Query("""
-        SELECT * FROM downloads
-        WHERE tmdbId  = :tmdbId
-          AND season  = :season
-          AND episode = :episode
-          AND quality = :quality
-          AND status  != 'ERROR'
-        LIMIT 1
-    """)
-    suspend fun findExisting(tmdbId: Int, season: Int, episode: Int, quality: String = ""): DownloadItem?
-
-    /**
-     * All non-ERROR downloads for this content (any quality).
-     * Used to show all downloaded resolutions of the same movie/episode.
-     */
-    @Query("""
-        SELECT * FROM downloads
-        WHERE tmdbId  = :tmdbId
-          AND season  = :season
-          AND episode = :episode
-          AND status  != 'ERROR'
-        ORDER BY quality DESC
-    """)
-    fun getAllForContent(tmdbId: Int, season: Int, episode: Int): Flow<List<DownloadItem>>
-
-    /**
-     * All non-ERROR downloads for this content (suspend version for one-shot reads).
-     */
-    @Query("""
-        SELECT * FROM downloads
-        WHERE tmdbId  = :tmdbId
-          AND season  = :season
-          AND episode = :episode
-          AND status  != 'ERROR'
-        ORDER BY quality DESC
-    """)
-    suspend fun getAllForContentOnce(tmdbId: Int, season: Int, episode: Int): List<DownloadItem>
-
-    /** Update watch progress when user exits the player. */
-    @Query("""
-        UPDATE downloads
-        SET watchProgressMs = :progressMs,
-            durationMs      = :durationMs,
-            lastPlayedAt    = :lastPlayedAt,
-            lastSelectedQuality = :lastSelectedQuality
-        WHERE tmdbId  = :tmdbId
-          AND season  = :season
-          AND episode = :episode
-    """)
-    suspend fun updateWatchProgress(
-        tmdbId: Int,
-        season: Int,
-        episode: Int,
-        progressMs: Long,
-        durationMs: Long,
-        lastPlayedAt: Long = System.currentTimeMillis(),
-        lastSelectedQuality: String = "",
-    )
 }
 
 // ── Download Subtitles ────────────────────────────────────────────────────────
@@ -406,16 +343,6 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
-// ── Migration v7 → v8: multi-resolution + watch progress fields ───────────────
-val MIGRATION_7_8 = object : Migration(7, 8) {
-    override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("ALTER TABLE downloads ADD COLUMN watchProgressMs INTEGER NOT NULL DEFAULT 0")
-        db.execSQL("ALTER TABLE downloads ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0")
-        db.execSQL("ALTER TABLE downloads ADD COLUMN lastPlayedAt INTEGER NOT NULL DEFAULT 0")
-        db.execSQL("ALTER TABLE downloads ADD COLUMN lastSelectedQuality TEXT NOT NULL DEFAULT ''")
-    }
-}
-
 // ── Database ──────────────────────────────────────────────────────────────────
 @Database(
     entities = [
@@ -430,7 +357,7 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         UserSession::class,
         RecentSearch::class,
     ],
-    version = 8,
+    version = 7,
     exportSchema = false,
 )
 @TypeConverters(com.axio.reelz.data.model.MediaConverters::class)

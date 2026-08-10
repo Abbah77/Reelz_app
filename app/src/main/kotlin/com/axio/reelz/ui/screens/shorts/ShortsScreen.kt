@@ -55,7 +55,7 @@ import com.axio.reelz.data.model.ShortVideo
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.remoteconfig.RemoteConfigRepository
 import com.axio.reelz.remoteconfig.ShortCategory
-// StreamHeaders removed — using inline UA constant below
+import com.axio.reelz.scanner.StreamHeaders
 import com.axio.reelz.ui.components.CinematicSpinner
 import com.axio.reelz.ui.components.IconBookmark
 import com.axio.reelz.ui.components.IconBookmarkFilled
@@ -905,7 +905,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         // (that was an ifunny.club anti-hotlinking workaround) — just a
         // reasonable UA and generous timeouts/redirect handling.
         DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+            .setUserAgent(StreamHeaders.UA_CHROME_ANDROID)
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(10_000)
             .setReadTimeoutMs(12_000)

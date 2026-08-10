@@ -1,0 +1,598 @@
+package com.axio.reelz.scanner
+
+import android.content.Context
+import android.net.ConnectivityManager
+import com.axio.reelz.data.model.MediaType
+import com.axio.reelz.data.model.StreamResult
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Prefetch states so the player can observe and react instantly.
+ */
+sealed class PrefetchState {
+    object Idle    : PrefetchState()
+    object Running : PrefetchState()
+    data class Ready(val result: StreamResult) : PrefetchState()
+    object Failed  : PrefetchState()
+}
+
+@Singleton
+class StreamEngine @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val directScanner: DirectScanner,
+    private val cache: StreamResultCache,
+    private val sourceRegistry: SourceRegistry,
+    private val stats: SourceStatsTracker,
+) {
+    // ── Observable prefetch state ────────────────────────────────────────────
+    // The player observes this. If it's Ready when the user taps Play,
+    // playback starts in ~0ms. If Running, the player subscribes and starts
+    // the moment the result arrives — no second resolve() call ever made.
+    private val _prefetch = MutableStateFlow<PrefetchState>(PrefetchState.Idle)
+    val prefetchState: StateFlow<PrefetchState> = _prefetch.asStateFlow()
+
+    private var prefetchKey: String = ""
+    private var prefetchJob: Job?   = null
+
+    /**
+     * Called from DetailViewModel as soon as detail screen loads.
+     * Races all sources in parallel; updates prefetchState when first wins.
+     * The player subscribes to this — zero duplication, zero delay.
+     */
+    fun prefetch(
+        scope: CoroutineScope,
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+    ) {
+        val key = cache.key(tmdbId, mediaType, season, episode)
+
+        // Already have a valid cached result — expose as Ready immediately
+        cache.get(key)?.let {
+            _prefetch.value = PrefetchState.Ready(it)
+            prefetchKey = key
+            return
+        }
+
+        // Same key already running — don't restart
+        if (prefetchKey == key && _prefetch.value is PrefetchState.Running) return
+
+        prefetchJob?.cancel()
+        prefetchKey = key
+        _prefetch.value = PrefetchState.Running
+
+        prefetchJob = scope.launch {
+            val result = raceAllSources(tmdbId, mediaType, season, episode)
+            if (result != null) {
+                cache.put(key, result)
+                _prefetch.value = PrefetchState.Ready(result)
+            } else {
+                _prefetch.value = PrefetchState.Failed
+            }
+        }
+    }
+
+    /**
+     * Called by the player when it initialises.
+     * - If prefetch is already Ready → returns instantly (0ms wait).
+     * - If prefetch is Running → suspends and receives the result the moment
+     *   it completes — no new network call, the existing race finishes.
+     * - If prefetch is Idle/Failed or key mismatch → starts a fresh race.
+     *
+     * This is the key insight: one race, multiple consumers, zero waste.
+     */
+    suspend fun resolve(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+    ): StreamResult? {
+        val key = cache.key(tmdbId, mediaType, season, episode)
+
+        // 1. Cache hit — instant
+        cache.get(key)?.let { return it }
+
+        // 2. Prefetch already has the result — instant
+        val current = _prefetch.value
+        if (current is PrefetchState.Ready && prefetchKey == key) {
+            return current.result
+        }
+
+        // 3. Prefetch is running for the same key — subscribe and wait.
+        //    Use first{} so the coroutine actually suspends and resumes on the
+        //    first terminal emission.  collect{} on a StateFlow never completes
+        //    on its own, so return@collect only skips the current item and the
+        //    coroutine hangs forever — that was the original deadlock.
+        if (_prefetch.value is PrefetchState.Running && prefetchKey == key) {
+            val terminal = prefetchState.first { it is PrefetchState.Ready || it is PrefetchState.Failed }
+            if (terminal is PrefetchState.Ready) return terminal.result
+            // Failed — fall through to fresh resolve
+        }
+
+        // 4. No prefetch running — start a fresh race
+        val result = raceAllSources(tmdbId, mediaType, season, episode)
+        if (result != null) cache.put(key, result)
+        return result
+    }
+
+    /**
+     * Core racing engine. All sources race in parallel.
+     * First to return a valid stream wins; all others are cancelled.
+     *
+     * Optimizations:
+     * - DirectScanner runs first (no WebView overhead, fast HTTP scan).
+     * - 150ms stagger between source launches to avoid thundering-herd.
+     * - Per-source 2s timeout on DirectScanner, 18s on WebView.
+     * - Global 25s hard timeout.
+     */
+    /**
+     * True when the active connection is metered (mobile data, or a
+     * Wi-Fi hotspot the user has marked as metered). Used to pick a
+     * data-conscious resolution strategy instead of racing every source.
+     */
+    private fun isMetered(): Boolean = try {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        cm.isActiveNetworkMetered
+    } catch (_: Exception) {
+        true // fail safe: assume metered if we can't tell, so we default to the lighter path
+    }
+
+    /**
+     * Entry point used by [prefetch] and [resolve]. Picks the strategy
+     * based on connection type:
+     *  - Metered (mobile data): sequential, best-source-first, stop at
+     *    first success. Skips sources with a recent failure streak
+     *    without even attempting them. Minimizes wasted data — never
+     *    pays for more than one in-flight scan at a time.
+     *  - Unmetered (Wi-Fi): parallel race, as before — favors speed
+     *    since extra data cost from losing sources doesn't matter here.
+     */
+    private suspend fun raceAllSources(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int,
+        episode: Int,
+    ): StreamResult? =
+        if (isMetered()) {
+            sequentialBestFirst(tmdbId, mediaType, season, episode)
+        } else {
+            parallelRace(tmdbId, mediaType, season, episode)
+        }
+
+    /**
+     * Sequential resolution: try sources one at a time in priority/health
+     * order, stop at the first success. No wasted parallel data usage.
+     */
+    private suspend fun sequentialBestFirst(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int,
+        episode: Int,
+    ): StreamResult? {
+        val sources = sourceRegistry.sorted()
+        for (source in sources) {
+            val startedAt = System.currentTimeMillis()
+            try {
+                val url = source.buildUrl(tmdbId, mediaType, season, episode)
+
+                // DirectScanner first — no WebView, ultra fast, near-zero data
+                val directResult = withTimeoutOrNull(2_000L) {
+                    withContext(Dispatchers.IO) { directScanner.scan(url, source) }
+                }
+                if (directResult != null) {
+                    stats.recordSuccess(source.id, System.currentTimeMillis() - startedAt)
+                    return directResult
+                }
+
+                if (!source.requiresJs) {
+                    stats.recordFailure(source.id)
+                    continue
+                }
+
+                val result = withTimeoutOrNull(18_000L) {
+                    withContext(Dispatchers.Main) {
+                        WebViewScanner(context).scan(url, source, timeoutMs = 18_000L)
+                    }
+                }
+                if (result != null) {
+                    stats.recordSuccess(source.id, System.currentTimeMillis() - startedAt)
+                    return result
+                }
+                // Both DirectScanner AND WebView failed for this source on
+                // this attempt — counts as one failure toward the skip
+                // threshold, not two, so a flaky-but-working source isn't
+                // punished twice as hard as a JS-only source that simply
+                // never has a DirectScanner-visible result.
+                stats.recordFailure(source.id)
+            } catch (_: Exception) {
+                stats.recordFailure(source.id)
+                continue
+            }
+        }
+        return null
+    }
+
+    /** Original parallel-race behavior, reserved for unmetered (Wi-Fi) connections. */
+    private suspend fun parallelRace(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int,
+        episode: Int,
+    ): StreamResult? = coroutineScope {
+        val sources = sourceRegistry.sorted()
+        if (sources.isEmpty()) return@coroutineScope null
+
+        val resultChannel = Channel<StreamResult?>(Channel.CONFLATED)
+        val jobs = mutableListOf<Job>()
+
+        sources.forEachIndexed { index, source ->
+            val job = launch {
+                if (index > 0) delay(index * 150L)   // 150ms stagger (was 200ms)
+                val startedAt = System.currentTimeMillis()
+                try {
+                    val url = source.buildUrl(tmdbId, mediaType, season, episode)
+
+                    // DirectScanner first — no WebView, ultra fast
+                    val directResult = withTimeoutOrNull(2_000L) {
+                        withContext(Dispatchers.IO) { directScanner.scan(url, source) }
+                    }
+                    if (directResult != null && isActive) {
+                        stats.recordSuccess(source.id, System.currentTimeMillis() - startedAt)
+                        resultChannel.trySend(directResult)
+                        return@launch
+                    }
+
+                    // WebView fallback for JS-heavy sources
+                    if (!source.requiresJs) {
+                        stats.recordFailure(source.id)
+                        return@launch
+                    }
+
+                    val result = withTimeoutOrNull(18_000L) {
+                        withContext(Dispatchers.Main) {
+                            WebViewScanner(context).scan(url, source, timeoutMs = 18_000L)
+                        }
+                    }
+                    if (result != null && isActive) {
+                        stats.recordSuccess(source.id, System.currentTimeMillis() - startedAt)
+                        resultChannel.trySend(result)
+                    } else {
+                        stats.recordFailure(source.id)
+                    }
+                } catch (_: Exception) {
+                    stats.recordFailure(source.id)
+                }
+            }
+            jobs.add(job)
+        }
+
+        val timeoutJob = launch {
+            delay(25_000L)
+            resultChannel.trySend(null)
+        }
+
+        val result = resultChannel.receive()
+        jobs.forEach { it.cancel() }
+        timeoutJob.cancel()
+        result
+    }
+
+    /**
+     * Fallback resolve: tries remaining sources after a primary failure.
+     * Skips the already-failed source, tries cache first.
+     */
+    suspend fun resolveWithFallback(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+        excludeSource: String = "",
+    ): StreamResult? {
+        val key = cache.key(tmdbId, mediaType, season, episode)
+        cache.remove(key)  // invalidate — previous result failed
+
+        // Reset prefetch state so it can be re-used
+        if (prefetchKey == key) _prefetch.value = PrefetchState.Idle
+
+        val sources = sourceRegistry.sorted().filter { it.name != excludeSource }
+        for (source in sources) {
+            val startedAt = System.currentTimeMillis()
+            try {
+                val url = source.buildUrl(tmdbId, mediaType, season, episode)
+
+                val directResult = withTimeoutOrNull(2_000L) {
+                    withContext(Dispatchers.IO) { directScanner.scan(url, source) }
+                }
+                if (directResult != null) {
+                    stats.recordSuccess(source.id, System.currentTimeMillis() - startedAt)
+                    cache.put(key, directResult)
+                    return directResult
+                }
+
+                if (!source.requiresJs) {
+                    stats.recordFailure(source.id)
+                    continue
+                }
+
+                val result = withTimeoutOrNull(18_000L) {
+                    withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source, timeoutMs = 18_000L) }
+                }
+                if (result != null) {
+                    stats.recordSuccess(source.id, System.currentTimeMillis() - startedAt)
+                    cache.put(key, result)
+                    return result
+                }
+                stats.recordFailure(source.id)
+            } catch (_: Exception) {
+                stats.recordFailure(source.id)
+                continue
+            }
+        }
+        return null
+    }
+
+    /**
+     * Reset prefetch state — call when navigating away from detail screen.
+     */
+    fun resetPrefetch() {
+        prefetchJob?.cancel()
+        prefetchJob = null
+        _prefetch.value = PrefetchState.Idle
+        prefetchKey = ""
+    }
+
+    /**
+     * DOWNLOAD-SHEET ONLY quality resolver.
+     *
+     * Unlike [raceAllSources] (used for playback, which wants the single
+     * fastest source and cancels the rest), the download sheet wants the
+     * fullest possible list of real resolutions — because a single source
+     * may only expose 720p while another has 1080p.
+     *
+     * Strategy ("first to find it wins, stop asking for what we already have"):
+     *  - All sources are launched in parallel with the same stagger/timeouts
+     *    used for playback, so this is not slower than a normal resolve.
+     *  - Every time a source responds, we add ONLY the resolutions we don't
+     *    already have to the merged set (dedup by label — e.g. "1080p").
+     *  - As soon as every resolution in [targetLabels] has been found, we
+     *    stop waiting on the remaining sources — no wasted network time.
+     *  - If sources run out before all targets are found, we return whatever
+     *    was found (never blocks forever).
+     *
+     * This does NOT change [resolve] / [prefetch] / playback in any way.
+     */
+    suspend fun resolveAllQualitiesForDownload(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+        targetLabels: Set<String> = setOf("1080p", "720p", "480p", "360p", "240p"),
+    ): List<Pair<com.axio.reelz.data.model.QualityTrack, StreamResult>> = coroutineScope {
+        val sources = sourceRegistry.sorted()
+        if (sources.isEmpty()) return@coroutineScope emptyList()
+
+        // label -> (track, parentStreamResult so headers/referer travel with it)
+        val found = java.util.concurrent.ConcurrentHashMap<String, Pair<com.axio.reelz.data.model.QualityTrack, StreamResult>>()
+        val resultChannel = Channel<Unit>(Channel.CONFLATED)
+
+        fun haveAllTargets() = targetLabels.isNotEmpty() && found.keys.containsAll(targetLabels)
+
+        val jobs = sources.mapIndexed { index, source ->
+            launch {
+                if (haveAllTargets()) return@launch
+                if (index > 0) delay(index * 150L)
+                if (haveAllTargets()) return@launch
+                try {
+                    val url = source.buildUrl(tmdbId, mediaType, season, episode)
+
+                    val stream = withTimeoutOrNull(2_000L) {
+                        withContext(Dispatchers.IO) { directScanner.scan(url, source) }
+                    } ?: (if (source.requiresJs) {
+                        withTimeoutOrNull(18_000L) {
+                            withContext(Dispatchers.Main) { WebViewScanner(context).scan(url, source, timeoutMs = 18_000L) }
+                        }
+                    } else null)
+
+                    if (stream == null || !isActive) return@launch
+
+                    val tracks: List<com.axio.reelz.data.model.QualityTrack> = when {
+                        stream.qualities.isNotEmpty() -> stream.qualities
+                        stream.isHls -> QualityListParsing.parseVariants(stream.url, stream.headers)
+                        else -> emptyList()
+                    }.ifEmpty {
+                        // No variant ladder found (plain MP4, or HLS media playlist with
+                        // no #EXT-X-STREAM-INF entries) — this is a single real quality.
+                        // Probe its REAL resolution instead of using an unknown
+                        // "Best available" placeholder that would always lock.
+                        listOf(QualityListParsing.probeSingleQuality(url = stream.url, headers = stream.headers, knownLabelHint = stream.quality))
+                    }
+
+                    var addedNew = false
+                    for (track in tracks) {
+                        // Only take a resolution we don't already have — "first to find it wins".
+                        if (found.putIfAbsent(track.label, track to stream) == null) {
+                            addedNew = true
+                        }
+                    }
+                    if (addedNew) resultChannel.trySend(Unit)
+                } catch (_: Exception) {}
+            }
+        }
+
+        // Wait until either all targets are found or every source has had its turn
+        // (global cap mirrors the playback global timeout, so the sheet never hangs).
+        withTimeoutOrNull(25_000L) {
+            while (isActive && !haveAllTargets() && jobs.any { it.isActive }) {
+                resultChannel.tryReceive()
+                delay(50L)
+            }
+        }
+        jobs.forEach { it.cancel() }
+
+        found.values.sortedByDescending { (track, _) -> trackHeightForSort(track.label) }
+    }
+
+    private fun trackHeightForSort(label: String): Int =
+        Regex("""(\d+)""").find(label)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+    /**
+     * One quality found during [resolveAllQualitiesForDownloadFlow] — emitted
+     * the moment a source resolves it, not batched with the rest.
+     *
+     * [sourceLadderLabels] is the FULL set of labels this particular source's
+     * manifest actually contains (not just [track]'s label) — e.g. a source
+     * whose master playlist only has 1080p/720p/480p reports that whole set
+     * here the moment it resolves, even though it emits one [QualityFound]
+     * per label. The download sheet uses this to stop showing skeleton rows
+     * for labels a responding source has already proven it doesn't have,
+     * instead of leaving them spinning until the hard timeout. Not every
+     * title has all five qualities available, so the sheet must never
+     * assume a fixed ladder size.
+     */
+    data class QualityFound(
+        val track: com.axio.reelz.data.model.QualityTrack,
+        val stream: StreamResult,
+        val sourceLadderLabels: Set<String> = emptySet(),
+    )
+
+    /**
+     * DOWNLOAD-SHEET ONLY — LIVE/STREAMING version.
+     *
+     * Same racing strategy as [resolveAllQualitiesForDownload] (kept below,
+     * untouched, in case anything else still calls it), but instead of
+     * blocking until the whole ladder is found (or times out) and returning
+     * one final List, this emits each newly-found quality AS SOON AS a
+     * source resolves it. The download sheet collects this and fills in
+     * rows one at a time — e.g. a fast DirectScanner source can hand back
+     * 720p in ~300ms while a slower WebView-only source is still working
+     * on 1080p, and the user sees 720p immediately instead of waiting for
+     * both.
+     *
+     * DirectScanner is tried first per source (2s timeout, unchanged).
+     * WebView fallback is KEPT — some sources genuinely only resolve via JS
+     * — but its timeout is 10s here instead of playback's 18s, since this
+     * path already has other sources racing in parallel to cover the gap,
+     * and a shorter per-source leash keeps the sheet feeling fast without
+     * dropping WebView-only sources' chance to contribute.
+     *
+     * Stop conditions (whichever first):
+     *  - every [targetLabels] found → cancel remaining jobs immediately.
+     *  - [hardCapMs] elapsed (default 8s) → stop waiting; any source still
+     *    running is cancelled. Whatever was found stays found — nothing is
+     *    un-emitted.
+     *
+     * No automatic real-byte size measurement happens here — quality
+     * discovery only reads manifests/headers (see QualityListParsing changes
+     * for the data-saver rationale). This function performs the SAME work
+     * as [resolveAllQualitiesForDownload], just reshaped to emit
+     * incrementally instead of blocking — it is not a heavier duplicate.
+     */
+    fun resolveAllQualitiesForDownloadFlow(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+        targetLabels: Set<String> = setOf("1080p", "720p", "480p", "360p", "240p"),
+        // BUG FIX: hardCapMs (previously 8s) was SHORTER than webViewTimeoutMs
+        // (10s) — the outer race would always give up on a WebView-based
+        // source before that source's own timeout could ever fire, cancelling
+        // it mid-scan on every single request. Since most sources default to
+        // requiresJs = true (see StreamSource.kt), this meant WebView sources
+        // essentially never got a fair chance to report success OR failure,
+        // which is what left skeleton rows in the download sheet stuck with
+        // no signal to clear them. The outer cap must always be >= the inner
+        // per-source timeout it's racing against; given a small buffer for
+        // staggered start delays (index * 150ms across sources).
+        hardCapMs: Long = 12_000L,
+        webViewTimeoutMs: Long = 10_000L,
+    ): kotlinx.coroutines.flow.Flow<QualityFound> = kotlinx.coroutines.flow.channelFlow {
+        val sources = sourceRegistry.sorted()
+        if (sources.isEmpty()) return@channelFlow
+
+        val foundLabels = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        fun haveAllTargets() = targetLabels.isNotEmpty() && foundLabels.containsAll(targetLabels)
+
+        val jobs = sources.mapIndexed { index, source ->
+            launch {
+                if (haveAllTargets()) return@launch
+                if (index > 0) delay(index * 150L)
+                if (haveAllTargets()) return@launch
+                try {
+                    val url = source.buildUrl(tmdbId, mediaType, season, episode)
+
+                    val stream = withTimeoutOrNull(2_000L) {
+                        withContext(Dispatchers.IO) { directScanner.scan(url, source) }
+                    } ?: (if (source.requiresJs) {
+                        // BUG FIX: previously scan() ignored webViewTimeoutMs
+                        // entirely and always ran its own fixed 20s internal
+                        // timeout. That meant this outer withTimeoutOrNull
+                        // (10s here) would cancel the coroutine first, but
+                        // the WebView + its Handler callback kept running
+                        // for up to another 10s beyond that on the Main
+                        // thread — and if the embed page itself was slow or
+                        // hung, Main-thread congestion could delay teardown
+                        // further still. This is the mechanism behind the
+                        // download sheet's skeleton rows getting stuck
+                        // indefinitely: the source that owned those labels
+                        // never actually reported success OR failure back
+                        // to the flow within its expected budget.
+                        withTimeoutOrNull(webViewTimeoutMs) {
+                            withContext(Dispatchers.Main) {
+                                WebViewScanner(context).scan(url, source, timeoutMs = webViewTimeoutMs)
+                            }
+                        }
+                    } else null)
+
+                    if (stream == null || !isActive) return@launch
+
+                    val tracks: List<com.axio.reelz.data.model.QualityTrack> = when {
+                        stream.qualities.isNotEmpty() -> stream.qualities
+                        stream.isHls -> QualityListParsing.parseVariants(stream.url, stream.headers)
+                        else -> emptyList()
+                    }.ifEmpty {
+                        // No variant ladder — single real quality. Cheap bandwidth-based
+                        // estimate now (see QualityListParsing.probeSingleQuality) — no
+                        // automatic real-byte measurement here.
+                        listOf(QualityListParsing.probeSingleQuality(url = stream.url, headers = stream.headers, knownLabelHint = stream.quality))
+                    }
+
+                    // This source's complete ladder — sent alongside every track it
+                    // produces so the collector can retire skeleton rows for labels
+                    // this source proves it doesn't have, rather than waiting on
+                    // them until the hard timeout. Restricted to targetLabels since
+                    // that's all the sheet cares about (e.g. a source with a 4K
+                    // variant we don't display shouldn't affect anything here).
+                    val ladderLabels = tracks.map { it.label }.filter { it in targetLabels }.toSet()
+
+                    for (track in tracks) {
+                        if (haveAllTargets()) break
+                        // "First to find it wins" — dedup by label so a slower source
+                        // reporting a label we already have is simply ignored.
+                        if (foundLabels.add(track.label)) {
+                            send(QualityFound(track, stream, ladderLabels))
+                        }
+                    }
+                } catch (_: Exception) {
+                    // One source failing never blocks the others — just no emission
+                    // from this source. No per-row error state; absence is silent.
+                }
+            }
+        }
+
+        withTimeoutOrNull(hardCapMs) {
+            while (isActive && !haveAllTargets() && jobs.any { it.isActive }) {
+                delay(50L)
+            }
+        }
+        jobs.forEach { it.cancel() }
+    }
+}

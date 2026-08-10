@@ -254,17 +254,6 @@ data class DownloadItem(
     val localPlaylistPath: String = "",
     val qualityTracksJson: String = "[]",
     val resolveRequired: Boolean = true,
-    /** Watch progress in milliseconds — updated when user exits the player */
-    val watchProgressMs: Long = 0,
-    /** Total duration in milliseconds — set once on first play */
-    val durationMs: Long = 0,
-    /** Last played timestamp — for "Last played: X days ago" display */
-    val lastPlayedAt: Long = 0,
-    /**
-     * The quality label that was last selected by the user in the player.
-     * Empty string means "use highest available".
-     */
-    val lastSelectedQuality: String = "",
 )
 
 @Entity(tableName = "transfer_history")

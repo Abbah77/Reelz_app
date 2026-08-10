@@ -143,19 +143,7 @@ class ExploreViewModel @Inject constructor(
                 }
                 _ui.update {
                     it.copy(
-                        results = if (resetPage) {
-                            items
-                        } else {
-                            // Use associateBy so any tmdbId that appears on multiple pages
-                            // is deduplicated, keeping the freshest entry. This prevents the
-                            // "Key was already used" crash in LazyVerticalGrid when TMDB's
-                            // ranked pages overlap (e.g. an item shifts from page 2 to page 1
-                            // between the two network calls).
-                            (it.results + items)
-                                .associateBy { item -> item.tmdbId }
-                                .values
-                                .toList()
-                        },
+                        results       = if (resetPage) items else it.results + items,
                         page          = page,
                         isLoading     = false,
                         isLoadingMore = false,
@@ -171,9 +159,6 @@ class ExploreViewModel @Inject constructor(
     fun loadMore() {
         val st = _ui.value
         if (st.isLoading || st.isLoadingMore || !st.hasMore) return
-        // Atomically flip isLoadingMore and bump the page in a single update so
-        // a second call that arrives before recomposition sees isLoadingMore=true
-        // and bails out at the guard above, preventing a double page-increment.
         _ui.update { it.copy(isLoadingMore = true, page = it.page + 1) }
         runQuery(resetPage = false)
     }

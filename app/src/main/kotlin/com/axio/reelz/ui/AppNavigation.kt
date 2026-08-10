@@ -46,17 +46,16 @@ import kotlinx.coroutines.launch
 
 // ── Route definitions ─────────────────────────────────────────────────────────
 sealed class Route(val path: String) {
-    object Browse          : Route("home")
-    object Explore         : Route("explore")
-    object Shorts          : Route("shorts")
-    object Downloads       : Route("downloads")
-    object DownloadsActive : Route("downloads_active")
-    object Transfer        : Route("transfer")
-    object Profile         : Route("profile")
-    object Search          : Route("search")
-    object Premium         : Route("premium")
-    object Settings        : Route("settings")
-    object Detail          : Route("detail/{tmdbId}/{mediaType}") {
+    object Browse   : Route("home")
+    object Explore  : Route("explore")
+    object Shorts   : Route("shorts")
+    object Downloads: Route("downloads")
+    object Transfer : Route("transfer")
+    object Profile  : Route("profile")
+    object Search   : Route("search")
+    object Premium  : Route("premium")
+    object Settings : Route("settings")
+    object Detail   : Route("detail/{tmdbId}/{mediaType}") {
         fun go(id: Int, type: MediaType) = "detail/$id/${type.name}"
     }
 }
@@ -165,8 +164,7 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
             composable(Route.Browse.path)    { BrowseScreen(nav, adEngine, browseVm, browseListState) }
             composable(Route.Explore.path)   { ExploreScreen(nav) }
             composable(Route.Shorts.path)    { ShortsScreen(nav, adEngine, shortsVm) }
-            composable(Route.Downloads.path)       { DownloadsScreen(nav) }
-            composable(Route.DownloadsActive.path) { com.axio.reelz.ui.screens.downloads.ActiveDownloadsScreen(nav) }
+            composable(Route.Downloads.path) { DownloadsScreen(nav) }
             composable(Route.Transfer.path)  { TransferScreen(nav) }
             composable(Route.Profile.path)   { ProfileScreen(nav) }
             composable(Route.Search.path)    { SearchScreen(nav) }

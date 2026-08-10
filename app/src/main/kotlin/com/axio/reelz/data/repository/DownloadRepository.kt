@@ -23,46 +23,6 @@ class DownloadRepository @Inject constructor(
      * variant URL without re-parsing. resolveRequired = true by default so the service
      * always gets a fresh CDN URL (UPGRADE P11 / BUG 1 fix).
      */
-    /**
-     * Returns true if the content is already queued, downloading, paused, or done
-     * at the given quality. If quality is blank, checks any quality.
-     */
-    suspend fun isAlreadyDownloaded(
-        tmdbId: Int,
-        season: Int = 0,
-        episode: Int = 0,
-        quality: String = "",
-    ): Boolean = dao.findExisting(tmdbId, season, episode, quality) != null
-
-    /**
-     * Returns all downloaded (non-ERROR) items for the given content across all qualities.
-     */
-    suspend fun getDownloadedQualities(
-        tmdbId: Int,
-        season: Int = 0,
-        episode: Int = 0,
-    ): List<DownloadItem> = dao.getAllForContentOnce(tmdbId, season, episode)
-
-    /** Update the watch progress, duration, and last-selected quality after playback. */
-    suspend fun updateWatchProgress(
-        tmdbId: Int,
-        season: Int,
-        episode: Int,
-        progressMs: Long,
-        durationMs: Long,
-        lastSelectedQuality: String = "",
-    ) {
-        dao.updateWatchProgress(
-            tmdbId = tmdbId,
-            season = season,
-            episode = episode,
-            progressMs = progressMs,
-            durationMs = durationMs,
-            lastPlayedAt = System.currentTimeMillis(),
-            lastSelectedQuality = lastSelectedQuality,
-        )
-    }
-
     suspend fun enqueue(
         ctx: Context,
         tmdbId: Int,
@@ -77,14 +37,6 @@ class DownloadRepository @Inject constructor(
         headers: Map<String, String> = emptyMap(),
         qualityTracks: List<QualityTrack> = emptyList(),
     ): String {
-        // ── Per-quality duplicate guard — same quality of same content must not be enqueued twice.
-        // Different qualities (e.g., 1080p + 480p) are ALLOWED for the same movie/episode.
-        val existing = dao.findExisting(tmdbId, season, episode, quality)
-        if (existing != null) {
-            // Same quality already in the library. Return its id so callers can navigate to it.
-            return existing.id
-        }
-
         val id = UUID.randomUUID().toString()
         dao.insert(
             DownloadItem(

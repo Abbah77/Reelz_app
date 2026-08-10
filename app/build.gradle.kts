@@ -27,8 +27,20 @@ android {
         buildConfigField("String", "TMDB_IMG_W342",            "\"https://image.tmdb.org/t/p/w342\"")
         buildConfigField("String", "TMDB_IMG_ORIGINAL",        "\"https://image.tmdb.org/t/p/original\"")
 
-        // C++ native library removed — M3U8 parsing + stream resolution is server-side.
-        // No externalNativeBuild, no cmake, no NDK required.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++20", "-O3", "-DNDEBUG", "-ffast-math")
+                arguments += listOf("-DANDROID_STL=c++_shared")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path    = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {
@@ -152,7 +164,6 @@ dependencies {
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp.core)
     implementation(libs.okhttp.logging)
-    implementation(libs.okhttp.sse)
 
     // Image
     implementation(libs.coil.compose)

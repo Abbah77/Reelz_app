@@ -20,8 +20,8 @@ import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.QualityTrack
-// NativeBridge removed — M3U8 parsing now pure Kotlin
-import com.axio.reelz.stream.BackendStreamRepository
+import com.axio.reelz.scanner.NativeBridge
+import com.axio.reelz.scanner.StreamEngine
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
@@ -45,7 +45,7 @@ import kotlin.random.Random
  *  PERF P4:  Parallel segment downloads (Semaphore(4)) — 3–5x faster
  *  PERF P5:  Stream segments to disk (byteStream().copyTo) — no OOM
  *  PERF P6:  Tuned OkHttpClient with ConnectionPool(10) + HTTP/2
- *  M3U8 parsing done in pure Kotlin — see parseM3u8Segments()
+ *  PERF P3:  NativeBridge.segments() for fast C++ M3U8 parsing
  *  PERF P11: Re-resolve stream on resume (fixes stale CDN URL bug)
  *  PERF P16: Skip already-downloaded segments on resume
  *  PERF P17: Determinate progress bar in notification + ETA
@@ -74,7 +74,7 @@ import kotlin.random.Random
 class DownloadService : Service() {
 
     @Inject lateinit var downloadDao: DownloadDao
-    @Inject lateinit var streamRepo: BackendStreamRepository
+    @Inject lateinit var engine: StreamEngine
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val gson  = Gson()
@@ -197,22 +197,6 @@ class DownloadService : Service() {
         try {
             val freshItem = resolveIfNeeded(downloadDao.get(dlId) ?: return)
 
-            // Guard: resolve succeeded but the backend returned no links for this title.
-            // Mark ERROR (not PAUSED) so the user sees a clear failure badge and the
-            // item is excluded from the active download count (premium cap).
-            // Note: resolveIfNeeded returns item (original URL) on network failure so
-            // this branch only fires when the backend explicitly returned an empty list.
-            if (freshItem.streamUrl.isBlank()) {
-                downloadDao.markPaused(freshItem.id, DownloadStatus.ERROR.name)
-                updateNotif(
-                    "Download failed",
-                    "No source found for \"${item.title}\". The content may not be available yet.",
-                    0, 0
-                )
-                activeJobs.remove(dlId)
-                return
-            }
-
             if (freshItem.streamUrl.contains(".m3u8", ignoreCase = true)) {
                 downloadHls(freshItem, outputFile, dlId)
             } else {
@@ -235,81 +219,38 @@ class DownloadService : Service() {
             // Intentional pause — DB already marked PAUSED in ACTION_PAUSE handler.
             throw e
         } catch (e: Exception) {
-            // Network/IO error — mark PAUSED with resolveRequired=1 so the next
-            // resume attempt re-fetches a fresh CDN URL from the backend.
+            // BUG 1 + P11: Mark paused with resolveRequired=true
             downloadDao.markPaused(dlId)
-            updateNotif("Download paused", "\"${item.title}\" will resume when the connection is restored.", 0, 0)
+            updateNotif("Paused", "Will resume when network returns", 0, 0)
         } finally {
             activeJobs.remove(dlId)
         }
     }
 
     /**
-     * Re-resolve the download URL from the backend's /download endpoint.
-     *
-     * Critical: we use resolveDownloadLinks() — NOT resolve() — because the
-     * stream endpoint returns an HLS master URL optimised for adaptive playback,
-     * while the download endpoint returns a direct, per-quality MP4/TS link that
-     * the segment downloader can actually fetch. Using the stream URL here was
-     * the root cause of downloads appearing "added" in the queue but never
-     * actually completing: the service received a master playlist, picked the
-     * wrong variant (or fell back to the HLS URL), and the resulting file was
-     * either empty or corrupt.
+     * BUG 1 / UPGRADE P11: If resolveRequired is true (CDN token may have expired),
+     * re-resolve the stream to get a fresh URL before starting download.
      */
     private suspend fun resolveIfNeeded(item: DownloadItem): DownloadItem {
         if (!item.resolveRequired) return item
-
-        val mediaType = runCatching { MediaType.valueOf(item.mediaType) }.getOrNull()
-            ?: return item   // unknown media type — keep current URL and try anyway
-
         return try {
-            // Use POST /download — returns deduplicated per-resolution links.
-            val links = streamRepo.resolveDownloadLinks(
-                tmdbId    = item.tmdbId,
-                mediaType = mediaType,
-                title     = item.title,
-                season    = item.season,
-                episode   = item.episode,
-            )
+            val mediaType = runCatching { MediaType.valueOf(item.mediaType) }.getOrNull()
+                ?: return item
+            val fresh = engine.resolve(item.tmdbId, mediaType, item.season, item.episode)
+                ?: return item
 
-            if (links.isEmpty()) {
-                // Backend was reachable but found no download links for this title.
-                // Signal to processDownload via a blank URL so it can show ERROR.
-                return item.copy(streamUrl = "")
-            }
+            // Find the matching quality variant URL
+            val tracks = parseQualityTracks(item.qualityTracksJson)
+            val freshUrl = tracks.firstOrNull { it.label == item.quality }?.let { track ->
+                val body = fetchText(fresh.url, fresh.headers)
+                val variants = NativeBridge.variants(body, fresh.url)
+                variants.firstOrNull { it.label == item.quality || it.bandwidth == track.bandwidth }?.url
+            } ?: fresh.url
 
-            // Pick the exact quality the user selected.
-            // Match on plain label ("1080p") or label-with-language ("1080p · Hindi").
-            // Fall back to highest resolution by parsing the quality prefix.
-            val resOrder = listOf("2160p", "1080p", "720p", "480p", "360p", "240p")
-            // Strip any legacy suffix formats before matching:
-            //   "1080p (English)" → "1080p"
-            //   "1080p · Hindi"   → "1080p · Hindi" (kept — specific variant)
-            val normalizedWanted = item.quality
-                .substringBefore(" (").trim()  // strip "(English)" legacy format
-            val freshTrack = links.firstOrNull { it.label == item.quality }      // exact
-                ?: links.firstOrNull { it.label == normalizedWanted }             // normalized
-                ?: links.firstOrNull { it.label.startsWith(normalizedWanted) }    // prefix
-                ?: links.firstOrNull { normalizedWanted.startsWith(it.label) }    // reverse
-                ?: links.minByOrNull { track ->
-                    resOrder.indexOfFirst { track.label.startsWith(it) }.takeIf { it >= 0 } ?: 99
-                }
-                ?: links.first()
-
-            val freshUrl = freshTrack.url
-            // Guard: entry has a label but an empty URL (shouldn't happen, but be safe).
-            if (freshUrl.isBlank()) return item.copy(streamUrl = "")
-
-            downloadDao.updateStreamUrl(item.id, freshUrl, item.headers)
-            item.copy(streamUrl = freshUrl, resolveRequired = false)
-
-        } catch (_: Exception) {
-            // Network / timeout during resolve (backend unreachable, no internet, etc.).
-            // Keep the ORIGINAL streamUrl so the download can still attempt it — the
-            // URL stored at enqueue time is a direct link and may still be valid.
-            // processDownload will retry on next resume if this attempt also fails.
-            item
-        }
+            val headersJson = gson.toJson(fresh.headers)
+            downloadDao.updateStreamUrl(item.id, freshUrl, headersJson)
+            item.copy(streamUrl = freshUrl, headers = headersJson, resolveRequired = false)
+        } catch (_: Exception) { item }
     }
 
     // ── Direct MP4/MKV download — parallel Range chunks ───────────────────────
@@ -435,7 +376,7 @@ class DownloadService : Service() {
     private suspend fun downloadHls(item: DownloadItem, output: File, dlId: String) {
         val headers   = parseHeaders(item.headers)
 
-        // Fetch master or media playlist text (pure Kotlin — NativeBridge C++ removed)
+        // UPGRADE P3: Use NativeBridge (C++) for fast M3U8 parsing
         val m3u8Text  = fetchText(item.streamUrl, headers)
         val baseUrl   = item.streamUrl.substringBeforeLast("/") + "/"
 
@@ -444,14 +385,17 @@ class DownloadService : Service() {
         val (mediaUrl, mediaText) = if (isMedia) {
             item.streamUrl to m3u8Text
         } else {
-            // Pure Kotlin M3U8 variant selection (replaces NativeBridge C++)
-            val variantUrl = parseM3u8VariantUrl(m3u8Text, baseUrl, item.quality)
+            val variants = NativeBridge.variants(m3u8Text, baseUrl)
+            val variantUrl = variants.firstOrNull { it.label == item.quality }?.url
+                ?: variants.firstOrNull()?.url
+                ?: m3u8Text.lines().firstOrNull { !it.startsWith("#") && it.isNotBlank() }
+                    ?.let { if (it.startsWith("http")) it else baseUrl + it }
                 ?: throw IOException("Could not resolve media playlist")
             variantUrl to fetchText(variantUrl, headers)
         }
 
-        // Pure Kotlin segment parsing (replaces NativeBridge C++)
-        val segmentUrls = parseM3u8Segments(mediaText, mediaUrl.substringBeforeLast("/") + "/")
+        // UPGRADE P3: NativeBridge C++ segment parsing — single linear pass
+        val segmentUrls = NativeBridge.segments(mediaText, mediaUrl.substringBeforeLast("/") + "/")
 
         // Parse durations from media playlist (still needed for local playlist)
         val durations = mutableListOf<Float>()
@@ -858,59 +802,5 @@ class DownloadService : Service() {
     private fun createNotificationChannel() {
         val ch = NotificationChannel(CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(ch)
-    }
-
-    // ── Pure Kotlin M3U8 helpers (replace NativeBridge C++) ──────────────────
-
-    /**
-     * Parse a master M3U8 and return the URL for the requested quality label.
-     * Falls back to the highest available variant, then first non-comment line.
-     */
-    private fun parseM3u8VariantUrl(content: String, baseUrl: String, preferLabel: String): String? {
-        data class Variant(val bandwidth: Long, val resolution: String, val url: String)
-        val variants = mutableListOf<Variant>()
-        val lines = content.lines()
-        var i = 0
-        while (i < lines.size) {
-            val line = lines[i].trim()
-            if (line.startsWith("#EXT-X-STREAM-INF")) {
-                val bw = Regex("BANDWIDTH=(\\d+)").find(line)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
-                val res = Regex("RESOLUTION=([\\dx]+)").find(line)?.groupValues?.get(1) ?: ""
-                val urlLine = lines.getOrNull(i + 1)?.trim() ?: ""
-                if (urlLine.isNotBlank() && !urlLine.startsWith("#")) {
-                    val absUrl = if (urlLine.startsWith("http")) urlLine else baseUrl + urlLine
-                    variants.add(Variant(bw, res, absUrl))
-                }
-                i += 2
-            } else i++
-        }
-        if (variants.isEmpty()) {
-            // No #EXT-X-STREAM-INF — try first non-comment line
-            return lines.firstOrNull { !it.startsWith("#") && it.isNotBlank() }
-                ?.let { if (it.startsWith("http")) it else baseUrl + it }
-        }
-        // Try to match requested quality label by resolution height
-        val reqHeight = preferLabel.replace("p", "").toIntOrNull()
-        if (reqHeight != null) {
-            val byHeight = variants.firstOrNull { v ->
-                v.resolution.substringAfter("x").toIntOrNull() == reqHeight
-            }
-            if (byHeight != null) return byHeight.url
-        }
-        // Fallback: highest bandwidth
-        return variants.maxByOrNull { it.bandwidth }?.url
-    }
-
-    /**
-     * Parse a media M3U8 playlist and return all segment URLs (absolute).
-     */
-    private fun parseM3u8Segments(content: String, baseUrl: String): List<String> {
-        val segments = mutableListOf<String>()
-        for (line in content.lines()) {
-            val t = line.trim()
-            if (t.isBlank() || t.startsWith("#")) continue
-            segments.add(if (t.startsWith("http")) t else baseUrl + t)
-        }
-        return segments
     }
 }

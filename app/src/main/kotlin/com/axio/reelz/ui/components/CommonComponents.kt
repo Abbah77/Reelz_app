@@ -480,46 +480,6 @@ val IconDownloadCloud: ImageVector get() = ImageVector.Builder("Downloads", 24.d
         fill = SolidColor(Color.Transparent))
 }.build()
 
-// ── Downloaded (offline owned) — filled tray + checkmark, indicates "you own this offline" ──
-val IconDownloaded: ImageVector get() = ImageVector.Builder("Downloaded", 24.dp, 24.dp, 24f, 24f).apply {
-    // Filled tray base
-    addPath(pathData = PathData {
-        moveTo(2f, 14f)
-        horizontalLineTo(22f)
-        verticalLineTo(19f)
-        arcToRelative(3f, 3f, 0f, false, true, -3f, 3f)
-        horizontalLineTo(5f)
-        arcToRelative(3f, 3f, 0f, false, true, -3f, -3f)
-        close()
-    }, fill = SolidColor(Color(0xFF30D158))) // Success green tray
-    // Checkmark (punched through tray in app-bg color)
-    addPath(pathData = PathData {
-        moveTo(7f, 17f); lineTo(10f, 20f); lineTo(17f, 13f)
-    }, stroke = SolidColor(Color(0xFF05050A)), strokeLineWidth = 2f,
-       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
-       fill = SolidColor(Color.Transparent))
-    // Arrow stem (grey — indicates "already downloaded, no new action")
-    addPath(pathData = PathData { moveTo(12f, 2f); lineTo(12f, 14f) },
-        stroke = SolidColor(Color(0xFF30D158)), strokeLineWidth = 2f,
-        strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
-    // Arrowhead
-    addPath(pathData = PathData { moveTo(7f, 9f); lineTo(12f, 14f); lineTo(17f, 9f) },
-        stroke = SolidColor(Color(0xFF30D158)), strokeLineWidth = 2f,
-        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
-        fill = SolidColor(Color.Transparent))
-}.build()
-
-// ── Pause — two vertical bars (Lucide style, replaces emoji ⏸) ───────────────
-val IconPause: ImageVector get() = ImageVector.Builder("Pause", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(6f, 4f); horizontalLineTo(10f); verticalLineTo(20f); horizontalLineTo(6f); close()
-        moveTo(14f, 4f); horizontalLineTo(18f); verticalLineTo(20f); horizontalLineTo(14f); close()
-    }, fill = SolidColor(Color.White))
-}.build()
-
-// ── Play filled — solid triangle (alias of IconPlay but explicit for clarity) ─
-val IconPlayFill: ImageVector get() = IconPlay
-
 // ── Downloads filled (filled tray + solid arrow) ──────────────────────────────
 val IconDownloadCloudFilled: ImageVector get() = ImageVector.Builder("DownloadsFilled", 24.dp, 24.dp, 24f, 24f).apply {
     // Filled tray

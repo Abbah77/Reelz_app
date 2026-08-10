@@ -268,21 +268,7 @@ class BrowseViewModel @Inject constructor(
                     return@launch
                 }
                 infinitePage = nextPage
-                // Filter out any tmdbIds already present in earlier infinite rows so
-                // the same card never appears twice in the feed. TMDB's movie/TV discover
-                // endpoints can overlap when alternating between the two on consecutive pages.
-                val existingIds = _ui.value.feedRows
-                    .filterIsInstance<FeedRow.InfinitePage>()
-                    .flatMap { it.items }
-                    .map { it.tmdbId }
-                    .toSet()
-                val dedupedItems = items.filter { it.tmdbId !in existingIds }
-                if (dedupedItems.isEmpty()) {
-                    isInfiniteExhausted = true
-                    _ui.update { it.copy(isLoadingMore = false) }
-                    return@launch
-                }
-                val newRow = FeedRow.InfinitePage(dedupedItems, nextPage)
+                val newRow = FeedRow.InfinitePage(items, nextPage)
                 _ui.update { st ->
                     st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false)
                 }
@@ -316,14 +302,7 @@ class BrowseViewModel @Inject constructor(
                 val nextPage = st.genrePage + 1
                 val items = repo.discoverMovies(st.selectedGenreId, page = nextPage)
                 _ui.update { it.copy(
-                    // Deduplicate across pages — TMDB's genre discover endpoint can return
-                    // the same tmdbId on adjacent pages if the ranking shifts between calls.
-                    // The genre grid uses positional chunking (no explicit key), so a duplicate
-                    // won't crash today, but if a key is ever added it will. Fix it at source.
-                    genreItems        = (it.genreItems + items)
-                        .associateBy { item -> item.tmdbId }
-                        .values
-                        .toList(),
+                    genreItems        = it.genreItems + items,
                     genrePage         = nextPage,
                     hasMoreGenrePages = items.isNotEmpty(),
                     isGenreLoading    = false,
@@ -1033,7 +1012,7 @@ fun PremiumGenreBar(
             horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
         ) {
             item { PremiumGenrePill("✦ All", selectedId == null) { onSelect(null) } }
-            items(genres, key = { it.id }) { g -> PremiumGenrePill(g.name, selectedId == g.id) { onSelect(g.id) } }
+            items(genres) { g -> PremiumGenrePill(g.name, selectedId == g.id) { onSelect(g.id) } }
         }
     }
 }
