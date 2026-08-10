@@ -47,15 +47,10 @@ class SearchViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val recentSearchDao: com.axio.reelz.data.local.RecentSearchDao,
 ) : ViewModel() {
-
     data class UiState(
         val query: String = "",
-        val localResults: List<Media> = emptyList(),   // FTS5 Room results — instant, offline
-        val networkResults: List<Media> = emptyList(), // TMDB results — merged after local
-        val results: List<Media> = emptyList(),        // merged display list
-        val isLocalLoading: Boolean = false,           // FTS search in-flight
-        val isNetworkLoading: Boolean = false,         // TMDB search in-flight
-        val isOffline: Boolean = false,                // no network, local-only mode
+        val results: List<Media> = emptyList(),
+        val isLoading: Boolean = false,
         val error: String? = null,
         val hasSearched: Boolean = false,
         val filters: SearchFilters = SearchFilters(),
@@ -64,12 +59,9 @@ class SearchViewModel @Inject constructor(
         val showFilters: Boolean = false,
         val recentSearches: List<String> = emptyList(),
     )
-
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
-
     private var searchJob: Job? = null
-    private var networkJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -82,102 +74,28 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Local-first search: two-phase, two-speed result delivery.
-     *
-     * Phase 1 — FTS5 Room (< 5ms, works offline):
-     *   Results appear immediately after 120ms debounce.
-     *   The user sees relevant matches before any network round-trip.
-     *
-     * Phase 2 — TMDB network (300-800ms, requires connection):
-     *   Results merge into the display list as they arrive.
-     *   New results are deduplicated by tmdbId before merging.
-     *   If the network fails: Phase 1 results stay, no error shown
-     *   unless Phase 1 was also empty (true offline + uncached).
-     *
-     * Architecture rule: the UI renders `results` — it never checks
-     * which phase produced them. Consistent skeleton → content pipeline.
-     */
     fun onQuery(q: String) {
         _ui.update { it.copy(query = q) }
         searchJob?.cancel()
-        networkJob?.cancel()
-
-        if (q.isBlank()) {
-            _ui.update { it.copy(
-                results = emptyList(), localResults = emptyList(),
-                networkResults = emptyList(), hasSearched = false,
-                isLocalLoading = false, isNetworkLoading = false, error = null,
-            )}
-            return
-        }
-
+        if (q.isBlank()) { _ui.update { it.copy(results = emptyList(), hasSearched = false) }; return }
         searchJob = viewModelScope.launch {
-            // ── Phase 1: FTS5 Room search (instant) ───────────────────────────
-            delay(120) // minimal debounce — just enough to avoid per-keystroke spam
-            _ui.update { it.copy(isLocalLoading = true, error = null) }
-
-            val localRaw = try {
-                repo.searchLocal(q)
-            } catch (_: Exception) { emptyList() }
-
-            val local = applyFilters(localRaw)
-            _ui.update { st -> st.copy(
-                localResults = local,
-                results = mergeResults(local, st.networkResults),
-                isLocalLoading = false,
-                hasSearched = local.isNotEmpty(),
-            )}
-
-            // ── Phase 2: TMDB network search (background) ─────────────────────
-            _ui.update { it.copy(isNetworkLoading = true) }
-            networkJob = launch {
-                delay(200) // additional gap to let FTS results settle in UI
-                try {
-                    val networkRaw = repo.searchNetwork(q)
-                    val network = applyFilters(networkRaw)
-                    _ui.update { st -> st.copy(
-                        networkResults = network,
-                        results = mergeResults(st.localResults, network),
-                        isNetworkLoading = false,
-                        isOffline = false,
-                        hasSearched = true,
-                        error = null,
-                    )}
-                    if (networkRaw.isNotEmpty()) recordSearch(q)
-                } catch (e: Exception) {
-                    val isNet = e is java.net.UnknownHostException ||
-                                e is java.net.SocketTimeoutException
-                    _ui.update { st -> st.copy(
-                        isNetworkLoading = false,
-                        isOffline = isNet,
-                        // Only show error if we have absolutely nothing to display
-                        error = if (st.results.isEmpty()) friendlySearchError(e) else null,
-                        hasSearched = true,
-                    )}
-                    // Even offline: record search if we got local results
-                    if (_ui.value.localResults.isNotEmpty()) recordSearch(q)
-                }
+            delay(320)
+            _ui.update { it.copy(isLoading = true, error = null) }
+            try {
+                val searchResults = applyFilters(repo.search(q))
+                _ui.update { it.copy(results = searchResults, isLoading = false, hasSearched = true) }
+                // Only record once the search actually resolves — a query the
+                // user is still mid-typing (cancelled by a newer keystroke)
+                // never reaches here, so history stays free of fragments.
+                if (searchResults.isNotEmpty()) recordSearch(q)
+            } catch (e: Exception) {
+                _ui.update { it.copy(isLoading = false, error = friendlySearchError(e), hasSearched = true) }
             }
         }
     }
 
-    /**
-     * Merge local + network results. Deduplication by tmdbId.
-     * Network results take precedence (they have fresher popularity scores).
-     * Local-only items appended after network items.
-     */
-    private fun mergeResults(local: List<Media>, network: List<Media>): List<Media> {
-        val networkIds = network.map { it.tmdbId }.toSet()
-        val localOnly = local.filter { it.tmdbId !in networkIds }
-        return network + localOnly
-    }
-
+    /** Re-run a tapped recent-search chip — same path as typing it, so results/filters apply consistently. */
     fun searchRecent(query: String) = onQuery(query)
-
-    fun onResultTap(media: Media) {
-        viewModelScope.launch { repo.saveSearchOpenToCatalog(media) }
-    }
 
     private fun recordSearch(query: String) {
         val trimmed = query.trim()
@@ -197,38 +115,24 @@ class SearchViewModel @Inject constructor(
     }
 
     fun toggleFilters() = _ui.update { it.copy(showFilters = !it.showFilters) }
-    fun setMediaType(type: String?) {
-        _ui.update { it.copy(filters = it.filters.copy(mediaType = type)) }; reFilter()
-    }
+    fun setMediaType(type: String?) { _ui.update { it.copy(filters = it.filters.copy(mediaType = type)) }; reFilter() }
     fun setGenre(id: Int?) { _ui.update { it.copy(selectedGenreId = id) }; reFilter() }
-    fun setMinRating(rating: Float?) {
-        _ui.update { it.copy(filters = it.filters.copy(minRating = rating)) }; reFilter()
-    }
-    fun setSortBy(sort: String) {
-        _ui.update { it.copy(filters = it.filters.copy(sortBy = sort)) }; reFilter()
-    }
-    fun clearFilters() {
-        _ui.update { it.copy(filters = SearchFilters(), selectedGenreId = null) }; reFilter()
-    }
+    fun setMinRating(rating: Float?) { _ui.update { it.copy(filters = it.filters.copy(minRating = rating)) }; reFilter() }
+    fun setSortBy(sort: String) { _ui.update { it.copy(filters = it.filters.copy(sortBy = sort)) }; reFilter() }
+    fun clearFilters() { _ui.update { it.copy(filters = SearchFilters(), selectedGenreId = null) }; reFilter() }
     private fun reFilter() { val q = _ui.value.query; if (q.isNotBlank()) onQuery(q) }
-    fun clear() {
-        searchJob?.cancel(); networkJob?.cancel()
-        val recents = _ui.value.recentSearches
-        _ui.update { UiState(recentSearches = recents) }
-    }
+    fun clear() { searchJob?.cancel(); val recents = _ui.value.recentSearches; _ui.update { UiState(recentSearches = recents) } }
 
     private fun applyFilters(raw: List<Media>): List<Media> {
         val f = _ui.value.filters
         var list = raw
-        val genre = _ui.value.selectedGenreId
         if (f.mediaType != null) list = list.filter { it.mediaType.name == f.mediaType }
-        if (genre != null) list = list.filter { genre in it.genreIds }
         if (f.minRating != null) list = list.filter { it.voteAverage >= f.minRating }
         list = when (f.sortBy) {
             "rating" -> list.sortedByDescending { it.voteAverage }
-            "newest" -> list.sortedByDescending { it.releaseDate ?: "" }
+            "newest" -> list.sortedByDescending { it.releaseDate }
             "title"  -> list.sortedBy { it.title }
-            else     -> list // popularity — already sorted by TMDB/FTS
+            else     -> list
         }
         return list
     }
@@ -332,17 +236,8 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
         }
 
         // ── Results ──────────────────────────────────────────────────────────
-        // Network loading indicator — only shown as a thin bar AFTER local results appear,
-        // so the user always sees something immediately rather than a blocking spinner.
-        if (ui.isNetworkLoading && ui.results.isNotEmpty()) {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth().height(2.dp),
-                color = Brand,
-                trackColor = Color.Transparent,
-            )
-        }
         when {
-            ui.isLocalLoading && ui.results.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                 CinematicSpinner(size = d.spinnerLg)
             }
 
@@ -386,10 +281,7 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                         items(ui.results, key = { it.tmdbId }) { m ->
                             MediaPosterCard(
                                 media   = m,
-                                onClick = {
-                                    vm.onResultTap(m)
-                                    nav.navigate(com.axio.reelz.ui.Route.Detail.go(m.tmdbId, m.mediaType))
-                                },
+                                onClick = { nav.navigate(com.axio.reelz.ui.Route.Detail.go(m.tmdbId, m.mediaType)) },
                                 modifier = Modifier.aspectRatio(0.65f),
                             )
                         }

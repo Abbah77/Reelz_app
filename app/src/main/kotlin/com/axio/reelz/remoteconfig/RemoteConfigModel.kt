@@ -13,16 +13,35 @@ data class RemoteConfig(
     val tiers: TiersConfig                                       = TiersConfig(),
     val premium: PremiumConfig                                   = PremiumConfig(),
     val backend: BackendConfig                                   = BackendConfig(),
+    // stream_sources, subtitles, user_agents, scanner removed —
+    // all source/subtitle/UA config lives on the backend now.
 )
 
+/**
+ * Backend connection config — comes from config.json, never hardcoded in the app.
+ *
+ * Three backend URLs, each serving a separate concern:
+ *   backend_url  → auth / subscription (already live)
+ *   stream_url   → stream / download / subtitle engine (new backend)
+ *   shorts_url   → shorts feed backend (new backend, future)
+ *
+ * All secrets live server-side. The app only holds these URLs.
+ * Edit config.json to point to new deployments — no app update needed.
+ */
 data class BackendConfig(
     @SerializedName("backend_url") val backendUrl: String = "",
     @SerializedName("stream_url")  val streamUrl: String  = "",
     @SerializedName("shorts_url")  val shortsUrl: String  = "",
-    // ── ADDED: shared secret sent as X-Reelz-Token on every backend request.
-    // Rotate via config push without an app update.
-    @SerializedName("app_token")   val appToken: String   = "",
 ) {
+    // config.json sometimes ends up with backend_url missing its scheme
+    // (e.g. "tt-b577.onrender.com" instead of "https://tt-b577.onrender.com")
+    // — easy to do when hand-editing the value later. OkHttp then throws
+    // "Expected URL scheme 'http' or 'https' but no scheme was found" on
+    // every request, silently killing the whole shorts feed. Since the
+    // whole point of keeping this in config.json is to fix it without an
+    // app update, the app itself should tolerate that mistake rather than
+    // require a perfectly-formed value every time. Always use this
+    // property instead of `backendUrl` directly when building request URLs.
     val normalizedUrl: String
         get() {
             val trimmed = backendUrl.trim().trimEnd('/')
@@ -51,19 +70,20 @@ data class TmdbConfig(
 )
 
 data class ApiKey(
-    val id: String       = "",
-    val key: String      = "",
-    val weight: Int      = 10,
+    val id: String      = "",
+    val key: String     = "",
+    val weight: Int     = 10,
     val enabled: Boolean = true,
 )
 
+
 data class AdsConfig(
     val enabled: Boolean = false,
-    @SerializedName("applovin_sdk_key")       val applovinSdkKey: String               = "",
-    @SerializedName("mediation_provider")     val mediationProvider: String            = "max",
-    val placements: AdPlacements                                                       = AdPlacements(),
+    @SerializedName("applovin_sdk_key")   val applovinSdkKey: String      = "",
+    @SerializedName("mediation_provider") val mediationProvider: String   = "max",
+    val placements: AdPlacements                                          = AdPlacements(),
     @SerializedName("interstitial_frequency") val interstitialFrequency: AdInterstitialFrequency = AdInterstitialFrequency(),
-    val preroll: AdPrerollConfig                                                       = AdPrerollConfig(),
+    val preroll: AdPrerollConfig                                          = AdPrerollConfig(),
     val networks: List<AdNetwork> = emptyList(),
 )
 
@@ -102,6 +122,9 @@ data class AdNetwork(
     @SerializedName("vast_tag_url")    val vastTagUrl: String     = "",
 )
 
+
+
+
 data class FeatureFlags(
     @SerializedName("subtitles_enabled")   val subtitlesEnabled: Boolean   = true,
     @SerializedName("downloads_enabled")   val downloadsEnabled: Boolean   = true,
@@ -112,13 +135,39 @@ data class FeatureFlags(
     @SerializedName("maintenance_message") val maintenanceMessage: String  = "",
 )
 
+// ── Shorts / discovery feed config ────────────────────────────────────────────
+//
+// Source is archive.org directly — no scraping backend involved anymore.
+// Each "item" below is an archive.org identifier (the slug in
+// archive.org/details/<identifier>). One item can itself contain many
+// video files (bulk-upload items commonly have 50-200+ .mp4s inside), so
+// a handful of identifiers is enough to seed a large shuffled feed.
+//
+// Resolution per identifier: GET https://archive.org/metadata/{identifier}
+// returns a `files[]` array; the app filters that down to playable video
+// formats and builds direct download URLs from `server`+`dir`+`file.name`.
+// This whole class is intentionally just data — add/remove identifiers
+// here and the app picks it up on next config sync, no rebuild needed.
+
 data class ShortsConfig(
-    @SerializedName("archive_org")            val archiveOrg: ArchiveOrgConfig       = ArchiveOrgConfig(),
-    @SerializedName("for_you_items")          val forYouItems: List<String>          = emptyList(),
-    val categories: List<ShortCategory>                                              = emptyList(),
-    @SerializedName("video_extensions")       val videoExtensions: List<String>      = listOf("mp4", "m4v", "mov", "webm"),
-    @SerializedName("excluded_name_contains") val excludedNameContains: List<String> = listOf("thumb", "sample", ".ia.", "__ia_thumb"),
-    @SerializedName("items_per_page")         val itemsPerPage: Int                  = 3,
+    /** archive.org access config — base URLs, endpoint templates, timeouts. */
+    @SerializedName("archive_org") val archiveOrg: ArchiveOrgConfig            = ArchiveOrgConfig(),
+    /** For You tab: pool of archive.org item identifiers, fully shuffled every load. */
+    @SerializedName("for_you_items") val forYouItems: List<String>            = emptyList(),
+    /** Discovery tab chips — each one its own pool of item identifiers. Add/remove
+     *  freely; the UI renders exactly what's in this list, nothing hardcoded. */
+    val categories: List<ShortCategory>                                       = emptyList(),
+    /** File extensions treated as playable video, checked against each file's
+     *  name/format from archive.org metadata (case-insensitive). */
+    @SerializedName("video_extensions") val videoExtensions: List<String>     =
+        listOf("mp4", "m4v", "mov", "webm"),
+    /** Filename fragments to always skip (thumbnails, derivative junk, etc.),
+     *  matched case-insensitively as a substring. */
+    @SerializedName("excluded_name_contains") val excludedNameContains: List<String> =
+        listOf("thumb", "sample", ".ia.", "__ia_thumb"),
+    /** How many item identifiers to resolve per feed "page" — keeps each
+     *  loadMore() call cheap instead of resolving the whole pool at once. */
+    @SerializedName("items_per_page") val itemsPerPage: Int                   = 3,
 )
 
 data class ArchiveOrgConfig(
@@ -129,11 +178,28 @@ data class ArchiveOrgConfig(
 )
 
 data class ShortCategory(
-    val label: String          = "",
-    val items: List<String>    = emptyList(),
+    val label: String = "",
+    /** Pool of archive.org item identifiers for this category — placeholder
+     *  until specific genre-matching items are found; leave empty and the
+     *  chip simply shows no results rather than crashing. */
+    val items: List<String> = emptyList(),
 )
 
+// ── Premium tiers ──────────────────────────────────────────────────────────
+
 data class TiersConfig(
+    // NOTE: maxResolutionHeight (streaming) intentionally defaults to
+    // unlimited (-1) for BOTH tiers now. Streaming quality is no longer a
+    // free/premium differentiator — free users see ads while streaming
+    // regardless of resolution, premium users don't. That ad-supported
+    // model is the monetization lever for streaming, not a resolution cap.
+    //
+    // maxDownloadResolutionHeight is the real, separate gate: downloads are
+    // offline, so no ad can be served there, which is why it's the one
+    // place a free/premium quality split still makes business sense. It
+    // defaults to -1 (unlimited) here deliberately — start wide open while
+    // growing the user base, then tighten via config later (e.g. cap free
+    // downloads to 480p/720p) without ever needing an app update.
     val free: TierConfig    = TierConfig(
         maxResolutionHeight = -1,
         maxDownloadResolutionHeight = -1,
@@ -147,32 +213,60 @@ data class TiersConfig(
 )
 
 data class TierConfig(
-    @SerializedName("max_resolution")                val maxResolution: String             = "Unlimited",
-    @SerializedName("max_resolution_height")         val maxResolutionHeight: Int           = -1,
-    @SerializedName("max_download_resolution_height") val maxDownloadResolutionHeight: Int  = -1,
-    @SerializedName("max_downloads")                 val maxDownloads: Int                 = 5,
-    @SerializedName("ads_enabled")                   val adsEnabled: Boolean               = true,
-    @SerializedName("subtitles_manual_search")       val subtitlesManualSearch: Boolean    = false,
-    @SerializedName("background_play")               val backgroundPlay: Boolean           = false,
-    @SerializedName("simultaneous_streams")          val simultaneousStreams: Int          = 1,
+    @SerializedName("max_resolution")          val maxResolution: String         = "Unlimited",
+    /** Streaming cap. -1 = unlimited (default for both tiers — see note above). */
+    @SerializedName("max_resolution_height")   val maxResolutionHeight: Int       = -1,
+    /**
+     * Download cap, separate from streaming. -1 = unlimited. This is the
+     * field to tighten later for free users (e.g. set to 480 or 720) via
+     * remote config only — no app update needed, no hardcoded UI change.
+     */
+    @SerializedName("max_download_resolution_height") val maxDownloadResolutionHeight: Int = -1,
+    /** -1 is the sentinel for unlimited. Never trips the cap. */
+    @SerializedName("max_downloads")           val maxDownloads: Int              = 5,
+    @SerializedName("ads_enabled")             val adsEnabled: Boolean            = true,
+    @SerializedName("subtitles_manual_search") val subtitlesManualSearch: Boolean = false,
+    @SerializedName("background_play")         val backgroundPlay: Boolean        = false,
+    @SerializedName("simultaneous_streams")    val simultaneousStreams: Int       = 1,
 )
 
 data class PremiumConfig(
-    val enabled: Boolean                                                        = false,
-    @SerializedName("grace_period_days")         val gracePeriodDays: Int       = 1,
+    val enabled: Boolean                                                       = false,
+    @SerializedName("grace_period_days")        val gracePeriodDays: Int        = 1,
     @SerializedName("renew_warning_days_before") val renewWarningDaysBefore: Int = 3,
-    @SerializedName("monthly_price_ngn")         val monthlyPriceNgn: Long      = 0,
-    @SerializedName("yearly_price_ngn")          val yearlyPriceNgn: Long       = 0,
-    @SerializedName("paystack_monthly_url")      val paystackMonthlyUrl: String  = "",
-    @SerializedName("paystack_yearly_url")       val paystackYearlyUrl: String   = "",
-    @SerializedName("payment_note")              val paymentNote: String         = "",
-    @SerializedName("contact_to_subscribe")      val contactToSubscribe: String  = "",
-    @SerializedName("manual_grants")             val manualGrants: List<ManualGrant> = emptyList(),
+    @SerializedName("monthly_price_ngn")         val monthlyPriceNgn: Long       = 0,
+    @SerializedName("yearly_price_ngn")          val yearlyPriceNgn: Long        = 0,
+    /**
+     * Paystack Payment Page / Payment Link URLs (e.g. https://paystack.com/pay/your-link),
+     * one per plan. Created from the Paystack dashboard — Payments → Payment Pages —
+     * no backend or server-side integration required for this no-backend v1 app.
+     * Opened in the in-app browser sheet (ReelzBrowserSheet) already used for ad clicks.
+     * Left blank, the matching button on PremiumScreen disables itself with a
+     * "Subscriptions opening soon" message instead of crashing or opening nothing.
+     */
+    @SerializedName("paystack_monthly_url") val paystackMonthlyUrl: String      = "",
+    @SerializedName("paystack_yearly_url")  val paystackYearlyUrl: String       = "",
+    /** Shown under the Paystack buttons — e.g. "Payments are processed securely by Paystack". */
+    @SerializedName("payment_note")         val paymentNote: String             = "",
+    /**
+     * Legacy free-text contact line (was the WhatsApp-era field). No longer rendered
+     * by PremiumScreen — kept only so older cached config blobs deserialize cleanly
+     * during the transition and the field is never silently dropped from history.
+     */
+    @SerializedName("contact_to_subscribe") val contactToSubscribe: String      = "",
+    /**
+     * V1 grant mechanism: no backend, no Firebase. You (the dev) add a row here by
+     * email after confirming payment in the Paystack dashboard. The app only ever
+     * READS this list — matched case-insensitively against the signed-in Google
+     * email. Swap this for a Firebase/Paystack-webhook-backed source later without
+     * touching any other file: just provide a different UserSessionRepository.SessionSource.
+     */
+    @SerializedName("manual_grants") val manualGrants: List<ManualGrant>        = emptyList(),
 )
 
 data class ManualGrant(
-    val email: String                                  = "",
-    val plan: String                                   = "",
+    val email: String                                 = "",
+    val plan: String                                  = "",
     @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
-    val note: String                                   = "",
+    val note: String                                  = "",
 )

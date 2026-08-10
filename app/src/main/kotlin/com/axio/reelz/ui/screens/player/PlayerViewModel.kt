@@ -24,7 +24,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.axio.reelz.data.local.DownloadSubtitleDao
-import com.axio.reelz.data.local.AppPreferencesStore
+import com.axio.reelz.data.local.PipPreferenceStore
 import com.axio.reelz.data.model.DownloadSubtitle
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.QualityTrack
@@ -127,7 +127,7 @@ class PlayerViewModel @Inject constructor(
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val adEngine: AdEngine,
     private val premiumGate: PremiumGate,
-    private val pipPrefs: AppPreferencesStore,
+    private val pipPrefs: PipPreferenceStore,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PlayerUiState())
@@ -162,7 +162,7 @@ class PlayerViewModel @Inject constructor(
      */
     private var offlineDownloads: List<com.axio.reelz.data.model.DownloadItem> = emptyList()
     /** Quality the user last selected for this title — "" means auto/highest. */
-    private var preferredOfflineQuality: String = ""
+    private var preferredOfflineQuality: String = \"\"
 
     // ── Bug 3 fix: track whether the Activity was in PiP right before onStop ─
     // The Activity calls wasInPipBeforeStop() inside onStop to decide whether

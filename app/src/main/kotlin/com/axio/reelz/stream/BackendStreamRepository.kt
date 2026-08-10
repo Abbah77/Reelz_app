@@ -87,20 +87,6 @@ class BackendStreamRepository @Inject constructor(
         .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
         .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
         .retryOnConnectionFailure(true)
-        // Attach the shared secret on every backend request.
-        // Token is read fresh per-request from remoteConfig so rotating it
-        // via a config push takes effect immediately without restarting.
-        .addInterceptor { chain ->
-            val token = remoteConfig.backendConfig().appToken
-            val req = if (token.isNotBlank()) {
-                chain.request().newBuilder()
-                    .header("X-Reelz-Token", token)
-                    .build()
-            } else {
-                chain.request()
-            }
-            chain.proceed(req)
-        }
         .build()
 
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()

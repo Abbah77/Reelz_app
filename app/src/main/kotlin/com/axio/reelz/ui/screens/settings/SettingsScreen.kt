@@ -21,17 +21,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
-import com.axio.reelz.data.local.AppPreferencesStore
 import com.axio.reelz.ui.theme.*
-import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 // ── Icon vectors ────────────────────────────────────────────────────────────
 
@@ -175,28 +167,11 @@ private val termsSections = listOf(
     LegalSection("14", "Miscellaneous", "14.1 Entire Agreement\n\nThese Terms, together with our Privacy Policy and any other policies referenced herein, constitute the entire agreement between you and Axio Studio regarding the Service and supersede all prior or contemporaneous agreements, understandings, negotiations, and discussions, whether oral or written.\n\n14.2 Severability\n\nIf any provision of these Terms is held to be invalid, illegal, or unenforceable by a court of competent jurisdiction, such provision shall be modified to the minimum extent necessary to make it valid and enforceable, or if modification is not possible, such provision shall be severed from these Terms, and the remaining provisions shall continue in full force and effect.\n\n14.3 Waiver\n\nNo waiver of any provision of these Terms shall be effective unless in writing and signed by the party against whom the waiver is sought to be enforced. No failure or delay by either party in exercising any right, power, or privilege under these Terms shall operate as a waiver thereof, nor shall any single or partial exercise of any right, power, or privilege preclude any other or further exercise thereof.\n\n14.4 Assignment\n\nYou may not assign, transfer, or delegate these Terms or any of your rights or obligations hereunder without our prior written consent. We may assign, transfer, or delegate these Terms or any of our rights or obligations hereunder without restriction. These Terms shall be binding upon and inure to the benefit of the parties and their respective successors and permitted assigns.\n\n14.5 Force Majeure\n\nWe shall not be liable for any failure or delay in performing our obligations under these Terms where such failure or delay results from causes beyond our reasonable control, including but not limited to: acts of God, war, terrorism, riots, embargoes, acts of civil or military authorities, fire, floods, accidents, strikes, shortages of transportation, facilities, fuel, energy, labor, or materials, pandemics, epidemics, or failures of telecommunications networks or infrastructure.\n\n14.6 Headings\n\nThe headings and subheadings in these Terms are for convenience only and shall not affect the interpretation of these Terms.\n\n14.7 Contact Information\n\nIf you have any questions, concerns, or comments regarding these Terms, please contact us at:\n\nAxio Studio\nEmail: axio.founder@gmail.com\nSubject Line: REELZ\n\nWe will make reasonable efforts to respond to your inquiry within a reasonable timeframe."),
 )// ── Main Settings Screen ─────────────────────────────────────────────────────
 
-/**
- * SettingsViewModel — persists notification toggle via AppPreferencesStore (DataStore).
- * Previously the toggle used `remember { mutableStateOf(true) }` which was lost
- * every time the user navigated away from the Settings screen.
- */
-@HiltViewModel
-class SettingsViewModel @Inject constructor(
-    private val prefs: AppPreferencesStore,
-) : ViewModel() {
-    val notificationsEnabled = prefs.isNotificationsEnabled
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
-
-    fun setNotificationsEnabled(enabled: Boolean) {
-        viewModelScope.launch { prefs.setNotificationsEnabled(enabled) }
-    }
-}
-
 @Composable
-fun SettingsScreen(nav: NavController, vm: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(nav: NavController) {
     val d = LocalDimensions.current
 
-    val notificationsEnabled by vm.notificationsEnabled.collectAsState()
+    var notificationsEnabled by remember { mutableStateOf(true) }
 
     Column(
         Modifier
@@ -265,7 +240,7 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = hiltViewModel()) 
                 title = "Notifications",
                 subtitle = "App notifications for updates and reminders",
                 checked = notificationsEnabled,
-                onCheckedChange = { vm.setNotificationsEnabled(it) },
+                onCheckedChange = { notificationsEnabled = it },
             )
 
             Spacer(Modifier.height(d.spaceXs))

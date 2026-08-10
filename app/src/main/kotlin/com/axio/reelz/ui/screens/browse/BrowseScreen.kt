@@ -39,7 +39,6 @@ import coil.compose.AsyncImage
 import com.axio.reelz.BuildConfig
 import com.axio.reelz.data.local.WatchlistDao
 import com.axio.reelz.data.model.*
-import com.axio.reelz.data.model.CatalogPage
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.ui.Route
 import com.axio.reelz.ui.components.*
@@ -98,19 +97,9 @@ class BrowseViewModel @Inject constructor(
 
     init {
         initLoad()
-        // When watch history changes, update continueWatching AND rebuild feedRows
-        // so the "Continue Watching" row appears immediately even if it arrives
-        // after the cache-phase display (stale-while-revalidate timing issue fix).
         viewModelScope.launch {
             repo.getHistory().collect { h ->
-                _ui.update { st ->
-                    st.copy(
-                        continueWatching = h,
-                        // Only rebuild if we already have sections — avoids rebuilding
-                        // an empty list during the initial loading phase.
-                        feedRows = if (categorySections.isNotEmpty()) buildFeedRows(categorySections) else st.feedRows,
-                    )
-                }
+                _ui.update { it.copy(continueWatching = h) }
             }
         }
         // Keep watchlist set in sync so hero banner button reflects current state instantly
@@ -141,38 +130,10 @@ class BrowseViewModel @Inject constructor(
     }
 
     /**
-     * Cache-first display strategy. Simple 3-step state machine:
-     *
-     *  STEP 1 — Show cache immediately (0ms, no network).
-     *           If cache exists and has real sections → show it, done if nothing stale.
-     *           If cache is empty → show skeleton, go to STEP 3.
-     *
-     *  STEP 2 — Staleness check (per-section TTL, ~5ms Room queries, no network).
-     *           Compute which section IDs have exceeded their TTL.
-     *           If none stale → return, user already sees fresh content.
-     *
-     *  STEP 3 — Background TMDB refresh for ONLY the stale sections (or all, if no cache).
-     *           Results merge in-place. Fresh sections are never re-fetched.
-     *           If TMDB fails: if cache was shown, stay silent. If no cache, show error.
-     */
-    /**
-     * Cache-first display strategy. Simple 3-step state machine:
-     *
-     *  STEP 1 — Show cache immediately (0ms, no network).
-     *           If cache exists and has real sections → show it, done if nothing stale.
-     *           If cache is empty → show skeleton, go to STEP 3.
-     *
-     *  STEP 2 — Staleness check (per-section TTL, ~5ms Room queries, no network).
-     *           Compute which section IDs have exceeded their TTL.
-     *           If none stale → return, user already sees fresh content.
-     *
-     *  STEP 3 — Background TMDB refresh for ONLY the stale sections (or all, if no cache).
-     *           Results merge in-place. Fresh sections are never re-fetched.
-     *           If TMDB fails: if cache was shown, stay silent. If no cache, show error.
-     *
-     *  isLoading=true  → skeleton is visible (no cache yet)
-     *  isCacheLoaded=true → cache (or TMDB) content is on screen, skeleton hidden
-     *  isBackgroundRefreshing=true → thin progress bar while TMDB refreshes stale sections
+     * Stale-while-revalidate strategy:
+     *  Phase 1 — show cached data instantly if available (no spinner, no delay).
+     *  Phase 2 — refresh from network in the background; silently update UI when done.
+     *  If there is no cache at all, show the full loading state and fetch from network.
      */
     private fun initLoad() {
         viewModelScope.launch {
@@ -180,119 +141,77 @@ class BrowseViewModel @Inject constructor(
             isInfiniteExhausted = false
             categorySectionsEmitted = false
 
-            // ── STEP 1: Load from Room (microseconds, always offline-safe) ────────
-            val cached = try { repo.getHomeSectionsFromCacheOnly() } catch (_: Exception) { emptyList() }
-            val hasCacheToShow = cached.isNotEmpty()
+            val hasCached = try { repo.hasCachedData() } catch (_: Exception) { false }
 
-            if (hasCacheToShow) {
-                categorySections = cached
-                categorySectionsEmitted = true
-                _ui.update {
-                    it.copy(
-                        isLoading              = false,
-                        isCacheLoaded          = true,
-                        error                  = null,
-                        featured               = pickFeatured(cached),
-                        feedRows               = buildFeedRows(cached),
-                        isBackgroundRefreshing = false,
-                    )
+            if (hasCached) {
+                // ── Phase 1: instant cache display ────────────────────────────
+                try {
+                    val cached  = repo.getHomeSectionsFromCacheOnly()
+                    val genres  = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
+                    categorySections = cached
+                    _ui.update {
+                        it.copy(
+                            isLoading            = false,
+                            isCacheLoaded        = true,
+                            featured             = cached.firstOrNull()?.items?.take(6) ?: emptyList(),
+                            feedRows             = buildFeedRows(cached),
+                            genres               = genres,
+                            isBackgroundRefreshing = true,   // show subtle top indicator
+                        )
+                    }
+                    categorySectionsEmitted = true
+                } catch (_: Exception) {
+                    // Cache read failed — fall through to network
+                    _ui.update { it.copy(isLoading = true, isBackgroundRefreshing = false) }
                 }
-            } else {
-                // No usable cache — show skeleton while we wait for TMDB
-                _ui.update { it.copy(isLoading = true, isCacheLoaded = false, error = null) }
-            }
 
-            // Genres always in parallel — cache-first, never blocks anything
-            launch {
-                runCatching {
-                    val g = repo.getMovieGenres()
-                    if (g.isNotEmpty()) _ui.update { it.copy(genres = g) }
-                }
-            }
-
-            // ── STEP 2: Staleness check (Room only, ~5ms) ─────────────────────────
-            // Which sections have exceeded their per-section TTL?
-            // If we had no cache at all, every section is stale → fetch all.
-            val staleIds: Set<String> = if (!hasCacheToShow) {
-                // No cache → need to fetch everything
-                Section.DEFAULT_ORDER.map { it.id }.toSet()
-            } else {
-                try { repo.staleSectionIds() } catch (_: Exception) { emptySet() }
-            }
-
-            // Cache shown, nothing stale → done, zero TMDB calls
-            if (staleIds.isEmpty()) return@launch
-
-            // Show subtle indicator only when user already sees content (not during skeleton)
-            if (hasCacheToShow) {
-                _ui.update { it.copy(isBackgroundRefreshing = true) }
-            }
-
-            // ── STEP 3: Fetch only stale sections from TMDB ───────────────────────
-            var firstNetworkBatch = true
-            try {
-                val accumulated = categorySections.toMutableList()
-
-                repo.streamHomeSections(sectionFilter = staleIds) { batch ->
-                    val byTitle = accumulated.associateBy { it.title }.toMutableMap()
-                    batch.forEach { byTitle[it.title] = it }
-                    val updatedInPlace = accumulated.map { byTitle[it.title] ?: it }
-                    val newSections   = batch.filter { n -> accumulated.none { it.title == n.title } }
-                    accumulated.clear()
-                    accumulated.addAll(updatedInPlace + newSections)
-                    categorySections = accumulated.toList()
-
+                // ── Phase 2: silent background network refresh ─────────────
+                try {
+                    val fresh  = repo.getHomeSectionsFromNetwork()
+                    val genres = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
+                    categorySections = fresh
                     _ui.update {
                         it.copy(
                             isLoading              = false,
                             isCacheLoaded          = true,
-                            isBackgroundRefreshing = hasCacheToShow, // keep indicator until all batches done
-                            error                  = null,
-                            featured               = if (firstNetworkBatch || it.featured.isEmpty())
-                                                         pickFeatured(accumulated)
-                                                     else it.featured,
-                            feedRows               = buildFeedRows(accumulated),
+                            isBackgroundRefreshing = false,
+                            featured               = fresh.firstOrNull()?.items?.take(6) ?: emptyList(),
+                            feedRows               = buildFeedRows(fresh),
+                            genres                 = genres.ifEmpty { it.genres },
                         )
                     }
-                    firstNetworkBatch = false
                     categorySectionsEmitted = true
-                }
-                // All done — clear the progress indicator
-                _ui.update { it.copy(isBackgroundRefreshing = false) }
-
-            } catch (e: Exception) {
-                if (hasCacheToShow) {
-                    // Cache is on screen — TMDB failure is silent, just stop the indicator
+                } catch (_: Exception) {
+                    // Network failed — cache content is already visible; no error banner needed.
                     _ui.update { it.copy(isBackgroundRefreshing = false) }
-                } else {
-                    // Nothing to show — surface the error so user can retry
+                }
+            } else {
+                // ── No cache: full loading state until network responds ────
+                _ui.update { it.copy(isLoading = true, error = null) }
+                try {
+                    val sections = repo.getHomeSectionsFromNetwork()
+                    val genres   = try { repo.getMovieGenres() } catch (_: Exception) { emptyList() }
+                    categorySections = sections
                     _ui.update {
                         it.copy(
-                            isLoading              = false,
-                            isCacheLoaded          = false,
-                            isBackgroundRefreshing = false,
-                            error                  = friendlyBrowseError(e),
+                            isLoading     = false,
+                            isCacheLoaded = true,
+                            featured      = sections.firstOrNull()?.items?.take(6) ?: emptyList(),
+                            feedRows      = buildFeedRows(sections),
+                            genres        = genres,
                         )
+                    }
+                    categorySectionsEmitted = true
+                } catch (e: Exception) {
+                    _ui.update {
+                        it.copy(isLoading = false, error = friendlyBrowseError(e))
                     }
                 }
             }
         }
     }
 
-    /**
-     * Pick hero featured items across the top sections for visual variety.
-     * Takes the top 2 items from each of the first 3 sections → 6 hero candidates.
-     * This means the banner rotates across Trending, New Releases, and Popular Movies
-     * instead of always showing trending[0..5] from a potentially stale cache.
-     */
-    private fun pickFeatured(sections: List<HomeSection>): List<Media> =
-        sections.take(3).flatMap { it.items.take(2) }
-
-    /**
-     * User-triggered pull-to-refresh: always hits TMDB regardless of cache age.
-     * Streams fresh data progressively in 3 batches. Section order resets to
-     * DEFAULT_ORDER (personalized) since the user explicitly asked for fresh content.
-     */
+    /** User-triggered pull-to-refresh: show the indicator, then fetch fresh data. */
     fun load(forceRefresh: Boolean = true) {
         if (!forceRefresh) { initLoad(); return }
         viewModelScope.launch {
@@ -300,43 +219,24 @@ class BrowseViewModel @Inject constructor(
             infinitePage = 1
             isInfiniteExhausted = false
             categorySectionsEmitted = false
-            repo.resetInfiniteCursor()  // Reset engine session cursor on explicit refresh
-
-            // Genres refresh in parallel — don't block the content stream
-            launch {
-                try {
-                    val genres = repo.getMovieGenres()
-                    if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
-                } catch (_: Exception) {}
-            }
-
-            var firstBatch = true
             try {
-                val accumulated = mutableListOf<HomeSection>()
-                repo.streamHomeSections { batch ->
-                    val byTitle = accumulated.associateBy { it.title }.toMutableMap()
-                    batch.forEach { byTitle[it.title] = it }
-                    val orderedTitles = Section.DEFAULT_ORDER.map { it.label }
-                    accumulated.clear()
-                    accumulated.addAll(
-                        orderedTitles.mapNotNull { byTitle[it] } +
-                        byTitle.values.filter { it.title !in orderedTitles }
+                val sections = repo.getHomeSectionsFromNetwork()
+                val genres   = try { repo.getMovieGenres() } catch (_: Exception) { _ui.value.genres }
+                categorySections = sections
+                _ui.update {
+                    it.copy(
+                        isRefreshing  = false,
+                        isCacheLoaded = true,
+                        featured      = sections.firstOrNull()?.items?.take(6) ?: emptyList(),
+                        feedRows      = buildFeedRows(sections),
+                        genres        = genres.ifEmpty { it.genres },
                     )
-                    categorySections = accumulated.toList()
-                    _ui.update {
-                        it.copy(
-                            isRefreshing  = false,
-                            isCacheLoaded = true,
-                            featured      = if (firstBatch) pickFeatured(accumulated)
-                                            else it.featured.ifEmpty { pickFeatured(accumulated) },
-                            feedRows      = buildFeedRows(accumulated),
-                        )
-                    }
-                    firstBatch = false
-                    categorySectionsEmitted = true
                 }
+                categorySectionsEmitted = true
             } catch (e: Exception) {
-                _ui.update { it.copy(isRefreshing = false, error = friendlyBrowseError(e)) }
+                _ui.update {
+                    it.copy(isRefreshing = false, error = friendlyBrowseError(e))
+                }
             }
         }
     }
@@ -355,84 +255,39 @@ class BrowseViewModel @Inject constructor(
         if (_ui.value.isLoadingMore || isInfiniteExhausted) return
         viewModelScope.launch {
             _ui.update { it.copy(isLoadingMore = true) }
-
-            // Collect all tmdbIds already shown so the engine can dedup
-            val existingIds = _ui.value.feedRows
-                .flatMap { row ->
-                    when (row) {
-                        is FeedRow.Section      -> row.section.items.map { it.tmdbId }
-                        is FeedRow.InfinitePage -> row.items.map { it.tmdbId }
-                        else                    -> emptyList()
-                    }
-                }.toSet()
-
-            // ── Unified local-first engine ────────────────────────────────────
-            //
-            // The engine handles all three tiers internally:
-            //   Tier 1 → Room cache (0ms, offline-safe, PAGE_SIZE = 12)
-            //   Tier 2 → TMDB with exponential-backoff retry
-            //   Tier 3 → Exhausted (cache empty + network failed/exhausted)
-            //
-            // PAGE_SIZE = 12 is Coil-friendly: images for the current row have
-            // time to load before the next row appears, preventing black-card walls.
-            //
-            // The engine alternates movie/TV pages for variety without any logic
-            // here — callers stay clean. Persisted TMDB cursor means we never
-            // re-fetch pages already seen, even after a cold restart.
-            //
-            // Prefetch: fire ahead-of-time warming 2 pages before we show them.
-
-            val page = repo.getNextInfinitePage(
-                mediaType  = "movie",
-                excludeIds = existingIds,
-            )
-
-            when (page) {
-                is CatalogPage.FromCache, is CatalogPage.FromNetwork -> {
-                    val items = when (page) {
-                        is CatalogPage.FromCache   -> page.items
-                        is CatalogPage.FromNetwork -> page.items
-                        else                       -> emptyList()
-                    }
-                    val pageIndex = when (page) {
-                        is CatalogPage.FromCache   -> page.pageIndex
-                        is CatalogPage.FromNetwork -> page.pageIndex
-                        else                       -> infinitePage + 1
-                    }
-                    if (items.isEmpty()) {
-                        isInfiniteExhausted = true
-                        _ui.update { it.copy(isLoadingMore = false) }
-                        return@launch
-                    }
-                    infinitePage = pageIndex
-                    _ui.update { st ->
-                        // Guard against duplicate pageIndex (can happen when cache and
-                        // network both return the same page, or rapid scroll triggers
-                        // two concurrent loads). Duplicate pages cause identical
-                        // LazyColumn keys → IllegalArgumentException crash.
-                        val alreadyPresent = st.feedRows.any {
-                            it is FeedRow.InfinitePage && it.page == pageIndex
-                        }
-                        if (alreadyPresent) return@update st.copy(isLoadingMore = false)
-                        st.copy(
-                            feedRows    = st.feedRows + FeedRow.InfinitePage(items, pageIndex),
-                            isLoadingMore = false,
-                        )
-                    }
-                    // Fire prefetch for next 2 pages — warms Room so next scroll is instant
-                    launch {
-                        repo.prefetchAhead(
-                            mediaType  = "movie",
-                            excludeIds = existingIds + items.map { it.tmdbId }.toSet(),
-                        )
-                    }
+            try {
+                val nextPage = infinitePage + 1
+                val items: List<Media> = if (nextPage % 2 == 0) {
+                    repo.discoverMovies(genreId = null, page = nextPage)
+                } else {
+                    repo.discoverTv(genreId = null, page = nextPage)
                 }
-                is CatalogPage.Exhausted -> {
-                    // Cache empty + TMDB failed or has no more pages.
-                    // Mark exhausted so we stop hammering. UI shows nothing new — no crash.
+                if (items.isEmpty()) {
                     isInfiniteExhausted = true
                     _ui.update { it.copy(isLoadingMore = false) }
+                    return@launch
                 }
+                infinitePage = nextPage
+                // Filter out any tmdbIds already present in earlier infinite rows so
+                // the same card never appears twice in the feed. TMDB's movie/TV discover
+                // endpoints can overlap when alternating between the two on consecutive pages.
+                val existingIds = _ui.value.feedRows
+                    .filterIsInstance<FeedRow.InfinitePage>()
+                    .flatMap { it.items }
+                    .map { it.tmdbId }
+                    .toSet()
+                val dedupedItems = items.filter { it.tmdbId !in existingIds }
+                if (dedupedItems.isEmpty()) {
+                    isInfiniteExhausted = true
+                    _ui.update { it.copy(isLoadingMore = false) }
+                    return@launch
+                }
+                val newRow = FeedRow.InfinitePage(dedupedItems, nextPage)
+                _ui.update { st ->
+                    st.copy(feedRows = st.feedRows + newRow, isLoadingMore = false)
+                }
+            } catch (_: Exception) {
+                _ui.update { it.copy(isLoadingMore = false) }
             }
         }
     }
@@ -583,12 +438,6 @@ fun BrowseScreen(
     // items (header + row), so "total - 8" gives ~4 sections of pre-load headroom.
     // This means loading starts well before the user reaches the visible end —
     // no hard-swipe needed.
-    //
-    // CRITICAL BUG FIX: skeleton items (skeletonBanner, skeletonRow1, skeletonRow2)
-    // are 3 LazyColumn items. total=3, lastVisible=2 → 2 >= 3-8 = -5 = TRUE.
-    // Without the isCacheLoaded guard, loadMoreInfinite() fires during the skeleton
-    // phase and hits TMDB for discover/movie?page=2 instead of ever showing cached
-    // home sections. This was the "empty app loop" on second open.
     val shouldLoadMore by remember {
         derivedStateOf {
             val info  = listState.layoutInfo
@@ -601,9 +450,11 @@ fun BrowseScreen(
         }
     }
 
-    // isCacheLoaded AND !isLoading gate prevents firing during skeleton phase.
-    LaunchedEffect(shouldLoadMore, ui.isLoadingMore, ui.isGenreLoading, ui.isCacheLoaded, ui.isLoading) {
-        if (shouldLoadMore && ui.isCacheLoaded && !ui.isLoading && !ui.isLoadingMore && !ui.isGenreLoading) {
+    // Re-run whenever shouldLoadMore flips OR isLoadingMore/isGenreLoading settle to false.
+    // This ensures a fresh check after each page finishes loading, so if the user is
+    // still near the bottom the next page kicks off automatically.
+    LaunchedEffect(shouldLoadMore, ui.isLoadingMore, ui.isGenreLoading) {
+        if (shouldLoadMore && !ui.isLoadingMore && !ui.isGenreLoading) {
             if (ui.selectedGenreId != null) vm.loadMoreGenre()
             else vm.loadMoreInfinite()
         }
@@ -768,17 +619,13 @@ val d = LocalDimensions.current
                                 }
                                 is FeedRow.InfinitePage -> {
                                     val label = if (row.page % 2 == 0) "More Movies" else "More Series"
-                                    // Use feedRowIdx (stable list position) as the key, not row.page,
-                                    // because the engine can return the same pageIndex twice (cache hit
-                                    // then network hit on same page), which produces duplicate keys and
-                                    // crashes with IllegalArgumentException.
-                                    item(key = "inf_hdr_$feedRowIdx") { SectionHeader(label, "") }
-                                    item(key = "inf_row_$feedRowIdx") {
+                                    item(key = "inf_hdr_${row.page}") { SectionHeader(label, "") }
+                                    item(key = "inf_row_${row.page}") {
                                         LazyRow(
                                             contentPadding = PaddingValues(horizontal = d.screenHorizPad),
                                             horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                                         ) {
-                                            items(row.items, key = { "${feedRowIdx}_${it.tmdbId}" }) { m ->
+                                            items(row.items, key = { "${row.page}_${it.tmdbId}" }) { m ->
                                                 MediaRowCard(m, onClick = { goDetail(m.tmdbId, m.mediaType) })
                                             }
                                         }
@@ -787,25 +634,7 @@ val d = LocalDimensions.current
                             }
                         }
 
-                        // ── Infinite scroll load-more skeleton ────────────────────────
-                        // Shows a full skeleton row (not just a spinner at the edge) so
-                        // the user sees a meaningful "more coming" signal, and Coil has
-                        // time to fetch thumbnails for items already on screen before we
-                        // add another row. LoadMoreSkeleton wraps SkeletonRowLoader which
-                        // shimmer-animates independently for each card.
                         if (ui.isLoadingMore) {
-                            item(key = "loadMoreSkHeader") {
-                                Box(
-                                    Modifier.fillMaxWidth()
-                                        .padding(start = d.screenHorizPad, top = d.spaceLg, bottom = d.spaceSm),
-                                ) {
-                                    Box(
-                                        Modifier.width(120.dp).height(d.spaceMd - d.spaceXxs)
-                                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(d.spaceXs))
-                                            .background(BgSurface)
-                                    )
-                                }
-                            }
                             item(key = "loadMoreSkeleton") { LoadMoreSkeleton() }
                         }
                     }

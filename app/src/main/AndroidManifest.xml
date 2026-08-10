@@ -10,12 +10,15 @@
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
     <!-- ── Wi-Fi Hotspot transfer ─────────────────────────────────────────── -->
-    <!-- ACCESS_FINE_LOCATION removed — ACCESS_COARSE_LOCATION below is sufficient for Wi-Fi Direct
-         and avoids security scanner false-positives on streaming apps. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- ── Nearby Connections (Bluetooth mediums used for discovery + upgrade) ── -->
     <!-- Legacy BT permissions for API < 31 -->
@@ -68,7 +71,6 @@
         android:theme="@style/Theme.Reelz.Splash"
         android:networkSecurityConfig="@xml/network_security_config"
         android:hardwareAccelerated="true"
-        android:enableOnBackInvokedCallback="true"
         android:largeHeap="true"
         tools:targetApi="31">
 

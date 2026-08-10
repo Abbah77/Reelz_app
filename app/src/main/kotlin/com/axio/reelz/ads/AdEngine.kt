@@ -56,37 +56,18 @@ sealed class NativeAdState {
 class AdEngine @Inject constructor(
     private val remoteConfig: RemoteConfigRepository,
     private val premiumGate: PremiumGate,
-    private val appPrefs: com.axio.reelz.data.local.AppPreferencesStore,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // ── Session state (reset on cold start — intentional) ────────────────────
+    // ── Session state (reset on cold start) ──────────────────────────────────
     var interstitialShownCount: Int  = 0
+    var lastInterstitialTimeMs: Long = 0L
     private var appOpenShownThisSession = false
 
-    // ── Persistent counters (survive cold starts via AppPreferencesStore) ─────
-    // lastInterstitialTimeMs and totalContentOpens are loaded from DataStore on
-    // first access and written back on each change, so frequency caps are
-    // honoured across app restarts and process deaths.
-    private var _lastInterstitialTimeMs: Long = 0L
-    private var _totalContentOpens: Int       = 0
-    private var _totalPlayTaps: Int           = 0
-    private var countersLoaded = false
-
-    val lastInterstitialTimeMs: Long get() = _lastInterstitialTimeMs
-    val totalContentOpens: Int        get() = _totalContentOpens
-    val totalPlayTaps: Int            get() = _totalPlayTaps
-
-    /** Call once from Application.onCreate() to warm up persisted counters. */
-    fun loadPersistedCounters() {
-        scope.launch(Dispatchers.IO) {
-            _lastInterstitialTimeMs = appPrefs.getLastInterstitialTimeMs()
-            _totalContentOpens      = appPrefs.getTotalContentOpens()
-            _totalPlayTaps          = appPrefs.getTotalPlayTaps()
-            countersLoaded          = true
-        }
-    }
+    // ── Persistent-ish counters (could survive session, kept in memory here) ─
+    var totalContentOpens: Int = 0
+    var totalPlayTaps: Int     = 0
 
     // ── Preloaded ad objects ──────────────────────────────────────────────────
     private var loadedInterstitial: MaxInterstitialAd? = null
@@ -268,10 +249,10 @@ class AdEngine @Inject constructor(
         val freq = adsConfig().interstitialFrequency
         val now = System.currentTimeMillis()
         return isInterstitialReady
-            && _totalContentOpens >= freq.contentOpensBeforeFirst
-            && _totalPlayTaps % freq.everyNPlays == 0
-            && _totalPlayTaps > 0
-            && (now - _lastInterstitialTimeMs) > freq.minMsBetween
+            && totalContentOpens >= freq.contentOpensBeforeFirst
+            && totalPlayTaps % freq.everyNPlays == 0
+            && totalPlayTaps > 0
+            && (now - lastInterstitialTimeMs) > freq.minMsBetween
             && interstitialShownCount < freq.maxPerSession
     }
 
@@ -290,7 +271,8 @@ class AdEngine @Inject constructor(
         }
 
         isInterstitialReady = false
-        recordInterstitialShown()   // persists lastInterstitialTimeMs to DataStore
+        lastInterstitialTimeMs = System.currentTimeMillis()
+        interstitialShownCount++
 
         ad.setListener(object : MaxAdListener {
             override fun onAdLoaded(a: MaxAd)   {}
@@ -409,19 +391,7 @@ class AdEngine @Inject constructor(
     // Counters
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun incrementContentOpen() {
-        _totalContentOpens++
-        scope.launch(Dispatchers.IO) { appPrefs.incrementContentOpens() }
-    }
+    fun incrementContentOpen() { totalContentOpens++ }
 
-    fun incrementPlayTap() {
-        _totalPlayTaps++
-        scope.launch(Dispatchers.IO) { appPrefs.incrementPlayTaps() }
-    }
-
-    private fun recordInterstitialShown() {
-        _lastInterstitialTimeMs = System.currentTimeMillis()
-        interstitialShownCount++
-        scope.launch(Dispatchers.IO) { appPrefs.setLastInterstitialTimeMs(_lastInterstitialTimeMs) }
-    }
+    fun incrementPlayTap() { totalPlayTaps++ }
 }

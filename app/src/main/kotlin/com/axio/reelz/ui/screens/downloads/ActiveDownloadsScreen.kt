@@ -1,6 +1,7 @@
 package com.axio.reelz.ui.screens.downloads
 
 import android.content.Context
+import androidx.compose.animation.animateFloatAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -106,10 +107,8 @@ fun ActiveDownloadsScreen(
 
         LazyColumn(
             contentPadding = PaddingValues(
-                start  = d.screenHorizPad,
-                end    = d.screenHorizPad,
-                top    = 0.dp,
-                bottom = d.spaceXxl * 3,
+                horizontal = d.screenHorizPad,
+                bottom     = d.spaceXxl * 3,
             ),
             verticalArrangement = Arrangement.spacedBy(d.spaceSm),
         ) {

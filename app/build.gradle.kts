@@ -28,17 +28,7 @@ android {
         buildConfigField("String", "TMDB_IMG_ORIGINAL",        "\"https://image.tmdb.org/t/p/original\"")
 
         // C++ native library removed — M3U8 parsing + stream resolution is server-side.
-        // No additional nativeBuildConfig required here — see externalNativeBuild below.
-    }
-
-    // ── NDK / CMake — AES key in native code (Section 1.4) ──────────────────
-    // Requires Android NDK installed in Android Studio (SDK Manager → SDK Tools → NDK).
-    // The native library is compiled from app/src/main/cpp/native-lib.cpp.
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
+        // No externalNativeBuild, no cmake, no NDK required.
     }
 
     signingConfigs {

@@ -72,27 +72,10 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
         appScope.launch {
             remoteConfig.loadLocalConfig()
 
-            // If local load produced no TMDB keys (first install, fallback has none),
-            // sync immediately — blocking — so keys are in memory before any screen
-            // fires TMDB API calls. The OkHttp interceptor calls activeTmdbKey() on
-            // every request; without this, first-install users always get api_key=""
-            // and see the Explore / Home error state.
-            if (remoteConfig.activeTmdbKey() == null) {
-                remoteConfig.sync()   // suspends until one CDN succeeds or all fail
-            } else {
-                // Keys already loaded from cache — kick off a background refresh to
-                // pick up any config changes, but don't block the startup sequence.
-                remoteConfig.syncInBackground()
-            }
-
             // Initialize ad engine — starts SDK + preloads all ad formats.
             // AdEngine itself checks ads.enabled and the AppLovin SDK key,
             // so this is a safe no-op until both are configured.
             adEngine.initialize(this@ReelzApp)
-
-            // Warm up ad frequency counters from DataStore so caps survive
-            // cold starts. Must come after initialize() so the engine is ready.
-            adEngine.loadPersistedCounters()
 
             // Load any previously cached premium session — instant, local only.
             // PremiumGate is ready with the correct state before any screen renders.
@@ -107,21 +90,8 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
         // Periodic background refresh every 6 hours.
         ConfigSyncWorker.schedule(this)
 
-        // Daily cache eviction — enforces the 10k row cap and removes old search items.
-        scheduleEviction()
-
         // ── Recover downloads stuck in QUEUED/DOWNLOADING state ──────────────
         recoverStuckDownloads()
-    }
-
-    private fun scheduleEviction() {
-        androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "reelz_eviction",
-            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
-            androidx.work.PeriodicWorkRequestBuilder<com.axio.reelz.workers.EvictionWorker>(
-                1, java.util.concurrent.TimeUnit.DAYS
-            ).build()
-        )
     }
 
     private fun recoverStuckDownloads() {
@@ -147,14 +117,9 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
                     .build()
             }
             .diskCache {
-                // ~350MB soft target — Coil's LRU eviction keeps it near this size.
-                // We do NOT hard-stop at exactly 350MB: inserting a new 8MB poster
-                // when at 349MB is fine. Coil evicts older entries back toward the
-                // target automatically. This matches the local-first philosophy:
-                // soft limits with headroom beat hard limits with edge-case crashes.
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(350L * 1024 * 1024)
+                    .maxSizeBytes(256L * 1024 * 1024)
                     .build()
             }
             .okHttpClient {
@@ -163,10 +128,6 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
                     .readTimeout(15, TimeUnit.SECONDS)
                     .build()
             }
-            // TMDB's CDN sets short max-age headers; ignoring them means Coil
-            // uses our own 350MB disk cache TTL instead of re-downloading images
-            // on every session — significant bandwidth and latency saving.
-            .respectCacheHeaders(false)
             .diskCachePolicy(CachePolicy.ENABLED)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .crossfade(true)

@@ -14,14 +14,12 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.axio.reelz.data.local.DownloadDao
-import com.axio.reelz.data.local.DownloadMetadataWriter
-import com.axio.reelz.data.local.DownloadPaths
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.QualityTrack
-import com.axio.reelz.data.model.fromJsonSafe
 // NativeBridge removed — M3U8 parsing now pure Kotlin
 import com.axio.reelz.stream.BackendStreamRepository
 import dagger.hilt.android.AndroidEntryPoint
@@ -77,7 +75,6 @@ class DownloadService : Service() {
 
     @Inject lateinit var downloadDao: DownloadDao
     @Inject lateinit var streamRepo: BackendStreamRepository
-    @Inject lateinit var metadataWriter: DownloadMetadataWriter
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val gson  = Gson()
@@ -191,20 +188,8 @@ class DownloadService : Service() {
             downloadDao.markPaused(dlId)
         }
 
-        // ── Structured output paths via DownloadPaths ─────────────────────────
-        // Paths are determined BEFORE resolving the stream URL so we know the
-        // format (HLS vs MP4) upfront only after resolving. We detect format
-        // from the resolved URL and pass the correct File to the downloader.
-        val isHlsHint = item.streamUrl.contains(".m3u8", ignoreCase = true)
-        val outputFile = DownloadPaths.videoFile(
-            ctx       = this,
-            tmdbId    = item.tmdbId,
-            mediaType = item.mediaType,
-            season    = item.season,
-            episode   = item.episode,
-            quality   = item.quality,
-            isHls     = isHlsHint,
-        )
+        val outputDir  = File(filesDir, "downloads").also { it.mkdirs() }
+        val outputFile = File(outputDir, "$dlId.mp4")
 
         downloadDao.updateMetadata(dlId, DownloadStatus.DOWNLOADING.name, item.sizeBytes)
         updateNotif("Downloading", item.title, 0, 0)
@@ -228,43 +213,23 @@ class DownloadService : Service() {
                 return
             }
 
-            // Re-derive output file now we have the resolved URL (may differ from hint)
-            val isHls = freshItem.streamUrl.contains(".m3u8", ignoreCase = true)
-            val resolvedOutputFile = DownloadPaths.videoFile(
-                ctx       = this,
-                tmdbId    = freshItem.tmdbId,
-                mediaType = freshItem.mediaType,
-                season    = freshItem.season,
-                episode   = freshItem.episode,
-                quality   = freshItem.quality,
-                isHls     = isHls,
-            )
-
-            if (isHls) {
-                downloadHls(freshItem, resolvedOutputFile, dlId)
+            if (freshItem.streamUrl.contains(".m3u8", ignoreCase = true)) {
+                downloadHls(freshItem, outputFile, dlId)
             } else {
-                downloadDirect(freshItem, resolvedOutputFile, dlId)
+                downloadDirect(freshItem, outputFile, dlId)
             }
 
             // FIX 97%: Verify output file is actually complete before marking DONE.
             // Transformer can "succeed" while writing an empty/corrupt file.
-            if (!resolvedOutputFile.exists() || resolvedOutputFile.length() < 1024) {
+            if (!outputFile.exists() || outputFile.length() < 1024) {
                 throw IOException("Output file missing or too small after merge — retrying")
             }
 
             downloadDao.markDone(
                 dlId, DownloadStatus.DONE.name,
-                resolvedOutputFile.absolutePath,
+                outputFile.absolutePath,
                 System.currentTimeMillis()
             )
-
-            // Write recovery metadata.json / show.json / episode metadata.
-            // Room is already updated above — this is a best-effort tombstone only.
-            val doneItem = downloadDao.get(dlId)
-            if (doneItem != null) {
-                metadataWriter.write(this, doneItem)
-            }
-
             updateNotif("Complete", "${item.title} ready to watch", 1, 1)
         } catch (e: CancellationException) {
             // Intentional pause — DB already marked PAUSED in ACTION_PAUSE handler.
@@ -411,7 +376,7 @@ class DownloadService : Service() {
     ) {
         val chunkCount = 4
         val chunkSize  = totalBytes / chunkCount
-        val segDir     = DownloadPaths.segmentsDir(this, item.tmdbId, item.mediaType, item.season, item.episode, item.quality)
+        val segDir     = File(filesDir, "seg_${dlId}").also { it.mkdirs() }
         val startAt    = resumeFrom
 
         val semaphore = Semaphore(chunkCount)
@@ -502,7 +467,7 @@ class DownloadService : Service() {
 
         val total = segmentUrls.size
         val segDir = if (item.segmentDir.isNotBlank()) File(item.segmentDir)
-        else DownloadPaths.segmentsDir(this, item.tmdbId, item.mediaType, item.season, item.episode, item.quality)
+        else File(filesDir, "seg_${dlId}").also { it.mkdirs() }
 
         val estimatedSize = if (item.sizeBytes <= 0) {
             estimateHlsSize(segmentUrls[0], headers, total)
@@ -835,7 +800,7 @@ class DownloadService : Service() {
         } catch (_: Exception) { emptyMap() }
 
     private fun parseQualityTracks(json: String): List<QualityTrack> =
-        try { gson.fromJsonSafe<List<QualityTrack>>(json) ?: emptyList() }
+        try { gson.fromJson(json, object : com.google.gson.reflect.TypeToken<List<QualityTrack>>() {}.type) }
         catch (_: Exception) { emptyList() }
 
     private fun fetchText(url: String, headers: Map<String, String>): String {
