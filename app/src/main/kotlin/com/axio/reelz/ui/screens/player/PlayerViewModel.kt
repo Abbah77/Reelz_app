@@ -25,11 +25,10 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ads.VastTagProvider
-import com.axio.reelz.core.database.AppPreferencesStore
+import com.axio.reelz.core.preferences.AppPreferencesStore
 import com.axio.reelz.core.database.DownloadSubtitleDao
 import com.axio.reelz.core.database.DownloadSubtitleRow
 import com.axio.reelz.data.model.*
-import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.data.repository.StreamRepository
 import com.axio.reelz.data.repository.UserRepository
 import com.axio.reelz.core.network.NetworkResult
@@ -109,7 +108,7 @@ data class PlayerUiState(
 class PlayerViewModel @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
     private val streamRepo: StreamRepository,
-    private val mediaRepo: MediaRepository,
+    private val libraryRepo: com.axio.reelz.data.repository.LibraryRepository,
     private val downloadRepo: com.axio.reelz.data.repository.DownloadRepository,
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val adEngine: AdEngine,
@@ -639,7 +638,7 @@ class PlayerViewModel @Inject constructor(
             ProgressiveMediaSource.Factory(mediaDsf).createMediaSource(item)
 
         viewModelScope.launch {
-            val resumeMs = mediaRepo.getProgress(currentId, currentSeason, currentEpisode)?.positionMs ?: 0L
+            val resumeMs = libraryRepo.getProgress(currentId, currentSeason, currentEpisode)?.positionMs ?: 0L
             p.setMediaSource(source); p.prepare()
             if (resumeMs > 5_000) p.seekTo(resumeMs)
             p.playWhenReady = true
@@ -699,7 +698,7 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(positionMs = pos, bufferedMs = p.bufferedPosition.coerceAtLeast(0), durationMs = dur) }
         if (dur > 0) {
             viewModelScope.launch {
-                mediaRepo.saveProgress(currentId, currentSeason, currentEpisode, pos, dur)
+                libraryRepo.saveProgress(currentId, currentSeason, currentEpisode, pos, dur)
             }
         }
     }

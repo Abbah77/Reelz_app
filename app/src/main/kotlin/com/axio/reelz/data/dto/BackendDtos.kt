@@ -290,3 +290,8 @@ data class SearchResponseDto(
 // DynamicUrlInterceptor in AppModule picks it up on the next request.
 fun AppConfigDto.backendBaseUrl(): String =
     "https://your-vps.example.com"   // override at build time via BuildConfig.BACKEND_URL
+
+data class PaymentInitDto(
+    val authorizationUrl: String = "",
+    val reference: String = "",
+)

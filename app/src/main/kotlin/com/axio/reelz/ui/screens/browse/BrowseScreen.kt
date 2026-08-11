@@ -10,9 +10,8 @@ sealed class FeedRow {
 
 @dagger.hilt.android.lifecycle.HiltViewModel
 class BrowseViewModel @javax.inject.Inject constructor(
-    private val repo: com.axio.reelz.data.repository.MediaRepository,
-    private val watchlistDao: com.axio.reelz.core.database.WatchlistDao,
-    private val watchProgressDao: com.axio.reelz.core.database.WatchProgressDao,
+    private val repo: com.axio.reelz.data.repository.CatalogRepository,
+    private val libraryRepo: com.axio.reelz.data.repository.LibraryRepository,
 ) : androidx.lifecycle.ViewModel() {
 
     data class UiState(
@@ -44,9 +43,8 @@ class BrowseViewModel @javax.inject.Inject constructor(
         initLoad()
         // Keep continue-watching row live
         androidx.lifecycle.viewModelScope.launch {
-            watchProgressDao.getRecent(12).let { history ->
-                _ui.update { it.copy(continueWatching = history) }
-            }
+            val history = libraryRepo.getRecentProgress(12)
+            _ui.update { it.copy(continueWatching = history) }
         }
         // Keep watchlist set live for hero banner button
         androidx.lifecycle.viewModelScope.launch {
@@ -59,7 +57,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
     /** Toggle a media item in/out of the watchlist from the hero banner. */
     fun toggleHeroWatchlist(media: com.axio.reelz.data.model.Media) {
         androidx.lifecycle.viewModelScope.launch {
-            repo.toggleWatchlist(media)
+            libraryRepo.toggleWatchlist(media)
         }
     }
 

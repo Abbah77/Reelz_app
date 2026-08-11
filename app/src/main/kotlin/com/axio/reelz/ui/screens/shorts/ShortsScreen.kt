@@ -52,7 +52,6 @@ import coil.compose.AsyncImage
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ads.ShortsNativeAdPage
 import com.axio.reelz.data.model.ShortVideo
-import com.axio.reelz.data.repository.MediaRepository
 // StreamHeaders removed — using inline UA constant below
 import com.axio.reelz.ui.components.CinematicSpinner
 import com.axio.reelz.ui.components.IconBookmark
@@ -245,7 +244,7 @@ private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = bu
 @HiltViewModel
 class ShortsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val repo: MediaRepository,
+    private val repo: com.axio.reelz.data.repository.CatalogRepository,
     private val configRepo: com.axio.reelz.data.repository.ConfigRepository,
 ) : ViewModel() {
 

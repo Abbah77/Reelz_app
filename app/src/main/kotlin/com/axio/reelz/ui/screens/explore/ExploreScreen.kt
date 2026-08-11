@@ -20,7 +20,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.axio.reelz.data.model.*
-import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.ui.Route
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
@@ -97,7 +96,7 @@ val runtimeOptions = listOf(
 
 @HiltViewModel
 class ExploreViewModel @Inject constructor(
-    private val repo: MediaRepository,
+    private val repo: com.axio.reelz.data.repository.CatalogRepository,
 ) : ViewModel() {
 
     data class UiState(
@@ -119,8 +118,10 @@ class ExploreViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             try {
-                val genres = repo.getMovieGenres()
-                _ui.update { it.copy(genres = genres) }
+                val result = repo.getGenres("movie")
+                if (result is com.axio.reelz.core.network.NetworkResult.Success) {
+                    _ui.update { it.copy(genres = result.data) }
+                }
             } catch (_: Exception) {}
         }
         runQuery()
@@ -152,15 +153,7 @@ class ExploreViewModel @Inject constructor(
                 val cacheUnsupported = f.runtimeFrom != null || f.runtimeTo != null || f.originCountry != null
                 val cacheResults = if (!cacheUnsupported) {
                     try {
-                        repo.queryExploreFromCache(
-                            mediaType  = f.mediaType,
-                            genreIds   = f.genreIds,
-                            sortBy     = f.sortBy,
-                            yearFrom   = f.yearFrom,
-                            yearTo     = f.yearTo,
-                            ratingFrom = f.ratingFrom,
-                            language   = f.language,
-                        )
+                        emptyList()
                     } catch (_: Exception) { emptyList() }
                 } else emptyList()
 
@@ -231,15 +224,7 @@ class ExploreViewModel @Inject constructor(
 
                 val cacheMore = if (!cacheUnsupported) {
                     try {
-                        repo.queryExploreFromCache(
-                            mediaType  = f.mediaType,
-                            genreIds   = f.genreIds,
-                            sortBy     = f.sortBy,
-                            yearFrom   = f.yearFrom,
-                            yearTo     = f.yearTo,
-                            ratingFrom = f.ratingFrom,
-                            language   = f.language,
-                        ).filter { it.id !in shownIds }
+                        emptyList().filter { it.id !in shownIds }
                     } catch (_: Exception) { emptyList() }
                 } else emptyList()
 
@@ -311,32 +296,20 @@ class ExploreViewModel @Inject constructor(
 
     /** Execute the TMDB discover call for the given filters and page. */
     private suspend fun fetchFromTmdb(f: ExploreFilters, page: Int): List<Media> =
-        if (f.mediaType == "MOVIE") {
-            repo.discoverMoviesAdvanced(
-                genreIds      = f.genreIds.toList(),
-                sortBy        = f.sortBy,
-                page          = page,
-                language      = f.language,
-                originCountry = f.originCountry,
-                yearFrom      = f.yearFrom,
-                yearTo        = f.yearTo,
-                ratingFrom    = f.ratingFrom,
-                minVotes      = if (f.sortBy == "vote_average.desc") 200 else null,
-                runtimeFrom   = f.runtimeFrom,
-                runtimeTo     = f.runtimeTo,
-            )
-        } else {
-            repo.discoverTvAdvanced(
-                genreIds      = f.genreIds.toList(),
-                sortBy        = f.sortBy,
-                page          = page,
-                language      = f.language,
-                originCountry = f.originCountry,
-                yearFrom      = f.yearFrom,
-                yearTo        = f.yearTo,
-                ratingFrom    = f.ratingFrom,
-                minVotes      = if (f.sortBy == "vote_average.desc") 200 else null,
-            )
+        val mediaType = if (f.mediaType == "MOVIE") "movie" else "tv"
+        val genre = f.genreIds.firstOrNull()?.toString()
+        val result = repo.discover(
+            mediaType = mediaType,
+            genre     = genre,
+            language  = f.language,
+            sortBy    = f.sortBy,
+            yearFrom  = f.yearFrom,
+            yearTo    = f.yearTo,
+            ratingMin = f.ratingFrom,
+        )
+        when (result) {
+            is com.axio.reelz.core.network.NetworkResult.Success -> result.data.first
+            else -> emptyList()
         }
 
     fun loadMore() {

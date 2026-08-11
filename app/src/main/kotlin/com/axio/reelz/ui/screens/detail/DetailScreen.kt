@@ -37,7 +37,6 @@ import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
-import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.data.repository.StreamRepository
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.downloads.formatSize
@@ -113,7 +112,8 @@ private val IconLock get() = androidx.compose.ui.graphics.vector.ImageVector.Bui
 
 @HiltViewModel
 class DetailViewModel @Inject constructor(
-    private val repo: MediaRepository,
+    private val repo: com.axio.reelz.data.repository.CatalogRepository,
+    private val libraryRepo: com.axio.reelz.data.repository.LibraryRepository,
     private val downloadRepo: DownloadRepository,
     private val streamRepo: StreamRepository,
     private val adEngine: com.axio.reelz.ads.AdEngine,
@@ -228,7 +228,7 @@ class DetailViewModel @Inject constructor(
             adEngine.incrementContentOpen()
             try {
                 // Stage 1 — cache-first detail (instant if Room hit, network otherwise)
-                val inWatchlist = repo.isInWatchlist(id)
+                val inWatchlist = libraryRepo.isInWatchlist(id)
                 val result = repo.getDetail(id)
                 val detail = (result as? com.axio.reelz.network.NetworkResult.Success)?.data
                     ?: run {
@@ -288,7 +288,7 @@ class DetailViewModel @Inject constructor(
     fun toggleWatchlist() {
         val m = currentMedia ?: return
         viewModelScope.launch {
-            val nowIn = repo.toggleWatchlist(m)
+            val nowIn = libraryRepo.toggleWatchlist(m)
             _ui.update { it.copy(isInWatchlist = nowIn) }
         }
     }

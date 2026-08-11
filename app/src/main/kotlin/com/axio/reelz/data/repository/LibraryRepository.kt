@@ -27,6 +27,10 @@ class LibraryRepository @Inject constructor(
 
     // ── Watch progress (local only) ───────────────────────────────────────────
 
+    suspend fun getRecentProgress(limit: Int): List<com.axio.reelz.core.database.WatchProgressRow> = withContext(Dispatchers.IO) {
+        watchProgressDao.getRecent(limit)
+    }
+
     suspend fun getProgress(id: String, season: Int, episode: Int): WatchProgressRow? =
         withContext(Dispatchers.IO) { watchProgressDao.get(id, season, episode) }
 

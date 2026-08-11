@@ -114,6 +114,9 @@ interface ReelzApi {
 
     // ── Auth ──────────────────────────────────────────────────────────────────
     @POST("auth/google")
+    @retrofit2.http.POST("payment/init")
+    suspend fun initPayment(@retrofit2.http.Field("plan") plan: String): com.axio.reelz.data.dto.PaymentInitDto
+
     suspend fun authWithGoogle(
         @Body body: GoogleAuthBody,
     ): Response<AuthResponseDto>

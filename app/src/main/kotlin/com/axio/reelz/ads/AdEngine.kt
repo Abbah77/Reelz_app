@@ -55,7 +55,7 @@ sealed class NativeAdState {
 class AdEngine @Inject constructor(
     private val configRepo: ConfigRepository,
     private val sessionRepo: UserRepository,
-    private val appPrefs: com.axio.reelz.core.database.AppPreferencesStore,
+    private val appPrefs: com.axio.reelz.core.preferences.AppPreferencesStore,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)

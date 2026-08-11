@@ -464,7 +464,7 @@ data class WatchlistItem(
 data class WatchHistory(
     val mediaId: String,
     val title: String,
-    val posterUrl: String?,
+    val posterPath: String?,
     val mediaType: String,
     val positionMs: Long,
     val durationMs: Long,

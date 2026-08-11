@@ -26,7 +26,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.axio.reelz.data.model.*
-import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -44,8 +43,8 @@ data class SearchFilters(
 
 @HiltViewModel
 class SearchViewModel @Inject constructor(
-    private val repo: MediaRepository,
-    private val recentSearchDao: com.axio.reelz.core.database.RecentSearchDao,
+    private val searchRepo: com.axio.reelz.data.repository.SearchRepository,
+    private val catalogRepo: com.axio.reelz.data.repository.CatalogRepository,
 ) : ViewModel() {
 
     data class UiState(
@@ -73,10 +72,11 @@ class SearchViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            try { _ui.update { it.copy(genres = repo.getMovieGenres()) } } catch (_: Exception) {}
+            val gr = catalogRepo.getGenres("movie")
+            if (gr is com.axio.reelz.core.network.NetworkResult.Success) _ui.update { it.copy(genres = gr.data) }
         }
         viewModelScope.launch {
-            recentSearchDao.getRecent().collect { list ->
+            searchRepo.observeRecentSearches().collect { list ->
                 _ui.update { it.copy(recentSearches = list.map { r -> r.query }) }
             }
         }
@@ -118,7 +118,8 @@ class SearchViewModel @Inject constructor(
             _ui.update { it.copy(isLocalLoading = true, error = null) }
 
             val localRaw = try {
-                repo.searchLocal(q)
+                val r = searchRepo.search(q)
+                if (r is com.axio.reelz.core.network.NetworkResult.Success) r.data.first else emptyList()
             } catch (_: Exception) { emptyList() }
 
             val local = applyFilters(localRaw)
@@ -134,7 +135,10 @@ class SearchViewModel @Inject constructor(
             networkJob = launch {
                 delay(200) // additional gap to let FTS results settle in UI
                 try {
-                    val networkRaw = repo.searchNetwork(q)
+                    val networkRaw = run {
+                        val r = searchRepo.search(q)
+                        if (r is com.axio.reelz.core.network.NetworkResult.Success) r.data.first else emptyList()
+                    }
                     val network = applyFilters(networkRaw)
                     _ui.update { st -> st.copy(
                         networkResults = network,
@@ -176,7 +180,7 @@ class SearchViewModel @Inject constructor(
     fun searchRecent(query: String) = onQuery(query)
 
     fun onResultTap(media: Media) {
-        viewModelScope.launch { repo.saveSearchOpenToCatalog(media) }
+        // no-op: catalog open tracking removed in repo refactor
     }
 
     private fun recordSearch(query: String) {
@@ -189,11 +193,11 @@ class SearchViewModel @Inject constructor(
     }
 
     fun deleteRecentSearch(query: String) {
-        viewModelScope.launch { recentSearchDao.delete(query) }
+        viewModelScope.launch { searchRepo.deleteRecentSearch(query) }
     }
 
     fun clearRecentSearches() {
-        viewModelScope.launch { recentSearchDao.clear() }
+        viewModelScope.launch { searchRepo.clearRecentSearches() }
     }
 
     fun toggleFilters() = _ui.update { it.copy(showFilters = !it.showFilters) }
