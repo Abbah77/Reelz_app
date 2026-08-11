@@ -31,8 +31,8 @@ import com.axio.reelz.data.local.DownloadSubtitleRow
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.data.repository.StreamRepository
-import com.axio.reelz.data.repository.UserSessionRepository
-import com.axio.reelz.network.NetworkResult
+import com.axio.reelz.data.repository.UserRepository
+import com.axio.reelz.core.network.NetworkResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -113,8 +113,8 @@ class PlayerViewModel @Inject constructor(
     private val downloadRepo: com.axio.reelz.data.repository.DownloadRepository,
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val adEngine: AdEngine,
-    private val sessionRepo: UserSessionRepository,
-    private val pipPrefs: AppPreferencesStore,
+    private val sessionRepo: UserRepository,
+    private val pipPrefs: com.axio.reelz.core.preferences.AppPreferencesStore,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PlayerUiState())

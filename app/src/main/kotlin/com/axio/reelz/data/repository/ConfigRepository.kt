@@ -6,8 +6,8 @@ import com.axio.reelz.data.local.AppConfigCacheDao
 import com.axio.reelz.data.local.AppConfigCacheRow
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.remote.dto.AppConfigDto
-import com.axio.reelz.network.NetworkResult
-import com.axio.reelz.network.safeApiCall
+import com.axio.reelz.core.network.NetworkResult
+import com.axio.reelz.core.network.safeApiCall
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

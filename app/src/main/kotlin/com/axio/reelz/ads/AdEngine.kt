@@ -15,7 +15,7 @@ import com.applovin.sdk.AppLovinSdk
 import com.applovin.sdk.AppLovinSdkConfiguration
 import com.applovin.sdk.AppLovinSdkSettings
 import com.axio.reelz.data.repository.ConfigRepository
-import com.axio.reelz.data.repository.UserSessionRepository
+import com.axio.reelz.data.repository.UserRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -54,7 +54,7 @@ sealed class NativeAdState {
 @Singleton
 class AdEngine @Inject constructor(
     private val configRepo: ConfigRepository,
-    private val sessionRepo: UserSessionRepository,
+    private val sessionRepo: UserRepository,
     private val appPrefs: com.axio.reelz.data.local.AppPreferencesStore,
 ) {
 

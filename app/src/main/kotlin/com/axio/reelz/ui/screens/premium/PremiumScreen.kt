@@ -36,9 +36,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.axio.reelz.ads.ReelzBrowserSheet
 import com.axio.reelz.data.repository.PaymentRepository
-import com.axio.reelz.data.repository.UserSessionRepository
+import com.axio.reelz.data.repository.UserRepository
 import com.axio.reelz.data.repository.ConfigRepository
-import com.axio.reelz.data.repository.UserSessionRepository
+import com.axio.reelz.data.repository.UserRepository
 import com.axio.reelz.ui.components.BrandButton
 import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -74,8 +74,8 @@ private val IconX: ImageVector get() = ImageVector.Builder("X", 24.dp, 24.dp, 24
 @HiltViewModel
 class PremiumViewModel @Inject constructor(
     private val configRepo: ConfigRepository,
-    private val sessionRepo: UserSessionRepository,
-    private val userSessionRepository: UserSessionRepository,
+    private val sessionRepo: UserRepository,
+    private val userSessionRepository: UserRepository,
     private val paymentRepository: PaymentRepository,
 ) : ViewModel() {
 

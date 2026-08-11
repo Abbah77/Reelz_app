@@ -118,7 +118,7 @@ class DetailViewModel @Inject constructor(
     private val streamRepo: StreamRepository,
     private val adEngine: com.axio.reelz.ads.AdEngine,
     private val configRepo: com.axio.reelz.data.repository.ConfigRepository,
-    private val sessionRepo: com.axio.reelz.data.repository.UserSessionRepository,
+    private val sessionRepo: com.axio.reelz.data.repository.UserRepository,
 ) : ViewModel() {
 
     data class UiState(

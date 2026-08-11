@@ -14,3 +14,10 @@
     <string name="save">Save</string>
     <string name="saved">Saved</string>
 </resources>
+
+    <!-- Download notification strings (added for Media3 DownloadService) -->
+    <string name="download_channel_name">Reelz Downloads</string>
+    <string name="download_channel_description">Shows active download progress</string>
+    <string name="download_notification_title">Downloading content</string>
+    <string name="download_notification_progress">%1$d items • %2$d%%</string>
+    <string name="download_notification_complete">Downloads complete</string>

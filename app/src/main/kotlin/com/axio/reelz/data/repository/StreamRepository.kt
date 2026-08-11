@@ -8,8 +8,8 @@ import com.axio.reelz.data.model.Subtitle
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.remote.api.StreamRequestBody
 import com.axio.reelz.data.remote.api.SubtitleRequestBody
-import com.axio.reelz.network.NetworkResult
-import com.axio.reelz.network.safeApiCall
+import com.axio.reelz.core.network.NetworkResult
+import com.axio.reelz.core.network.safeApiCall
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.inject.Inject

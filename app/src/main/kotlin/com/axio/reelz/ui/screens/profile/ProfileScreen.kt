@@ -122,7 +122,7 @@ class ProfileViewModel @Inject constructor(
     private val watchlistDao: WatchlistDao,
     private val historyDao: WatchHistoryDao,
     private val savedVideoDao: SavedVideoDao,
-    private val sessionRepo: com.axio.reelz.data.repository.UserSessionRepository,
+    private val sessionRepo: com.axio.reelz.data.repository.UserRepository,
 ) : ViewModel() {
 
     companion object {
