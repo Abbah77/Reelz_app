@@ -295,7 +295,7 @@ class ExploreViewModel @Inject constructor(
     }
 
     /** Execute the TMDB discover call for the given filters and page. */
-    private suspend fun fetchFromTmdb(f: ExploreFilters, page: Int): List<Media> {
+    private suspend fun fetchFromTmdb(f: ExploreFilters, page: Int): List<Media> =
         val mediaType = if (f.mediaType == "MOVIE") "movie" else "tv"
         val genre = f.genreIds.firstOrNull()?.toString()
         val result = repo.discover(
@@ -307,11 +307,10 @@ class ExploreViewModel @Inject constructor(
             yearTo    = f.yearTo,
             ratingMin = f.ratingFrom,
         )
-        return when (result) {
+        when (result) {
             is com.axio.reelz.core.network.NetworkResult.Success -> result.data.first
             else -> emptyList()
         }
-    }
 
     fun loadMore() {
         val st = _ui.value
