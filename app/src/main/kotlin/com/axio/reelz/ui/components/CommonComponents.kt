@@ -28,7 +28,6 @@ import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
-import com.axio.reelz.BuildConfig
 import com.axio.reelz.data.model.*
 import com.axio.reelz.ui.theme.*
 import com.axio.reelz.ui.theme.LocalDimensions
@@ -811,7 +810,7 @@ fun MediaPosterCard(
             // Cards show their own skeleton shimmer while Coil fetches the poster —
             // no "dump all grey boxes at once" — each card transitions on its own timeline.
             SubcomposeAsyncImage(
-                model = BuildConfig.TMDB_IMG_W342 + media.posterPath,
+                model = media.posterUrl,
                 contentDescription = media.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -919,7 +918,7 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
                 .background(BgRaised)
         ) {
             SubcomposeAsyncImage(
-                model = BuildConfig.TMDB_IMG_W342 + media.posterPath,
+                model = media.posterUrl,
                 contentDescription = media.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

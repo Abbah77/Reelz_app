@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.*
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
-import com.axio.reelz.BuildConfig
 import com.axio.reelz.data.model.*
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
@@ -262,7 +261,7 @@ private fun ActiveDownloadCard(
                     .background(BgRaised),
             ) {
                 AsyncImage(
-                    model = item.posterPath?.let { "${BuildConfig.TMDB_IMG_W342}$it" },
+                    model = item.posterUrl,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),

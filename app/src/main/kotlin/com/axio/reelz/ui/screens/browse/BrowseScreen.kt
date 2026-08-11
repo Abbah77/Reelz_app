@@ -1,435 +1,228 @@
-package com.axio.reelz.ui.screens.browse
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.grid.*
-import androidx.compose.foundation.pager.*
-import androidx.compose.foundation.shape.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.*
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.*
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.*
-import com.axio.reelz.ads.AdEngine
-import com.axio.reelz.ads.NativeAdCard
-import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import androidx.navigation.NavController
-import coil.compose.AsyncImage
-import com.axio.reelz.BuildConfig
-import com.axio.reelz.data.local.WatchlistDao
-import com.axio.reelz.data.model.*
-import com.axio.reelz.data.model.CatalogPage
-import com.axio.reelz.data.repository.MediaRepository
-import com.axio.reelz.ui.Route
-import com.axio.reelz.ui.components.*
-import com.axio.reelz.ui.theme.*
-import com.axio.reelz.ui.theme.LocalDimensions
-import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
-import javax.inject.Inject
-import android.content.Intent
-import androidx.compose.ui.platform.LocalContext
-import kotlin.math.abs
-import kotlin.math.roundToInt
-
-// ── ViewModel ─────────────────────────────────────────────────────────────────
+// ── FeedRow ───────────────────────────────────────────────────────────────────
+// (kept here so BrowseScreen composable can use it without changes)
 
 sealed class FeedRow {
-    data class Section(val section: HomeSection) : FeedRow()
-    data class InfinitePage(val items: List<Media>, val page: Int) : FeedRow()
+    data class Section(val section: com.axio.reelz.data.model.FeedSection) : FeedRow()
+    data class InfinitePage(val items: List<com.axio.reelz.data.model.Media>, val page: Int) : FeedRow()
     object NativeAdPlacement : FeedRow()
 }
 
-@HiltViewModel
-class BrowseViewModel @Inject constructor(
-    private val repo: MediaRepository,
-    private val watchlistDao: WatchlistDao,
-) : ViewModel() {
+@dagger.hilt.android.lifecycle.HiltViewModel
+class BrowseViewModel @javax.inject.Inject constructor(
+    private val repo: com.axio.reelz.data.repository.MediaRepository,
+    private val watchlistDao: com.axio.reelz.data.local.WatchlistDao,
+    private val watchProgressDao: com.axio.reelz.data.local.WatchProgressDao,
+) : androidx.lifecycle.ViewModel() {
 
     data class UiState(
-        val isLoading: Boolean = true,           // true only on very first launch with no cache
-        val isRefreshing: Boolean = false,        // true only during user-triggered pull-to-refresh
-        val isBackgroundRefreshing: Boolean = false, // silent refresh while cache is already shown
+        val isLoading: Boolean = true,
+        val isRefreshing: Boolean = false,
+        val isBackgroundRefreshing: Boolean = false,
         val error: String? = null,
-        val featured: List<Media> = emptyList(),
+        val featured: List<com.axio.reelz.data.model.Media> = emptyList(),
         val feedRows: List<FeedRow> = emptyList(),
-        val genres: List<Genre> = emptyList(),
-        val selectedGenreId: Int? = null,
-        val genreItems: List<Media> = emptyList(),
-        val genrePage: Int = 1,
+        val genres: List<com.axio.reelz.data.model.Genre> = emptyList(),
+        val selectedGenreId: String? = null,
+        val genreItems: List<com.axio.reelz.data.model.Media> = emptyList(),
+        val genreCursor: String? = null,
         val isGenreLoading: Boolean = false,
         val hasMoreGenrePages: Boolean = true,
-        val continueWatching: List<WatchHistory> = emptyList(),
+        val continueWatching: List<com.axio.reelz.data.local.WatchProgressRow> = emptyList(),
         val isLoadingMore: Boolean = false,
         val isCacheLoaded: Boolean = false,
-        // Set of ids currently in the watchlist — used by the hero banner button
-        val watchlistedIds: Set<Int> = emptySet(),
+        val watchlistedIds: Set<String> = emptySet(),
     )
 
-    private val _ui = MutableStateFlow(UiState())
-    val ui: StateFlow<UiState> = _ui.asStateFlow()
+    private val _ui = kotlinx.coroutines.flow.MutableStateFlow(UiState())
+    val ui: kotlinx.coroutines.flow.StateFlow<UiState> = _ui.asStateFlow()
 
-    private var infinitePage = 1
+    private var infiniteCursor: String? = null
     private var isInfiniteExhausted = false
-    private var categorySections: List<HomeSection> = emptyList()
-    private var categorySectionsEmitted = false
 
     init {
         initLoad()
-        // When watch history changes, update continueWatching AND rebuild feedRows
-        // so the "Continue Watching" row appears immediately even if it arrives
-        // after the cache-phase display (stale-while-revalidate timing issue fix).
-        viewModelScope.launch {
-            repo.getHistory().collect { h ->
-                _ui.update { st ->
-                    st.copy(
-                        continueWatching = h,
-                        // Only rebuild if we already have sections — avoids rebuilding
-                        // an empty list during the initial loading phase.
-                        feedRows = if (categorySections.isNotEmpty()) buildFeedRows(categorySections) else st.feedRows,
-                    )
-                }
+        // Keep continue-watching row live
+        androidx.lifecycle.viewModelScope.launch {
+            watchProgressDao.getRecent(12).let { history ->
+                _ui.update { it.copy(continueWatching = history) }
             }
         }
-        // Keep watchlist set in sync so hero banner button reflects current state instantly
-        viewModelScope.launch {
-            watchlistDao.getAll().collect { list ->
-                _ui.update { it.copy(watchlistedIds = list.map { w -> w.id }.toSet()) }
+        // Keep watchlist set live for hero banner button
+        androidx.lifecycle.viewModelScope.launch {
+            watchlistDao.observeAll().collect { list ->
+                _ui.update { it.copy(watchlistedIds = list.map { w -> w.mediaId }.toSet()) }
             }
         }
     }
 
     /** Toggle a media item in/out of the watchlist from the hero banner. */
-    fun toggleHeroWatchlist(media: Media) {
-        viewModelScope.launch {
-            val existing = watchlistDao.get(media.id)
-            if (existing != null) {
-                watchlistDao.delete(media.id)
-            } else {
-                watchlistDao.insert(
-                    WatchlistItem(
-                        tmdbId    = media.id,
-                        title     = media.title,
-                        posterPath = media.posterPath,
-                        mediaType = media.mediaType.name,
-                    )
-                )
-            }
+    fun toggleHeroWatchlist(media: com.axio.reelz.data.model.Media) {
+        androidx.lifecycle.viewModelScope.launch {
+            repo.toggleWatchlist(media)
         }
     }
 
     /**
-     * Cache-first display strategy. Simple 3-step state machine:
+     * Cache-first feed load.
      *
-     *  STEP 1 — Show cache immediately (0ms, no network).
-     *           If cache exists and has real sections → show it, done if nothing stale.
-     *           If cache is empty → show skeleton, go to STEP 3.
-     *
-     *  STEP 2 — Staleness check (per-section TTL, ~5ms Room queries, no network).
-     *           Compute which section IDs have exceeded their TTL.
-     *           If none stale → return, user already sees fresh content.
-     *
-     *  STEP 3 — Background TMDB refresh for ONLY the stale sections (or all, if no cache).
-     *           Results merge in-place. Fresh sections are never re-fetched.
-     *           If TMDB fails: if cache was shown, stay silent. If no cache, show error.
-     */
-    /**
-     * Cache-first display strategy. Simple 3-step state machine:
-     *
-     *  STEP 1 — Show cache immediately (0ms, no network).
-     *           If cache exists and has real sections → show it, done if nothing stale.
-     *           If cache is empty → show skeleton, go to STEP 3.
-     *
-     *  STEP 2 — Staleness check (per-section TTL, ~5ms Room queries, no network).
-     *           Compute which section IDs have exceeded their TTL.
-     *           If none stale → return, user already sees fresh content.
-     *
-     *  STEP 3 — Background TMDB refresh for ONLY the stale sections (or all, if no cache).
-     *           Results merge in-place. Fresh sections are never re-fetched.
-     *           If TMDB fails: if cache was shown, stay silent. If no cache, show error.
-     *
-     *  isLoading=true  → skeleton is visible (no cache yet)
-     *  isCacheLoaded=true → cache (or TMDB) content is on screen, skeleton hidden
-     *  isBackgroundRefreshing=true → thin progress bar while TMDB refreshes stale sections
+     *  STEP 1 — Serve cached feed instantly if fresh (0ms, no network).
+     *  STEP 2 — If stale or empty, show skeleton and fetch from backend.
+     *  STEP 3 — Backend response merges in-place; stale sections replaced.
      */
     private fun initLoad() {
-        viewModelScope.launch {
-            infinitePage = 1
+        androidx.lifecycle.viewModelScope.launch {
             isInfiniteExhausted = false
-            categorySectionsEmitted = false
 
-            // ── STEP 1: Load from Room (microseconds, always offline-safe) ────────
-            val cached = try { repo.getHomeSectionsFromCacheOnly() } catch (_: Exception) { emptyList() }
-            val hasCacheToShow = cached.isNotEmpty()
+            // STEP 1 — cache-first
+            val cacheResult = repo.getFeed(forceRefresh = false)
+            val cachedSections = (cacheResult as? com.axio.reelz.network.NetworkResult.Success)?.data
+            val fromCache      = (cacheResult as? com.axio.reelz.network.NetworkResult.Success)?.fromCache == true
 
-            if (hasCacheToShow) {
-                categorySections = cached
-                categorySectionsEmitted = true
+            if (!cachedSections.isNullOrEmpty()) {
                 _ui.update {
                     it.copy(
                         isLoading              = false,
                         isCacheLoaded          = true,
                         error                  = null,
-                        featured               = pickFeatured(cached),
-                        feedRows               = buildFeedRows(cached),
-                        isBackgroundRefreshing = false,
+                        featured               = pickFeatured(cachedSections),
+                        feedRows               = buildFeedRows(cachedSections),
+                        isBackgroundRefreshing = fromCache,  // true = stale cache, refresh in bg
                     )
                 }
             } else {
-                // No usable cache — show skeleton while we wait for TMDB
                 _ui.update { it.copy(isLoading = true, isCacheLoaded = false, error = null) }
             }
 
-            // Genres always in parallel — cache-first, never blocks anything
+            // Genres in parallel
             launch {
-                runCatching {
-                    val g = repo.getMovieGenres()
-                    if (g.isNotEmpty()) _ui.update { it.copy(genres = g) }
-                }
+                val gResult = repo.getGenres("movie")
+                val genres  = (gResult as? com.axio.reelz.network.NetworkResult.Success)?.data ?: emptyList()
+                if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
             }
 
-            // ── STEP 2: Staleness check (Room only, ~5ms) ─────────────────────────
-            // Which sections have exceeded their per-section TTL?
-            // If we had no cache at all, every section is stale → fetch all.
-            val staleIds: Set<String> = if (!hasCacheToShow) {
-                // No cache → need to fetch everything
-                Section.DEFAULT_ORDER.map { it.id }.toSet()
-            } else {
-                try { repo.staleSectionIds() } catch (_: Exception) { emptySet() }
-            }
-
-            // Cache shown, nothing stale → done, zero TMDB calls
-            if (staleIds.isEmpty()) return@launch
-
-            // Show subtle indicator only when user already sees content (not during skeleton)
-            if (hasCacheToShow) {
-                _ui.update { it.copy(isBackgroundRefreshing = true) }
-            }
-
-            // ── STEP 3: Fetch only stale sections from TMDB ───────────────────────
-            var firstNetworkBatch = true
-            try {
-                val accumulated = categorySections.toMutableList()
-
-                repo.streamHomeSections(sectionFilter = staleIds) { batch ->
-                    val byTitle = accumulated.associateBy { it.title }.toMutableMap()
-                    batch.forEach { byTitle[it.title] = it }
-                    val updatedInPlace = accumulated.map { byTitle[it.title] ?: it }
-                    val newSections   = batch.filter { n -> accumulated.none { it.title == n.title } }
-                    accumulated.clear()
-                    accumulated.addAll(updatedInPlace + newSections)
-                    categorySections = accumulated.toList()
-
-                    _ui.update {
-                        it.copy(
-                            isLoading              = false,
-                            isCacheLoaded          = true,
-                            isBackgroundRefreshing = hasCacheToShow, // keep indicator until all batches done
-                            error                  = null,
-                            featured               = if (firstNetworkBatch || it.featured.isEmpty())
-                                                         pickFeatured(accumulated)
-                                                     else it.featured,
-                            feedRows               = buildFeedRows(accumulated),
-                        )
+            // STEP 2/3 — If cache was stale or empty, fetch from backend
+            if (cachedSections.isNullOrEmpty() || fromCache) {
+                val freshResult = repo.getFeed(forceRefresh = fromCache)
+                when (freshResult) {
+                    is com.axio.reelz.network.NetworkResult.Success -> {
+                        val fresh = freshResult.data
+                        _ui.update {
+                            it.copy(
+                                isLoading              = false,
+                                isCacheLoaded          = true,
+                                isBackgroundRefreshing = false,
+                                error                  = null,
+                                featured               = pickFeatured(fresh),
+                                feedRows               = buildFeedRows(fresh),
+                            )
+                        }
                     }
-                    firstNetworkBatch = false
-                    categorySectionsEmitted = true
-                }
-                // All done — clear the progress indicator
-                _ui.update { it.copy(isBackgroundRefreshing = false) }
-
-            } catch (e: Exception) {
-                if (hasCacheToShow) {
-                    // Cache is on screen — TMDB failure is silent, just stop the indicator
-                    _ui.update { it.copy(isBackgroundRefreshing = false) }
-                } else {
-                    // Nothing to show — surface the error so user can retry
-                    _ui.update {
-                        it.copy(
-                            isLoading              = false,
-                            isCacheLoaded          = false,
-                            isBackgroundRefreshing = false,
-                            error                  = friendlyBrowseError(e),
-                        )
+                    is com.axio.reelz.network.NetworkResult.Error -> {
+                        if (cachedSections.isNullOrEmpty()) {
+                            _ui.update {
+                                it.copy(
+                                    isLoading              = false,
+                                    isCacheLoaded          = false,
+                                    isBackgroundRefreshing = false,
+                                    error                  = "Couldn't load content. Check your connection.",
+                                )
+                            }
+                        } else {
+                            // Stale cache on screen — network failure is silent
+                            _ui.update { it.copy(isBackgroundRefreshing = false) }
+                        }
                     }
+                    else -> {}
                 }
             }
         }
     }
 
-    /**
-     * Pick hero featured items across the top sections for visual variety.
-     * Takes the top 2 items from each of the first 3 sections → 6 hero candidates.
-     * This means the banner rotates across Trending, New Releases, and Popular Movies
-     * instead of always showing trending[0..5] from a potentially stale cache.
-     */
-    private fun pickFeatured(sections: List<HomeSection>): List<Media> =
+    private fun pickFeatured(sections: List<com.axio.reelz.data.model.FeedSection>): List<com.axio.reelz.data.model.Media> =
         sections.take(3).flatMap { it.items.take(2) }
 
-    /**
-     * User-triggered pull-to-refresh: always hits TMDB regardless of cache age.
-     * Streams fresh data progressively in 3 batches. Section order resets to
-     * DEFAULT_ORDER (personalized) since the user explicitly asked for fresh content.
-     */
-    fun load(forceRefresh: Boolean = true) {
-        if (!forceRefresh) { initLoad(); return }
-        viewModelScope.launch {
-            _ui.update { it.copy(isRefreshing = true, error = null) }
-            infinitePage = 1
-            isInfiniteExhausted = false
-            categorySectionsEmitted = false
-            repo.resetInfiniteCursor()  // Reset engine session cursor on explicit refresh
-
-            // Genres refresh in parallel — don't block the content stream
-            launch {
-                try {
-                    val genres = repo.getMovieGenres()
-                    if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
-                } catch (_: Exception) {}
-            }
-
-            var firstBatch = true
-            try {
-                val accumulated = mutableListOf<HomeSection>()
-                repo.streamHomeSections { batch ->
-                    val byTitle = accumulated.associateBy { it.title }.toMutableMap()
-                    batch.forEach { byTitle[it.title] = it }
-                    val orderedTitles = Section.DEFAULT_ORDER.map { it.label }
-                    accumulated.clear()
-                    accumulated.addAll(
-                        orderedTitles.mapNotNull { byTitle[it] } +
-                        byTitle.values.filter { it.title !in orderedTitles }
-                    )
-                    categorySections = accumulated.toList()
-                    _ui.update {
-                        it.copy(
-                            isRefreshing  = false,
-                            isCacheLoaded = true,
-                            featured      = if (firstBatch) pickFeatured(accumulated)
-                                            else it.featured.ifEmpty { pickFeatured(accumulated) },
-                            feedRows      = buildFeedRows(accumulated),
-                        )
-                    }
-                    firstBatch = false
-                    categorySectionsEmitted = true
-                }
-            } catch (e: Exception) {
-                _ui.update { it.copy(isRefreshing = false, error = friendlyBrowseError(e)) }
-            }
-        }
-    }
-
-    private fun buildFeedRows(sections: List<HomeSection>): List<FeedRow> {
-        val rawRows = sections.map { FeedRow.Section(it) }
+    private fun buildFeedRows(sections: List<com.axio.reelz.data.model.FeedSection>): List<FeedRow> {
+        val rows = sections.map { FeedRow.Section(it) }
         return buildList {
-            rawRows.forEachIndexed { index, row ->
+            rows.forEachIndexed { index, row ->
                 add(row)
                 if ((index + 1) % 3 == 0) add(FeedRow.NativeAdPlacement)
             }
         }
     }
 
+    /** User-triggered pull-to-refresh. */
+    fun load(forceRefresh: Boolean = true) {
+        if (!forceRefresh) { initLoad(); return }
+        androidx.lifecycle.viewModelScope.launch {
+            _ui.update { it.copy(isRefreshing = true, error = null) }
+            isInfiniteExhausted = false
+            infiniteCursor = null
+
+            launch {
+                val gResult = repo.getGenres("movie")
+                val genres  = (gResult as? com.axio.reelz.network.NetworkResult.Success)?.data ?: emptyList()
+                if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
+            }
+
+            val result = repo.getFeed(forceRefresh = true)
+            when (result) {
+                is com.axio.reelz.network.NetworkResult.Success -> {
+                    val sections = result.data
+                    _ui.update {
+                        it.copy(
+                            isRefreshing  = false,
+                            isCacheLoaded = true,
+                            featured      = pickFeatured(sections),
+                            feedRows      = buildFeedRows(sections),
+                        )
+                    }
+                }
+                is com.axio.reelz.network.NetworkResult.Error ->
+                    _ui.update { it.copy(isRefreshing = false, error = result.message) }
+                else -> _ui.update { it.copy(isRefreshing = false) }
+            }
+        }
+    }
+
+    /** Infinite scroll — fetches discover pages and appends as InfinitePage rows. */
     fun loadMoreInfinite() {
         if (_ui.value.isLoadingMore || isInfiniteExhausted) return
-        viewModelScope.launch {
+        androidx.lifecycle.viewModelScope.launch {
             _ui.update { it.copy(isLoadingMore = true) }
 
-            // Collect all ids already shown so the engine can dedup
-            val existingIds = _ui.value.feedRows
-                .flatMap { row ->
-                    when (row) {
-                        is FeedRow.Section      -> row.section.items.map { it.id }
-                        is FeedRow.InfinitePage -> row.items.map { it.id }
-                        else                    -> emptyList()
-                    }
-                }.toSet()
+            val existingIds = _ui.value.feedRows.flatMap { row ->
+                when (row) {
+                    is FeedRow.Section      -> row.section.items.map { it.id }
+                    is FeedRow.InfinitePage -> row.items.map { it.id }
+                    else                    -> emptyList()
+                }
+            }.toSet()
 
-            // ── Unified local-first engine ────────────────────────────────────
-            //
-            // The engine handles all three tiers internally:
-            //   Tier 1 → Room cache (0ms, offline-safe, PAGE_SIZE = 12)
-            //   Tier 2 → TMDB with exponential-backoff retry
-            //   Tier 3 → Exhausted (cache empty + network failed/exhausted)
-            //
-            // PAGE_SIZE = 12 is Coil-friendly: images for the current row have
-            // time to load before the next row appears, preventing black-card walls.
-            //
-            // The engine alternates movie/TV pages for variety without any logic
-            // here — callers stay clean. Persisted TMDB cursor means we never
-            // re-fetch pages already seen, even after a cold restart.
-            //
-            // Prefetch: fire ahead-of-time warming 2 pages before we show them.
-
-            val page = repo.getNextInfinitePage(
-                mediaType  = "movie",
-                excludeIds = existingIds,
-            )
-
-            when (page) {
-                is CatalogPage.FromCache, is CatalogPage.FromNetwork -> {
-                    val items = when (page) {
-                        is CatalogPage.FromCache   -> page.items
-                        is CatalogPage.FromNetwork -> page.items
-                        else                       -> emptyList()
-                    }
-                    val pageIndex = when (page) {
-                        is CatalogPage.FromCache   -> page.pageIndex
-                        is CatalogPage.FromNetwork -> page.pageIndex
-                        else                       -> infinitePage + 1
-                    }
-                    if (items.isEmpty()) {
+            val result = repo.discover(cursor = infiniteCursor)
+            when (result) {
+                is com.axio.reelz.network.NetworkResult.Success -> {
+                    val (items, nextCursor) = result.data
+                    val fresh = items.filter { it.id !in existingIds }
+                    if (fresh.isEmpty()) {
                         isInfiniteExhausted = true
                         _ui.update { it.copy(isLoadingMore = false) }
                         return@launch
                     }
-                    infinitePage = pageIndex
+                    val pageIndex = _ui.value.feedRows.count { it is FeedRow.InfinitePage } + 1
+                    infiniteCursor = nextCursor
+                    if (nextCursor == null) isInfiniteExhausted = true
                     _ui.update { st ->
-                        // Guard against duplicate pageIndex (can happen when cache and
-                        // network both return the same page, or rapid scroll triggers
-                        // two concurrent loads). Duplicate pages cause identical
-                        // LazyColumn keys → IllegalArgumentException crash.
-                        val alreadyPresent = st.feedRows.any {
-                            it is FeedRow.InfinitePage && it.page == pageIndex
-                        }
+                        val alreadyPresent = st.feedRows.any { it is FeedRow.InfinitePage && (it as FeedRow.InfinitePage).page == pageIndex }
                         if (alreadyPresent) return@update st.copy(isLoadingMore = false)
                         st.copy(
-                            feedRows    = st.feedRows + FeedRow.InfinitePage(items, pageIndex),
+                            feedRows      = st.feedRows + FeedRow.InfinitePage(fresh, pageIndex),
                             isLoadingMore = false,
                         )
                     }
-                    // Fire prefetch for next 2 pages — warms Room so next scroll is instant
-                    launch {
-                        repo.prefetchAhead(
-                            mediaType  = "movie",
-                            excludeIds = existingIds + items.map { it.id }.toSet(),
-                        )
-                    }
                 }
-                is CatalogPage.Exhausted -> {
-                    // Cache empty + TMDB failed or has no more pages.
-                    // Mark exhausted so we stop hammering. UI shows nothing new — no crash.
+                else -> {
                     isInfiniteExhausted = true
                     _ui.update { it.copy(isLoadingMore = false) }
                 }
@@ -437,1027 +230,49 @@ class BrowseViewModel @Inject constructor(
         }
     }
 
-    fun selectGenre(genreId: Int?) {
+    /** Genre chip tap — fetches first page of genre content. */
+    fun selectGenre(genreId: String?) {
         val current = _ui.value.selectedGenreId
         if (genreId == current) {
-            _ui.update { it.copy(selectedGenreId = null, genreItems = emptyList(), genrePage = 1, hasMoreGenrePages = true) }
+            _ui.update { it.copy(selectedGenreId = null, genreItems = emptyList(), genreCursor = null, hasMoreGenrePages = true) }
             return
         }
-        _ui.update { it.copy(selectedGenreId = genreId, genreItems = emptyList(), genrePage = 1, hasMoreGenrePages = true, isGenreLoading = true) }
-        viewModelScope.launch {
-            try {
-                val items = repo.discoverMovies(genreId, page = 1)
-                _ui.update { it.copy(genreItems = items, isGenreLoading = false) }
-            } catch (_: Exception) { _ui.update { it.copy(isGenreLoading = false) } }
+        _ui.update { it.copy(selectedGenreId = genreId, genreItems = emptyList(), genreCursor = null, hasMoreGenrePages = true, isGenreLoading = true) }
+        androidx.lifecycle.viewModelScope.launch {
+            val result = repo.discover(genre = genreId)
+            when (result) {
+                is com.axio.reelz.network.NetworkResult.Success -> {
+                    _ui.update { it.copy(
+                        genreItems      = result.data.first,
+                        genreCursor     = result.data.second,
+                        isGenreLoading  = false,
+                        hasMoreGenrePages = result.data.second != null,
+                    )}
+                }
+                else -> _ui.update { it.copy(isGenreLoading = false) }
+            }
         }
     }
 
     fun loadMoreGenre() {
         val st = _ui.value
         if (st.isGenreLoading || !st.hasMoreGenrePages) return
-        viewModelScope.launch {
+        androidx.lifecycle.viewModelScope.launch {
             _ui.update { it.copy(isGenreLoading = true) }
-            try {
-                val nextPage = st.genrePage + 1
-                val items = repo.discoverMovies(st.selectedGenreId, page = nextPage)
-                _ui.update { it.copy(
-                    // Deduplicate across pages — TMDB's genre discover endpoint can return
-                    // the same id on adjacent pages if the ranking shifts between calls.
-                    // The genre grid uses positional chunking (no explicit key), so a duplicate
-                    // won't crash today, but if a key is ever added it will. Fix it at source.
-                    genreItems        = (it.genreItems + items)
-                        .associateBy { item -> item.id }
-                        .values
-                        .toList(),
-                    genrePage         = nextPage,
-                    hasMoreGenrePages = items.isNotEmpty(),
-                    isGenreLoading    = false,
-                ) }
-            } catch (_: Exception) { _ui.update { it.copy(isGenreLoading = false) } }
-        }
-    }
-}
-
-// ── Screen ────────────────────────────────────────────────────────────────────
-//
-//  Architecture choices made here:
-//  1. Collapsing app bar – floated over content via Box overlay, driven by
-//     NestedScrollConnection reading dy from the LazyColumn.
-//  2. Pull-to-refresh – handled through the same NestedScrollConnection
-//     so it cooperates with LazyColumn (fixes the old pointerInput conflict).
-//  3. Genre chips – remain inside the LazyColumn so they scroll naturally
-//     under the collapsing bar (correct for collapsing appbar mode).
-//  4. TikTok Home button – lives in AppNavigation, talks to shared VM.
-
-@Composable
-fun BrowseScreen(
-    nav: NavController,
-    adEngine: AdEngine,
-    vm: BrowseViewModel = hiltViewModel(),
-    listState: LazyListState = rememberLazyListState(),
-) {
-    val d = LocalDimensions.current
-    val ui by vm.ui.collectAsState()
-    val density = LocalDensity.current
-
-    // Dismissed for this composition only (i.e. this app session/screen visit) —
-    // intentionally not persisted, so it's a gentle nudge rather than a one-time
-    // banner that vanishes forever after a single accidental tap of the X.
-    var removeAdsBannerDismissed by remember { mutableStateOf(false) }
-
-    // ── Collapsing app-bar measurements ──────────────────────────────────────
-    // We measure the bar height on first layout so we know how far to collapse.
-    var appBarHeightPx by remember { mutableStateOf(0f) }
-    // How much the bar has been collapsed (0 = fully expanded, appBarHeightPx = fully hidden)
-    var collapseOffsetPx by remember { mutableStateOf(0f) }
-    val collapseProgress = if (appBarHeightPx > 0f)
-        (collapseOffsetPx / appBarHeightPx).coerceIn(0f, 1f)
-    else 0f
-
-    // ── Pull-to-refresh state (managed in NestedScrollConnection) ────────────
-    var pullOverscrollPx by remember { mutableStateOf(0f) }
-    val pullThresholdPx = with(density) { (d.avatarMd + d.spaceLg).toPx() }
-
-    // ── NestedScrollConnection ────────────────────────────────────────────────
-    //  KEY BEHAVIOUR:
-    //  • onPreScroll  UP   → snap bar open immediately (even 1px up restores bar)
-    //  • onPostScroll DOWN → collapse bar AFTER content scrolled (moves together)
-    //  • onPostScroll UP at top → accumulate pull-to-refresh overscroll
-    val nestedScrollConnection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                val dy = available.y
-                // Upward finger → snap bar back open, do NOT consume so content scrolls too
-                if (dy > 0 && collapseOffsetPx > 0f) {
-                    val expand = minOf(dy, collapseOffsetPx)
-                    collapseOffsetPx = (collapseOffsetPx - expand).coerceIn(0f, appBarHeightPx)
+            val result = repo.discover(genre = st.selectedGenreId, cursor = st.genreCursor)
+            when (result) {
+                is com.axio.reelz.network.NetworkResult.Success -> {
+                    val (items, nextCursor) = result.data
+                    _ui.update { it.copy(
+                        genreItems        = (it.genreItems + items).distinctBy { m -> m.id },
+                        genreCursor       = nextCursor,
+                        hasMoreGenrePages = nextCursor != null,
+                        isGenreLoading    = false,
+                    )}
                 }
-                return Offset.Zero
-            }
-
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource,
-            ): Offset {
-                // Content scrolled DOWN → collapse bar by same amount (moves with content)
-                if (consumed.y < 0) {
-                    collapseOffsetPx = (collapseOffsetPx - consumed.y).coerceIn(0f, appBarHeightPx)
-                }
-                // Pull-to-refresh: overscroll when fully expanded + at top
-                val leftover = available.y
-                if (leftover > 0 && !listState.canScrollBackward && collapseOffsetPx == 0f) {
-                    pullOverscrollPx = (pullOverscrollPx + leftover * 0.5f)
-                        .coerceIn(0f, pullThresholdPx * 1.6f)
-                    return Offset(0f, leftover)
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (pullOverscrollPx >= pullThresholdPx) {
-                    vm.load(forceRefresh = true)
-                }
-                pullOverscrollPx = 0f
-                return Velocity.Zero
-            }
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                pullOverscrollPx = 0f
-                return Velocity.Zero
-            }
-        }
-    }
-
-    // Reset overscroll when refreshing completes
-    LaunchedEffect(ui.isRefreshing) {
-        if (!ui.isRefreshing) pullOverscrollPx = 0f
-    }
-
-    // ── Infinite scroll trigger ───────────────────────────────────────────────
-    // derivedStateOf is more efficient than snapshotFlow for scroll-position reads:
-    // it only recomposes when the boolean result actually flips, and it re-reads
-    // whenever listState.layoutInfo changes (every scroll frame).
-    //
-    // Threshold: last-visible index >= total - 8.  Each section is 2 LazyColumn
-    // items (header + row), so "total - 8" gives ~4 sections of pre-load headroom.
-    // This means loading starts well before the user reaches the visible end —
-    // no hard-swipe needed.
-    //
-    // CRITICAL BUG FIX: skeleton items (skeletonBanner, skeletonRow1, skeletonRow2)
-    // are 3 LazyColumn items. total=3, lastVisible=2 → 2 >= 3-8 = -5 = TRUE.
-    // Without the isCacheLoaded guard, loadMoreInfinite() fires during the skeleton
-    // phase and hits TMDB for discover/movie?page=2 instead of ever showing cached
-    // home sections. This was the "empty app loop" on second open.
-    val shouldLoadMore by remember {
-        derivedStateOf {
-            val info  = listState.layoutInfo
-            val total = info.totalItemsCount
-            if (total == 0) false
-            else {
-                val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-                lastVisible >= total - 8
-            }
-        }
-    }
-
-    // isCacheLoaded AND !isLoading gate prevents firing during skeleton phase.
-    LaunchedEffect(shouldLoadMore, ui.isLoadingMore, ui.isGenreLoading, ui.isCacheLoaded, ui.isLoading) {
-        if (shouldLoadMore && ui.isCacheLoaded && !ui.isLoading && !ui.isLoadingMore && !ui.isGenreLoading) {
-            if (ui.selectedGenreId != null) vm.loadMoreGenre()
-            else vm.loadMoreInfinite()
-        }
-    }
-
-    fun goDetail(id: Int, type: MediaType) = nav.navigate(Route.Detail.go(id, type))
-
-    // ── Root Box: content + floating overlay elements ─────────────────────────
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Bg)
-            .nestedScroll(nestedScrollConnection)
-    ) {
-val d = LocalDimensions.current
-
-        // ── Scrollable content ──────────────────────────────────────────────
-        LazyColumn(
-            state  = listState,
-            modifier = Modifier.fillMaxSize(),
-            // Top padding = full appbar height so first item clears the bar when expanded
-            contentPadding = PaddingValues(
-                top    = with(density) { appBarHeightPx.toDp() } + 4.dp,
-                bottom = d.spaceXxl * 3.1f,
-            ),
-        ) {
-            when {
-                ui.isLoading && !ui.isCacheLoaded -> {
-                    item(key = "skeletonBanner") { SkeletonBannerLoader() }
-                    item(key = "skeletonRow1") {
-                        Column {
-                            Box(
-                                Modifier.fillMaxWidth(0.45f).height(d.spaceLg - d.spaceXxs)
-                                    .padding(start = d.screenHorizPad, top = d.spaceXl, bottom = d.spaceMd)
-                                    .clip(RoundedCornerShape(d.spaceSm)).background(BgSurface)
-                            )
-                            SkeletonRowLoader()
-                        }
-                    }
-                    item(key = "skeletonRow2") {
-                        Column {
-                            Box(
-                                Modifier.fillMaxWidth(0.35f).height(d.spaceLg - d.spaceXxs)
-                                    .padding(start = d.screenHorizPad, top = d.spaceXl, bottom = d.spaceMd)
-                                    .clip(RoundedCornerShape(d.spaceSm)).background(BgSurface)
-                            )
-                            SkeletonRowLoader()
-                        }
-                    }
-                }
-
-                ui.error != null && !ui.isCacheLoaded -> item {
-                    ErrorState(ui.error!!, onRetry = { vm.load(true) })
-                }
-
-                else -> {
-                    // ── Hero pager ────────────────────────────────────────────
-                    if (ui.featured.isNotEmpty()) {
-                        item(key = "hero") {
-                            HeroBannerPager(
-                                items           = ui.featured,
-                                watchlistedIds  = ui.watchlistedIds,
-                                onWatchlist     = { vm.toggleHeroWatchlist(it) },
-                                onClick         = { goDetail(it.id, it.mediaType) },
-                            )
-                        }
-                    } else if (ui.isLoading) {
-                        item(key = "heroBannerSkeleton") { SkeletonBannerLoader() }
-                    }
-
-                    // ── Remove ads upsell — config-gated, session-dismissible ──
-                    if (!removeAdsBannerDismissed && adEngine.shouldShowRemoveAdsBanner()) {
-                        item(key = "removeAdsBanner") {
-                            RemoveAdsBanner(
-                                onUpgrade  = { nav.navigate(com.axio.reelz.ui.Route.Premium.path) },
-                                onDismiss  = { removeAdsBannerDismissed = true },
-                            )
-                        }
-                    }
-
-                    // ── Genre bar (scrolls with content under collapsing bar) ──
-                    if (ui.genres.isNotEmpty()) {
-                        item(key = "genreBar") {
-                            PremiumGenreBar(
-                                genres     = ui.genres,
-                                selectedId = ui.selectedGenreId,
-                                onSelect   = { vm.selectGenre(it) },
-                            )
-                        }
-                    }
-
-                    // ── Genre grid mode ───────────────────────────────────────
-                    if (ui.selectedGenreId != null) {
-                        if (ui.genreItems.isEmpty() && ui.isGenreLoading) {
-                            item(key = "genreSkeletonRow") { SkeletonRowLoader() }
-                        } else {
-                            val chunks = ui.genreItems.chunked(18)
-                            chunks.forEachIndexed { idx, chunk ->
-                                item(key = "genre_chunk_$idx") {
-                                    LazyVerticalGrid(
-                                        columns = GridCells.Fixed(if (d.isTablet) 4 else 3),
-                                        modifier = Modifier.fillMaxWidth().heightIn(max = (d.cardPosterHeight + d.spaceXxl) * 7),
-                                        contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
-                                        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
-                                        verticalArrangement   = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
-                                        userScrollEnabled = false,
-                                    ) {
-                                        items(chunk) { m ->
-                                            MediaPosterCard(
-                                                media    = m,
-                                                onClick  = { goDetail(m.id, m.mediaType) },
-                                                modifier = Modifier.aspectRatio(0.65f),
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            if (ui.isGenreLoading) {
-                                item(key = "genreLoadMore") { LoadMoreSkeleton() }
-                            }
-                        }
-                    } else {
-                        // ── Default feed ──────────────────────────────────────
-                        if (ui.continueWatching.isNotEmpty()) {
-                            item(key = "cwHeader") { SectionHeader("Continue Watching", "See All") }
-                            item(key = "cwRow") {
-                                LazyRow(
-                                    contentPadding = PaddingValues(horizontal = d.screenHorizPad),
-                                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
-                                ) {
-                                    items(ui.continueWatching, key = { it.key }) { h ->
-                                        ContinueCard(h) {
-                                            val type = if (h.mediaType == "TV") MediaType.TV else MediaType.MOVIE
-                                            goDetail(h.id, type)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        ui.feedRows.forEachIndexed { feedRowIdx, row ->
-                            when (row) {
-                                is FeedRow.Section -> {
-                                    item(key = "hdr_${row.section.title}") {
-                                        SectionHeader(row.section.title, "See All")
-                                    }
-                                    item(key = "row_${row.section.title}") {
-                                        LazyRow(
-                                            contentPadding = PaddingValues(horizontal = d.screenHorizPad),
-                                            horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
-                                        ) {
-                                            items(row.section.items, key = { it.id }) { m ->
-                                                MediaRowCard(m, onClick = { goDetail(m.id, m.mediaType) })
-                                            }
-                                        }
-                                    }
-                                }
-                                is FeedRow.NativeAdPlacement -> {
-                                    item(key = "native_ad_$feedRowIdx") {
-                                        NativeAdCard(adEngine = adEngine)
-                                    }
-                                }
-                                is FeedRow.InfinitePage -> {
-                                    val label = if (row.page % 2 == 0) "More Movies" else "More Series"
-                                    // Use feedRowIdx (stable list position) as the key, not row.page,
-                                    // because the engine can return the same pageIndex twice (cache hit
-                                    // then network hit on same page), which produces duplicate keys and
-                                    // crashes with IllegalArgumentException.
-                                    item(key = "inf_hdr_$feedRowIdx") { SectionHeader(label, "") }
-                                    item(key = "inf_row_$feedRowIdx") {
-                                        LazyRow(
-                                            contentPadding = PaddingValues(horizontal = d.screenHorizPad),
-                                            horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
-                                        ) {
-                                            items(row.items, key = { "${feedRowIdx}_${it.id}" }) { m ->
-                                                MediaRowCard(m, onClick = { goDetail(m.id, m.mediaType) })
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // ── Infinite scroll load-more skeleton ────────────────────────
-                        // Shows a full skeleton row (not just a spinner at the edge) so
-                        // the user sees a meaningful "more coming" signal, and Coil has
-                        // time to fetch thumbnails for items already on screen before we
-                        // add another row. LoadMoreSkeleton wraps SkeletonRowLoader which
-                        // shimmer-animates independently for each card.
-                        if (ui.isLoadingMore) {
-                            item(key = "loadMoreSkHeader") {
-                                Box(
-                                    Modifier.fillMaxWidth()
-                                        .padding(start = d.screenHorizPad, top = d.spaceLg, bottom = d.spaceSm),
-                                ) {
-                                    Box(
-                                        Modifier.width(120.dp).height(d.spaceMd - d.spaceXxs)
-                                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(d.spaceXs))
-                                            .background(BgSurface)
-                                    )
-                                }
-                            }
-                            item(key = "loadMoreSkeleton") { LoadMoreSkeleton() }
-                        }
-                    }
-
-                    item(key = "adBanner") { AdBannerPlaceholder(Modifier.padding(vertical = d.spaceMd - d.spaceXxs)) }
-                }
-            }
-        }
-
-        // ── Sticky header: app bar + genre strip move as one unit ────────────
-        // Both sit in a Column inside one Box. We measure the Column's combined
-        // height as appBarHeightPx, then translate it upward by collapseOffsetPx.
-        // That means everything — logo, search AND genre chips — hides/reveals
-        // together with a single scroll gesture.
-        Column(
-            Modifier
-                .align(Alignment.TopCenter)
-                .onGloballyPositioned { coords ->
-                    val h = coords.size.height.toFloat()
-                    if (h != appBarHeightPx) appBarHeightPx = h
-                }
-                .graphicsLayer { translationY = -collapseOffsetPx }
-        ) {
-            CollapsingGlassAppBar(
-                collapseProgress = collapseProgress,
-                onSearchClick    = { nav.navigate(Route.Search.path) },
-            )
-        }
-
-        // ── Background-refresh shimmer bar ────────────────────────────────────
-        if (ui.isBackgroundRefreshing) {
-            val inf   = rememberInfiniteTransition(label = "bgRefresh")
-            val sweep by inf.animateFloat(
-                0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), "sweep"
-            )
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(2.dp)
-                    .align(Alignment.TopCenter)
-                    .graphicsLayer { translationY = appBarHeightPx - collapseOffsetPx }
-                    .background(
-                        Brush.horizontalGradient(
-                            colorStops = arrayOf(
-                                (sweep - 0.35f).coerceIn(0f, 1f) to Color.Transparent,
-                                sweep.coerceIn(0f, 1f)           to Brand.copy(0.9f),
-                                (sweep + 0.35f).coerceIn(0f, 1f) to Color.Transparent,
-                            )
-                        )
-                    )
-            )
-        }
-
-        // ── Pull-to-refresh: pill indicator that follows the finger ──────────
-        //
-        // UX stages:
-        //   pulling below threshold → "Pull to refresh"  (ghost pill, arrow down)
-        //   pulling above threshold → "Release to refresh" (lit pill, arrow flips)
-        //   finger released / fling → spinner + "Updating…"
-        //
-        // The pill's Y position tracks pullOverscrollPx in real-time (no animation)
-        // so it feels physically connected to the finger. Only when the user releases
-        // does it spring to its resting position (or animate out).
-
-        // Slow-release fix: if the pull sits above threshold for 150ms without a
-        // fling event (i.e. the user lifted slowly), we trigger refresh ourselves.
-        LaunchedEffect(pullOverscrollPx >= pullThresholdPx) {
-            if (pullOverscrollPx >= pullThresholdPx && !ui.isRefreshing) {
-                delay(150)
-                if (pullOverscrollPx >= pullThresholdPx && !ui.isRefreshing) {
-                    vm.load(forceRefresh = true)
-                    pullOverscrollPx = 0f
-                }
-            }
-        }
-
-        val aboveThreshold   = pullOverscrollPx >= pullThresholdPx
-        val showPillIndicator = pullOverscrollPx > 6f || ui.isRefreshing
-
-        // While refreshing: spring the pill to a fixed resting spot just below header.
-        // While pulling:    follow the finger exactly (no interpolation = zero lag).
-        val pillRestingY = with(density) {
-            (appBarHeightPx - collapseOffsetPx) + d.spaceMd.toPx()
-        }
-        val pillFollowY = with(density) {
-            (appBarHeightPx - collapseOffsetPx) + (pullOverscrollPx * 0.45f)
-        }
-        val pillTranslateY by animateFloatAsState(
-            targetValue    = if (ui.isRefreshing || pullOverscrollPx == 0f) pillRestingY else pillFollowY,
-            animationSpec  = if (ui.isRefreshing)
-                spring(dampingRatio = 0.55f, stiffness = 280f)
-            else
-                tween(durationMillis = 0),   // instant while dragging
-            label          = "ptrY",
-        )
-        val arrowAngle by animateFloatAsState(
-            if (aboveThreshold) 180f else 0f,
-            spring(dampingRatio = 0.45f, stiffness = 380f),
-            label = "ptrArrow",
-        )
-
-        AnimatedVisibility(
-            visible  = showPillIndicator,
-            enter    = fadeIn(tween(120)) + slideInVertically(tween(180, easing = EaseOutBack)) { -it / 2 },
-            exit     = fadeOut(tween(180)) + slideOutVertically(tween(160)) { -it },
-            modifier = Modifier.align(Alignment.TopCenter),
-        ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier         = Modifier.graphicsLayer { translationY = pillTranslateY },
-            ) {
-                Row(
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                    modifier              = Modifier
-                        .clip(RoundedCornerShape(d.radiusPill))
-                        .background(
-                            Brush.linearGradient(
-                                if (aboveThreshold || ui.isRefreshing)
-                                    listOf(BrandDeep.copy(.97f), Color(0xFF091525).copy(.97f))
-                                else
-                                    listOf(Bg.copy(.92f), BgSurface.copy(.92f))
-                            )
-                        )
-                        .border(
-                            width = d.borderThin,
-                            brush = Brush.linearGradient(
-                                if (aboveThreshold || ui.isRefreshing)
-                                    listOf(Brand.copy(.85f), Brand2.copy(.6f))
-                                else
-                                    listOf(GlassBorder, GlassBorder)
-                            ),
-                            shape = RoundedCornerShape(d.radiusPill),
-                        )
-                        .padding(horizontal = d.heroPadding - d.spaceXs, vertical = d.spaceMd - d.spaceXxs),
-                ) {
-                    when {
-                        ui.isRefreshing -> {
-                            CinematicSpinner(size = d.spinnerSm, color = Brand)
-                            Text(
-                                "Updating…",
-                                color      = Brand,
-                                fontSize   = d.textSm,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                        else -> {
-                            Text(
-                                if (aboveThreshold) "Release to refresh" else "Pull to refresh",
-                                color      = if (aboveThreshold) Brand else White40,
-                                fontSize   = d.textSm,
-                                fontWeight = if (aboveThreshold) FontWeight.SemiBold else FontWeight.Normal,
-                            )
-                            Icon(
-                                imageVector          = Icons.Default.KeyboardArrowDown,
-                                contentDescription   = null,
-                                tint                 = if (aboveThreshold) Brand else White40,
-                                modifier             = Modifier
-                                    .size(d.iconMd - 5.dp)
-                                    .graphicsLayer { rotationZ = arrowAngle },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }   // end root Box
-}       // end BrowseScreen
-
-// ── Collapsing Glass App Bar ───────────────────────────────────────────────────
-//
-//  collapseProgress = 0  →  fully expanded (logo + search bar visible)
-//  collapseProgress = 1  →  fully collapsed (only status bar remains, bar hidden)
-//
-@Composable
-fun CollapsingGlassAppBar(
-    collapseProgress: Float,
-    onSearchClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val d = LocalDimensions.current
-    val contentAlpha    = (1f - collapseProgress * 1.8f).coerceIn(0f, 1f)
-    val barAlpha        = (0.82f + 0.18f * (1f - collapseProgress)).coerceIn(0f, 1f)
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .drawBehind {
-                drawLine(
-                    brush = Brush.horizontalGradient(
-                        listOf(
-                            Color.Transparent,
-                            Brand.copy(.35f * (1f - collapseProgress)),
-                            Color.Transparent,
-                        )
-                    ),
-                    start = Offset(0f, size.height),
-                    end   = Offset(size.width, size.height),
-                    strokeWidth = 0.8f,
-                )
-            }
-            .graphicsLayer { alpha = barAlpha }
-    ) {
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(
-                    listOf(Color(0xCC050510), Color(0x88050510), Color(0x00050510))
-                )
-            )
-        )
-        Box(Modifier.matchParentSize().background(Color(0x09FFFFFF)))
-
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .graphicsLayer { alpha = contentAlpha }
-        ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = d.appBarHorizPad, vertical = d.appBarVertPad),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
-            ) {
-                val inf   = rememberInfiniteTransition(label = "logoShimmer")
-                val shimX by inf.animateFloat(
-                    0f, 1f,
-                    infiniteRepeatable(tween(3000, easing = LinearEasing)),
-                    "lx",
-                )
-                Text(
-                    "REELZ",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        brush = Brush.linearGradient(
-                            colorStops = arrayOf(
-                                0f    to Brand2,
-                                shimX to Color(0xFFB3D9FF),
-                                1f    to Brand,
-                            )
-                        ),
-                        fontWeight    = FontWeight.Black,
-                        fontSize      = d.textXxl,
-                        letterSpacing = 4.sp,
-                    ),
-                )
-
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(d.radiusMd))
-                        .background(Brush.linearGradient(listOf(Color(0x18FFFFFF), Color(0x0AFFFFFF))))
-                        .border(
-                            1.dp,
-                            Brush.horizontalGradient(
-                                listOf(Brand.copy(.4f), GlassBorderMd, Brand.copy(.2f))
-                            ),
-                            RoundedCornerShape(d.radiusMd),
-                        )
-                        .clickable { onSearchClick() }
-                        .padding(horizontal = d.searchBarHorizPad, vertical = d.searchBarVertPad),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(IconSearch, null, tint = Brand.copy(.7f), modifier = Modifier.size(d.iconMd - 4.dp))
-                        Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
-                        Text("Search movies, series…", color = White40, fontSize = d.textMd)
-                        Spacer(Modifier.weight(1f))
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(d.radiusSm))
-                                .background(BlueGlass)
-                                .border(1.dp, BlueBorder, RoundedCornerShape(d.radiusSm))
-                                .padding(horizontal = d.spaceSm + 1.dp, vertical = d.spaceXxs + 1.dp),
-                        ) {
-                            Text("Filter", color = Brand, fontSize = d.textXxs, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
+                else -> _ui.update { it.copy(isGenreLoading = false) }
             }
         }
     }
 }
 
-// ── Sticky glass genre strip (lives in the sticky header, not in scroll content) ─
-//
-//  Thin (42dp tall), frosted-glass background, single horizontal row of chips.
-//  No title label — space is tight and the chips are self-explanatory.
-//  The bottom edge has a very faint separator so it reads as distinct from content.
-//
-@Composable
-fun StickyGlassGenreBar(
-    genres     : List<Genre>,
-    selectedId : Int?,
-    onSelect   : (Int?) -> Unit,
-) {
-    val d = LocalDimensions.current
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xCC050510), Color(0xAA05050E))
-                )
-            )
-            .drawBehind {
-                drawLine(
-                    brush       = Brush.horizontalGradient(
-                        listOf(Color.Transparent, Color(0x33FFFFFF), Color.Transparent)
-                    ),
-                    start       = Offset(0f, size.height),
-                    end         = Offset(size.width, size.height),
-                    strokeWidth = 0.8f,
-                )
-            }
-    ) {
-        LazyRow(
-            contentPadding        = PaddingValues(horizontal = d.screenHorizPad, vertical = d.chipVertPad + d.spaceXs),
-            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
-            modifier              = Modifier.fillMaxWidth(),
-        ) {
-            item {
-                StickyGenreChip(label = "✦ All", selected = selectedId == null) { onSelect(null) }
-            }
-            items(genres, key = { it.id }) { g ->
-                StickyGenreChip(label = g.name, selected = selectedId == g.id) { onSelect(g.id) }
-            }
-        }
-    }
-}
-
-@Composable
-fun StickyGenreChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val d = LocalDimensions.current
-    val borderColor by animateColorAsState(
-        if (selected) Brand else Color(0x28FFFFFF),
-        tween(180), label = "chipBorder",
-    )
-    val scale by animateFloatAsState(
-        if (selected) 1.05f else 1f,
-        spring(dampingRatio = 0.5f, stiffness = 420f), label = "chipScale",
-    )
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier         = Modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(d.radiusPill))
-            .background(
-                if (selected)
-                    Brush.linearGradient(listOf(BrandDeep, Brand.copy(.82f)))
-                else
-                    SolidColor(Color(0x14FFFFFF))
-            )
-            .border(1.dp, borderColor, RoundedCornerShape(d.radiusPill))
-            .clickable(onClick = onClick)
-            .padding(horizontal = d.chipHorizPad, vertical = d.chipVertPad),
-    ) {
-        Text(
-            text       = label,
-            color      = if (selected) Color.White else White60,
-            fontSize   = d.textXs,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            maxLines   = 1,
-        )
-    }
-}
-
-// ── Premium genre bar (kept for reference / other screens) ────────────────────
-@Composable
-fun PremiumGenreBar(
-    genres: List<Genre>,
-    selectedId: Int?,
-    onSelect: (Int?) -> Unit,
-) {
-    val d = LocalDimensions.current
-    Column {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier.width(d.sectionAccentWidth).height(d.sectionAccentHeight)
-                    .clip(RoundedCornerShape(d.spaceXxs))
-                    .background(Brush.verticalGradient(listOf(Brand2, Brand)))
-            )
-            Spacer(Modifier.width(d.spaceSm + d.spaceXxs))
-            Text(
-                "Browse by Genre",
-                color         = White60,
-                fontSize      = d.textSm,
-                fontWeight    = FontWeight.SemiBold,
-                letterSpacing = 0.5.sp,
-            )
-        }
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
-            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
-        ) {
-            item { PremiumGenrePill("✦ All", selectedId == null) { onSelect(null) } }
-            items(genres, key = { it.id }) { g -> PremiumGenrePill(g.name, selectedId == g.id) { onSelect(g.id) } }
-        }
-    }
-}
-
-@Composable
-fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
-    val d = LocalDimensions.current
-    val animBorder by animateColorAsState(
-        if (selected) Brand else GlassBorder, tween(200), label = "pillBorder"
-    )
-    val scale by animateFloatAsState(
-        if (selected) 1.04f else 1f, spring(0.5f, 400f), label = "pillScale"
-    )
-    Box(
-        Modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-            .background(
-                if (selected)
-                    Brush.linearGradient(listOf(BrandDeep, Brand.copy(.85f)))
-                else
-                    Brush.linearGradient(listOf(BgSurface, BgRaised))
-            )
-            .border(d.borderThin, animBorder, RoundedCornerShape(d.radiusMd - d.spaceXxs))
-            .clickable(onClick = onClick)
-            .padding(horizontal = d.chipHorizPad + d.spaceXs, vertical = d.chipVertPad + d.spaceXs),
-    ) {
-        Text(
-            text,
-            color      = if (selected) Color.White else White60,
-            fontSize   = d.textSm,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-        )
-    }
-}
-
-// ── Load more skeleton ─────────────────────────────────────────────────────────
-@Composable
-fun LoadMoreSkeleton() {
-    val d = LocalDimensions.current
-    Box(Modifier.fillMaxWidth().padding(vertical = d.spaceMd - d.spaceXxs)) { SkeletonRowLoader() }
-}
-
-// ── Hero banner pager ──────────────────────────────────────────────────────────
-@Composable
-fun HeroBannerPager(
-    items: List<Media>,
-    watchlistedIds: Set<Int> = emptySet(),
-    onWatchlist: (Media) -> Unit = {},
-    onClick: (Media) -> Unit,
-) {
-    val d = LocalDimensions.current
-    val screenH = LocalConfiguration.current.screenHeightDp.dp
-    val pagerState = rememberPagerState { items.size }
-
-    LaunchedEffect(pagerState) {
-        while (true) {
-            delay(4_500)
-            if (pagerState.pageCount > 0) {
-                pagerState.animateScrollToPage(
-                    (pagerState.currentPage + 1) % pagerState.pageCount,
-                    animationSpec = tween(600, easing = FastOutSlowInEasing),
-                )
-            }
-        }
-    }
-
-    Box(Modifier.fillMaxWidth()) {
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
-            val media      = items[page]
-            val pageOffset = (pagerState.currentPage - page + pagerState.currentPageOffsetFraction)
-                .coerceIn(-1f, 1f)
-            val isWatchlisted = media.id in watchlistedIds
-
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(screenH * d.heroImageRatio)
-                    .clickable { onClick(media) }
-                    .graphicsLayer {
-                        alpha  = 1f - 0.12f * abs(pageOffset)
-                        scaleX = 1f - 0.03f * abs(pageOffset)
-                        scaleY = 1f - 0.03f * abs(pageOffset)
-                    }
-            ) {
-                AsyncImage(
-                    model            = BuildConfig.TMDB_IMG_ORIGINAL + media.backdropPath,
-                    contentDescription = null,
-                    contentScale     = ContentScale.Crop,
-                    modifier         = Modifier.fillMaxSize(),
-                )
-                Box(Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(
-                        0f    to Color(0x10000000),
-                        0.3f  to Color(0x00000000),
-                        0.65f to Color(0x99000000),
-                        1f    to Bg,
-                    )
-                ))
-                Box(Modifier.fillMaxSize().background(
-                    Brush.horizontalGradient(
-                        listOf(Bg.copy(.35f), Color.Transparent, Color.Transparent, Bg.copy(.25f))
-                    )
-                ))
-                Box(Modifier.fillMaxSize().background(
-                    Brush.radialGradient(listOf(Color.Transparent, Brand.copy(0.04f)), radius = 900f)
-                ))
-
-                Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding)) {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(d.radiusSm))
-                            .background(BlueGlass)
-                            .border(1.dp, BlueBorder, RoundedCornerShape(d.radiusSm))
-                            .padding(horizontal = d.spaceMd, vertical = d.spaceXs),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
-                    ) {
-                        PulsingDot(Modifier.size(d.spaceXs + 1.dp))
-                        Text("FEATURED", color = Brand, fontSize = d.textXxs, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
-                    }
-                    Spacer(Modifier.height(d.spaceMd))
-                    Text(
-                        media.title,
-                        color         = White,
-                        fontWeight    = FontWeight.Black,
-                        fontSize      = d.textHero,
-                        maxLines      = 2,
-                        overflow      = TextOverflow.Ellipsis,
-                        letterSpacing = (-0.5).sp,
-                        lineHeight    = (d.textHero.value * 1.25f).sp,
-                    )
-                    Spacer(Modifier.height(d.spaceSm + d.spaceXxs))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
-                    ) {
-                        RatingChip(media.voteAverage)
-                        Box(Modifier.size(d.spaceXxs + 1.dp).clip(CircleShape).background(White40))
-                        Text(media.releaseDate?.take(4) ?: "", color = White60, fontSize = d.textMd)
-                        Box(Modifier.size(d.spaceXxs + 1.dp).clip(CircleShape).background(White40))
-                        Text(
-                            if (media.mediaType == MediaType.TV) "TV Series" else "Movie",
-                            color = White60, fontSize = d.textMd,
-                        )
-                    }
-                    Spacer(Modifier.height(d.spaceSm))
-                    Text(
-                        media.overview,
-                        color      = White60,
-                        fontSize   = d.textMd,
-                        maxLines   = 2,
-                        overflow   = TextOverflow.Ellipsis,
-                        lineHeight = (d.textMd.value * 1.55f).sp,
-                    )
-                    Spacer(Modifier.height(d.spaceLg))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        BrandButton(
-                            text  = "Watch Now",
-                            onClick = { onClick(media) },
-                            icon  = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconMd - 4.dp)) },
-                        )
-                        GhostButton(
-                            text    = if (isWatchlisted) "✓ Saved" else "+ Watchlist",
-                            onClick = { onWatchlist(media) },
-                        )
-                    }
-                }
-            }
-        }
-
-        Row(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = d.screenHorizPad),
-            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            repeat(items.size) { i ->
-                val selected = pagerState.currentPage == i
-                val width by animateDpAsState(if (selected) d.pageIndicatorWidthSelected else d.pageIndicatorWidth, spring(0.6f, 400f), label = "iw")
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(d.spaceXxs))
-                        .width(width).height(d.pageIndicatorHeight)
-                        .background(
-                            if (selected)
-                                Brush.horizontalGradient(listOf(Brand2, Brand))
-                            else
-                                Brush.horizontalGradient(listOf(White40, White40))
-                        )
-                )
-            }
-        }
-    }
-}
-
-// ── Continue watching card ─────────────────────────────────────────────────────
-@Composable
-fun ContinueCard(h: WatchHistory, onClick: () -> Unit) {
-    val d = LocalDimensions.current
-    val progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
-
-    Column(Modifier.width(d.continueCardWidth).clickable(onClick = onClick)) {
-        Box(
-            Modifier.fillMaxWidth().height(d.continueCardThumbHeight)
-                .clip(RoundedCornerShape(d.radiusMd))
-                .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
-                .background(BgRaised)
-        ) {
-            AsyncImage(
-                model            = BuildConfig.TMDB_IMG_W342 + h.posterPath,
-                contentDescription = h.title,
-                contentScale     = ContentScale.Crop,
-                modifier         = Modifier.fillMaxSize(),
-            )
-            Box(Modifier.fillMaxSize().background(Color(0x55000000)), Alignment.Center) {
-                Box(
-                    Modifier.size(d.buttonHeightMd - d.spaceXs).clip(CircleShape)
-                        .background(Color(0x99000000))
-                        .border(1.dp, White.copy(.3f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(IconPlay, null, tint = White, modifier = Modifier.size(d.iconMd - 2.dp))
-                }
-            }
-            Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(d.progressBarHeight).background(White20))
-            Box(
-                Modifier.align(Alignment.BottomStart)
-                    .fillMaxWidth(progress).height(d.progressBarHeight)
-                    .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
-            )
-        }
-        Spacer(Modifier.height(d.spaceSm))
-        Text(h.title, color = White80, fontSize = d.textSm, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-        if (h.season > 0) Text("S${h.season} · E${h.episode}", color = Brand.copy(.8f), fontSize = d.textXxs, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-private fun friendlyBrowseError(e: Exception): String {
-    val msg = e.message?.lowercase() ?: ""
-    return when {
-        msg.contains("unable to resolve host") ||
-        msg.contains("no route to host") ||
-        msg.contains("network") ||
-        msg.contains("timeout") ||
-        msg.contains("connect") -> "No internet connection. Check your connection and try again."
-        msg.contains("404") -> "Content couldn't be loaded. Pull down to try again."
-        msg.contains("500") ||
-        msg.contains("502") ||
-        msg.contains("503") -> "The server is temporarily unavailable. Pull down to retry."
-        else -> "Couldn't load content. Pull down to try again."
-    }
-}

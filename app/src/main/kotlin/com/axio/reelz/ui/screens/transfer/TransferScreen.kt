@@ -43,6 +43,7 @@ import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.axio.reelz.data.local.DownloadDao
+import com.axio.reelz.data.local.DownloadRow
 import com.axio.reelz.data.local.TransferDao
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
@@ -151,8 +152,22 @@ class TransferViewModel @Inject constructor(
 
     val progress = TransferService.progressFlow.asStateFlow()
 
-    val completedDownloads: StateFlow<List<DownloadItem>> = downloadDao.getAll()
-        .map { list -> list.filter { it.status == DownloadStatus.DONE.name && it.filePath.isNotBlank() } }
+    val completedDownloads: StateFlow<List<DownloadItem>> = downloadDao.observeAll()
+        .map { list ->
+            list.filter { it.status == DownloadStatus.DONE.name && it.filePath.isNotBlank() }
+                .map { row ->
+                    DownloadItem(
+                        id = row.id, mediaId = row.mediaId, title = row.title,
+                        posterUrl = row.posterUrl, mediaType = row.mediaType,
+                        season = row.season, episode = row.episode, episodeName = row.episodeName,
+                        quality = row.quality, filePath = row.filePath,
+                        sizeBytes = row.sizeBytes, downloadedBytes = row.downloadedBytes,
+                        status = com.axio.reelz.data.model.DownloadStatus.DONE,
+                        streamUrl = row.streamUrl, createdAt = row.createdAt,
+                        completedAt = row.completedAt,
+                    )
+                }
+        }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // ── P2P state ─────────────────────────────────────────────────────────────

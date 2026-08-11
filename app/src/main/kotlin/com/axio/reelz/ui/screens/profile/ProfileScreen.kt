@@ -122,7 +122,6 @@ class ProfileViewModel @Inject constructor(
     private val watchlistDao: WatchlistDao,
     private val historyDao: WatchHistoryDao,
     private val savedVideoDao: SavedVideoDao,
-    private val userSessionRepository: com.axio.reelz.data.repository.UserSessionRepository,
     private val sessionRepo: com.axio.reelz.data.repository.UserSessionRepository,
 ) : ViewModel() {
 
@@ -159,18 +158,25 @@ class ProfileViewModel @Inject constructor(
         restoreProfileFromSession()
 
         viewModelScope.launch {
-            premiumGate.state.collect { state ->
-                val session = premiumGate.currentSession()
-                _ui.update {
-                    it.copy(
-                        userState       = state,
-                        daysUntilExpiry = premiumGate.daysUntilExpiry(),
-                        showRenewBanner = premiumGate.shouldShowRenewBanner(),
-                        profile         = if (session != null)
-                            UserProfile(session.name, session.email, session.photoUrl, true)
-                        else
-                            it.profile,
-                    )
+            sessionRepo.session.collect { session ->
+                if (session != null) {
+                    val isPremium = session.isPremium
+                    val daysLeft  = if (session.expiresAtMs > 0) {
+                        ((session.expiresAtMs - System.currentTimeMillis()) / 86_400_000L).toInt().coerceAtLeast(0)
+                    } else 0
+                    _ui.update {
+                        it.copy(
+                            userState       = when {
+                                !isPremium                    -> "FREE"
+                                daysLeft in 1..3              -> "PREMIUM_GRACE"
+                                isPremium                     -> "PREMIUM_ACTIVE"
+                                else                          -> "PREMIUM_EXPIRED"
+                            },
+                            daysUntilExpiry = daysLeft,
+                            showRenewBanner = isPremium && daysLeft in 1..3,
+                            profile         = UserProfile(session.name, session.email, session.photoUrl, true),
+                        )
+                    }
                 }
             }
         }
@@ -196,13 +202,9 @@ class ProfileViewModel @Inject constructor(
     }
 
     private fun restoreProfileFromSession() {
-        viewModelScope.launch {
-            val session = userSessionRepository.currentSessionOrNull()
-            if (session != null) {
-                _ui.update {
-                    it.copy(profile = UserProfile(session.name, session.email, session.photoUrl, true))
-                }
-            }
+        val session = sessionRepo.session.value
+        if (session != null) {
+            _ui.update { it.copy(profile = UserProfile(session.name, session.email, session.photoUrl, true)) }
         }
     }
 
@@ -214,7 +216,11 @@ class ProfileViewModel @Inject constructor(
 
     fun onSignIn(idToken: String?, name: String, email: String, photoUrl: String?) {
         _ui.update { it.copy(profile = UserProfile(name, email, photoUrl, true)) }
-        viewModelScope.launch { userSessionRepository.onSignedIn(idToken, name, email, photoUrl) }
+        viewModelScope.launch {
+            if (idToken != null) {
+                sessionRepo.signInWithGoogle(idToken, name, email, photoUrl)
+            }
+        }
     }
 
     fun signOut() {
@@ -460,7 +466,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                         val progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
                         LibraryRow(
                             title    = h.title,
-                            poster   = h.posterPath,
+                            poster   = h.posterUrl,
                             subtitle = if (h.season > 0) "S${h.season} · E${h.episode}" else "Movie",
                             progress = progress,
                             onClick  = { nav.navigate(com.axio.reelz.ui.Route.Detail.go(h.mediaId, type)) },

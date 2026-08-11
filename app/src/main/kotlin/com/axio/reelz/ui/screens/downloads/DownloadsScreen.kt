@@ -25,7 +25,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
-import com.axio.reelz.BuildConfig
 import com.axio.reelz.data.local.DownloadDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
@@ -150,7 +149,7 @@ class DownloadsViewModel @Inject constructor(
                     MovieGroup(
                         mediaId     = mediaId,
                         title       = items.first().title,
-                        posterPath  = items.first().posterPath,
+                        posterUrl   = items.first().posterUrl,
                         downloads   = items.sortedByDescending { it.sizeBytes },
                     )
                 }
@@ -192,7 +191,7 @@ class DownloadsViewModel @Inject constructor(
                                     season      = season,
                                     episode     = epNum,
                                     episodeName = epItems.firstOrNull()?.episodeName ?: "",
-                                    posterPath  = epItems.firstOrNull()?.posterPath,
+                                    posterUrl   = epItems.firstOrNull()?.posterUrl,
                                     downloads   = epItems.sortedByDescending { it.sizeBytes },
                                 )
                             }
@@ -655,7 +654,7 @@ private fun ActiveQueueCard(
                 .background(BgRaised),
         ) {
             AsyncImage(
-                model = item.posterPath?.let { "${BuildConfig.TMDB_IMG_W342}$it" },
+                model = item.posterUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -894,7 +893,7 @@ fun MovieGroupCard(
                     .clickable { onPlay(primary) }
             ) {
                 AsyncImage(
-                    model = primary.posterPath?.let { "${BuildConfig.TMDB_IMG_W342}$it" },
+                    model = primary.posterUrl,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -1073,7 +1072,7 @@ fun SeriesRootCard(
                     .background(BgRaised)
             ) {
                 AsyncImage(
-                    model = group.posterPath?.let { "${BuildConfig.TMDB_IMG_W342}$it" },
+                    model = group.posterUrl,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -1246,7 +1245,7 @@ fun EpisodeGroupCard(
                     .clickable { onPlay(primary) }
             ) {
                 AsyncImage(
-                    model = primary.posterPath?.let { "${BuildConfig.TMDB_IMG_W342}$it" },
+                    model = primary.posterUrl,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -1728,7 +1727,7 @@ private fun playDownload(ctx: Context, dl: DownloadItem) {
         putExtra("season",     dl.season)
         putExtra("episode",    dl.episode)
         putExtra("title",      dl.title)
-        putExtra("posterPath", dl.posterPath)
+        putExtra("posterUrl", dl.posterUrl)
         putExtra("downloadId", dl.id)
         // Hint to player: start from this quality (empty = auto pick highest)
         putExtra("preferredQuality", dl.lastSelectedQuality)

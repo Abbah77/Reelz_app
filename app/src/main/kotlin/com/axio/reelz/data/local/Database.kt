@@ -424,8 +424,9 @@ interface DownloadSubtitleDao {
         AppConfigCacheRow::class,
         DownloadRow::class,
         DownloadSubtitleRow::class,
+        TransferRecord::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {
@@ -439,4 +440,104 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun appConfigCacheDao(): AppConfigCacheDao
     abstract fun downloadDao(): DownloadDao
     abstract fun downloadSubtitleDao(): DownloadSubtitleDao
+    abstract fun watchHistoryDao(): WatchHistoryDao
+    abstract fun savedVideoDao(): SavedVideoDao
+    abstract fun transferDao(): TransferDao
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Supplemental types needed by ProfileScreen & TransferScreen
+//  Added here to keep them co-located with the DB schema they depend on.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── View models returned by profile DAOs ──────────────────────────────────────
+// These are NOT @Entity — they are plain data classes produced by DAO queries.
+
+data class WatchlistItem(
+    val mediaId: String,
+    val title: String,
+    val posterUrl: String?,
+    val mediaType: String,
+    val addedAt: Long,
+)
+
+data class WatchHistory(
+    val mediaId: String,
+    val title: String,
+    val posterPath: String?,
+    val mediaType: String,
+    val positionMs: Long,
+    val durationMs: Long,
+    val watchedAt: Long,
+)
+
+data class SavedVideoItem(
+    val mediaId: String,
+    val title: String,
+    val posterUrl: String?,
+    val mediaType: String,
+    val addedAt: Long,
+)
+
+// ── WatchHistoryDao — backed by WatchProgressRow joined with WatchlistRow ─────
+// Returns paginated history ordered by most-recently-watched.
+// Profile screen uses watch_progress for "Continue Watching" history, and
+// watchlist for the saved title metadata (title, poster, mediaType).
+@Dao
+interface WatchHistoryDao {
+    @Query("""
+        SELECT wp.mediaId, wl.title, wl.posterUrl, wl.mediaType,
+               wp.positionMs, wp.durationMs, wp.watchedAt
+        FROM watch_progress wp
+        LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId
+        WHERE wp.season = 0 AND wp.episode = 0
+        ORDER BY wp.watchedAt DESC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getPage(limit: Int = 20, offset: Int = 0): List<WatchHistory>
+
+    @Query("SELECT COUNT(*) FROM watch_progress WHERE season = 0 AND episode = 0")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM watch_progress")
+    suspend fun clear()
+}
+
+// ── SavedVideoDao — alias for watchlist with a SavedVideoItem projection ──────
+// "Saved" tab on Profile is the same as Watchlist — different UI label, same data.
+@Dao
+interface SavedVideoDao {
+    @Query("""
+        SELECT mediaId, title, posterUrl, mediaType, addedAt
+        FROM watchlist ORDER BY addedAt DESC
+    """)
+    fun getAll(): Flow<List<SavedVideoItem>>
+}
+
+// ── Transfer types ─────────────────────────────────────────────────────────────
+
+@Entity(tableName = "transfer_history")
+data class TransferRecord(
+    @PrimaryKey val id: String,
+    val fileName: String,
+    val sizeBytes: Long,
+    val direction: String,   // "SEND" | "RECEIVE"
+    val peerName: String,
+    val status: String,      // "DONE" | "ERROR" | "CANCELLED"
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Dao
+interface TransferDao {
+    @Query("SELECT * FROM transfer_history ORDER BY createdAt DESC")
+    fun getAll(): Flow<List<TransferRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(record: TransferRecord)
+
+    @Query("DELETE FROM transfer_history WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM transfer_history")
+    suspend fun clear()
 }

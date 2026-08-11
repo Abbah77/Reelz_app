@@ -35,11 +35,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
-import com.axio.reelz.BuildConfig
-import com.axio.reelz.data.local.DownloadDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
 import com.axio.reelz.data.repository.MediaRepository
+import com.axio.reelz.data.repository.StreamRepository
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.downloads.formatSize
 import com.axio.reelz.ui.screens.player.PlayerActivity
@@ -521,7 +520,7 @@ fun DetailScreen(
                 putExtra("season",     season)
                 putExtra("episode",    episode)
                 putExtra("title",      if (epName.isNotBlank()) epName else d.title)
-                putExtra("posterPath", d.posterPath)
+                putExtra("posterUrl", d.posterUrl)
                 readyStream?.let { stream ->
                     putExtra("streamUrl",     stream.url)
                     putExtra("streamIsHls",   stream.isHls)
@@ -1081,7 +1080,7 @@ private fun DetailContent(
         item {
             Box(Modifier.fillMaxWidth().height(screenH * 0.46f)) {
                 AsyncImage(
-                    model = BuildConfig.TMDB_IMG_ORIGINAL + detail.backdropPath,
+                    model = detail.backdropUrl,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -1100,7 +1099,7 @@ private fun DetailContent(
                 Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding - d.spaceXs)) {
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(d.spaceMd + d.spaceXs)) {
                         AsyncImage(
-                            model = BuildConfig.TMDB_IMG_W342 + detail.posterPath,
+                            model = detail.posterUrl,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.width(d.cardPosterWidth - d.spaceXs).height(d.cardPosterHeight - d.spaceXxl)
@@ -1324,9 +1323,9 @@ fun EpisodeRow(
                 .clip(RoundedCornerShape(d.radiusMd))
                 .background(BgRaised),
         ) {
-            if (episode.stillPath != null) {
+            if (episode.stillUrl != null) {
                 AsyncImage(
-                    model = BuildConfig.TMDB_IMG_W342 + episode.stillPath,
+                    model = episode.stillUrl,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -1393,9 +1392,9 @@ fun CastCard(cast: CastMember) {
     val d = LocalDimensions.current
     Column(Modifier.width(d.avatarLg + d.spaceLg - d.spaceXxs), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(d.avatarLg).clip(CircleShape).background(BgRaised)) {
-            if (cast.profilePath != null) {
+            if (cast.photoUrl != null) {
                 AsyncImage(
-                    model = BuildConfig.TMDB_IMG_W342 + cast.profilePath,
+                    model = cast.photoUrl,
                     contentDescription = cast.name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
