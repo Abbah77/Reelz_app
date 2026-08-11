@@ -9,7 +9,7 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import com.axio.reelz.ads.AdEngine
-import com.axio.reelz.data.local.DownloadDao
+import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.repository.ConfigRepository
 import com.axio.reelz.data.repository.UserRepository

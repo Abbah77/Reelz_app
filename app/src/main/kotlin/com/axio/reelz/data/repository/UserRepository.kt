@@ -1,8 +1,8 @@
 package com.axio.reelz.data.repository
 
 import android.util.Log
-import com.axio.reelz.data.local.UserSessionDao
-import com.axio.reelz.data.local.UserSessionRow
+import com.axio.reelz.core.database.UserSessionDao
+import com.axio.reelz.core.database.UserSessionRow
 import com.axio.reelz.data.model.UserSession
 import com.axio.reelz.data.remote.api.GoogleAuthBody
 import com.axio.reelz.data.remote.api.ReelzApi

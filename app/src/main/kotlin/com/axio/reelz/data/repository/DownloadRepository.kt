@@ -1,8 +1,8 @@
 package com.axio.reelz.data.repository
 
 import android.content.Context
-import com.axio.reelz.data.local.DownloadDao
-import com.axio.reelz.data.local.DownloadRow
+import com.axio.reelz.core.database.DownloadDao
+import com.axio.reelz.core.database.DownloadRow
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.MediaType

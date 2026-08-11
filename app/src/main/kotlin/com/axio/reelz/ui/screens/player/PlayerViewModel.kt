@@ -25,9 +25,9 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ads.VastTagProvider
-import com.axio.reelz.data.local.AppPreferencesStore
-import com.axio.reelz.data.local.DownloadSubtitleDao
-import com.axio.reelz.data.local.DownloadSubtitleRow
+import com.axio.reelz.core.database.AppPreferencesStore
+import com.axio.reelz.core.database.DownloadSubtitleDao
+import com.axio.reelz.core.database.DownloadSubtitleRow
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.MediaRepository
 import com.axio.reelz.data.repository.StreamRepository

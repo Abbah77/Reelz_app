@@ -3,10 +3,10 @@ package com.axio.reelz.core.workers
 import android.content.Context
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
-import com.axio.reelz.data.local.DetailCacheDao
-import com.axio.reelz.data.local.FeedCacheDao
-import com.axio.reelz.data.local.SearchCacheDao
-import com.axio.reelz.data.local.WatchProgressDao
+import com.axio.reelz.core.database.DetailCacheDao
+import com.axio.reelz.core.database.FeedCacheDao
+import com.axio.reelz.core.database.SearchCacheDao
+import com.axio.reelz.core.database.WatchProgressDao
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit

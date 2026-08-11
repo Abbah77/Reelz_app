@@ -42,9 +42,9 @@ import com.google.zxing.*
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
-import com.axio.reelz.data.local.DownloadDao
-import com.axio.reelz.data.local.DownloadRow
-import com.axio.reelz.data.local.TransferDao
+import com.axio.reelz.core.database.DownloadDao
+import com.axio.reelz.core.database.DownloadRow
+import com.axio.reelz.core.database.TransferDao
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.TransferRecord

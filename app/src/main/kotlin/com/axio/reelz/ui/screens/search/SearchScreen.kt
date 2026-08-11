@@ -45,7 +45,7 @@ data class SearchFilters(
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val repo: MediaRepository,
-    private val recentSearchDao: com.axio.reelz.data.local.RecentSearchDao,
+    private val recentSearchDao: com.axio.reelz.core.database.RecentSearchDao,
 ) : ViewModel() {
 
     data class UiState(

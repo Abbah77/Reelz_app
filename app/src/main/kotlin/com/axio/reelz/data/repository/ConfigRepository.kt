@@ -2,8 +2,8 @@ package com.axio.reelz.data.repository
 
 import android.util.Log
 import com.axio.reelz.BuildConfig
-import com.axio.reelz.data.local.AppConfigCacheDao
-import com.axio.reelz.data.local.AppConfigCacheRow
+import com.axio.reelz.core.database.AppConfigCacheDao
+import com.axio.reelz.core.database.AppConfigCacheRow
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.remote.dto.AppConfigDto
 import com.axio.reelz.core.network.NetworkResult

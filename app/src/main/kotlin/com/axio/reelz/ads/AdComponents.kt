@@ -25,6 +25,30 @@ import com.applovin.mediation.MaxError
 import com.applovin.mediation.ads.MaxAdView
 import com.axio.reelz.ui.theme.BgCard
 import com.axio.reelz.ui.theme.GlassBorderMd
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Text
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.axio.reelz.ui.theme.Bg
+import com.axio.reelz.ui.theme.BgRaised
+import com.axio.reelz.ui.theme.BgSurface
+import com.axio.reelz.ui.theme.Primary
+import com.axio.reelz.ui.theme.White40
+import com.axio.reelz.ui.theme.White60
 
 private const val TAG = "DetailBannerAd"
 
@@ -100,36 +124,6 @@ fun DetailBannerAd(
         }
     }
 }
-package com.axio.reelz.ads
-
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import com.axio.reelz.ui.theme.Bg
-import com.axio.reelz.ui.theme.BgSurface
-import com.axio.reelz.ui.theme.Primary
-import com.axio.reelz.ui.theme.White60
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Full-width native ad card — injected between BrowseScreen feed rows
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,42 +309,6 @@ private fun NativeAdSkeleton() {
         }
     }
 }
-package com.axio.reelz.ads
-
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import com.axio.reelz.ui.theme.Bg
-import com.axio.reelz.ui.theme.BgRaised
-import com.axio.reelz.ui.theme.Primary
-import com.axio.reelz.ui.theme.White40
-import com.axio.reelz.ui.theme.White60
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Full-screen portrait ad page — replaces a reel page every 5 videos
 // ─────────────────────────────────────────────────────────────────────────────

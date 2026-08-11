@@ -3,10 +3,10 @@ package com.axio.reelz.data.repository
 import android.util.Log
 import com.axio.reelz.core.network.NetworkResult
 import com.axio.reelz.core.network.safeApiCall
-import com.axio.reelz.data.local.CachedSearchRow
-import com.axio.reelz.data.local.RecentSearchDao
-import com.axio.reelz.data.local.RecentSearchRow
-import com.axio.reelz.data.local.SearchCacheDao
+import com.axio.reelz.core.database.CachedSearchRow
+import com.axio.reelz.core.database.RecentSearchDao
+import com.axio.reelz.core.database.RecentSearchRow
+import com.axio.reelz.core.database.SearchCacheDao
 import com.axio.reelz.data.model.Media
 import com.axio.reelz.data.dto.MediaDto
 import com.axio.reelz.data.remote.api.ReelzApi

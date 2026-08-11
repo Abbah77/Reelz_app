@@ -32,9 +32,9 @@ import coil.compose.AsyncImage
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.axio.reelz.data.local.SavedVideoDao
-import com.axio.reelz.data.local.WatchlistDao
-import com.axio.reelz.data.local.WatchHistoryDao
+import com.axio.reelz.core.database.SavedVideoDao
+import com.axio.reelz.core.database.WatchlistDao
+import com.axio.reelz.core.database.WatchHistoryDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*

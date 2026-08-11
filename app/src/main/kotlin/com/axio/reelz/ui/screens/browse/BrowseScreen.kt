@@ -11,8 +11,8 @@ sealed class FeedRow {
 @dagger.hilt.android.lifecycle.HiltViewModel
 class BrowseViewModel @javax.inject.Inject constructor(
     private val repo: com.axio.reelz.data.repository.MediaRepository,
-    private val watchlistDao: com.axio.reelz.data.local.WatchlistDao,
-    private val watchProgressDao: com.axio.reelz.data.local.WatchProgressDao,
+    private val watchlistDao: com.axio.reelz.core.database.WatchlistDao,
+    private val watchProgressDao: com.axio.reelz.core.database.WatchProgressDao,
 ) : androidx.lifecycle.ViewModel() {
 
     data class UiState(
@@ -28,7 +28,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
         val genreCursor: String? = null,
         val isGenreLoading: Boolean = false,
         val hasMoreGenrePages: Boolean = true,
-        val continueWatching: List<com.axio.reelz.data.local.WatchProgressRow> = emptyList(),
+        val continueWatching: List<com.axio.reelz.core.database.WatchProgressRow> = emptyList(),
         val isLoadingMore: Boolean = false,
         val isCacheLoaded: Boolean = false,
         val watchlistedIds: Set<String> = emptySet(),

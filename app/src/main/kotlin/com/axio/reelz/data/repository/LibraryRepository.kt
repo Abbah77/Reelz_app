@@ -1,10 +1,10 @@
 package com.axio.reelz.data.repository
 
-import com.axio.reelz.data.local.WatchHistoryDao
-import com.axio.reelz.data.local.WatchProgressDao
-import com.axio.reelz.data.local.WatchProgressRow
-import com.axio.reelz.data.local.WatchlistDao
-import com.axio.reelz.data.local.WatchlistRow
+import com.axio.reelz.core.database.WatchHistoryDao
+import com.axio.reelz.core.database.WatchProgressDao
+import com.axio.reelz.core.database.WatchProgressRow
+import com.axio.reelz.core.database.WatchlistDao
+import com.axio.reelz.core.database.WatchlistRow
 import com.axio.reelz.data.model.Media
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

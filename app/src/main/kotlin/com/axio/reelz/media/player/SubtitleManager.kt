@@ -3,8 +3,8 @@ package com.axio.reelz.media.player
 import androidx.media3.common.C
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.axio.reelz.core.network.NetworkResult
-import com.axio.reelz.data.local.DownloadSubtitleDao
-import com.axio.reelz.data.local.DownloadSubtitleRow
+import com.axio.reelz.core.database.DownloadSubtitleDao
+import com.axio.reelz.core.database.DownloadSubtitleRow
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.Subtitle
 import com.axio.reelz.data.repository.StreamRepository
