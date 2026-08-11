@@ -16,19 +16,17 @@ android {
         applicationId  = "com.axio.reelz"
         minSdk         = 26
         targetSdk      = 35
-        versionCode    = 2
-        versionName    = "2.0.0"
+        versionCode    = 3
+        versionName    = "3.0.0"
 
-        // ── Compile-time constants ──────────────────────────────────────────
-        // API keys, ad unit IDs, the AppLovin SDK key, and the VAST tag URL are
-        // NOT compiled in — they are loaded entirely from the remote config
-        // (reelz_config.json) via RemoteConfigRepository / AdEngine at runtime.
-        buildConfigField("String", "TMDB_IMG_W500",            "\"https://image.tmdb.org/t/p/w500\"")
-        buildConfigField("String", "TMDB_IMG_W342",            "\"https://image.tmdb.org/t/p/w342\"")
-        buildConfigField("String", "TMDB_IMG_ORIGINAL",        "\"https://image.tmdb.org/t/p/original\"")
-
-        // C++ native library removed — M3U8 parsing + stream resolution is server-side.
-        // No externalNativeBuild, no cmake, no NDK required.
+        // ── Backend URL — set this to your VPS URL ──────────────────────────
+        // Change via build variant or CI/CD env var.
+        // The app fetches its own config from this URL on first launch,
+        // which can then update the URL itself for zero-downtime migrations.
+        buildConfigField(
+            "String", "BACKEND_URL",
+            "\"${System.getenv("REELZ_BACKEND_URL") ?: "https://your-vps.example.com"}\""
+        )
     }
 
     signingConfigs {
@@ -59,12 +57,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Uploads mapping.txt to Firebase automatically at build time, so
-            // crashes captured from real (obfuscated) release APKs deobfuscate
-            // back to real Kotlin file/line in the Crashlytics console.
             configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
                 mappingFileUploadEnabled = true
-                nativeSymbolUploadEnabled = true
             }
         }
     }
@@ -105,13 +99,9 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.work.runtime)
 
-    // Firebase — Crashlytics reports real crashes from real user devices,
-    // deobfuscated via the mapping.txt uploaded automatically by the plugin
-    // above. Analytics is required alongside it so Crashlytics can tag crash
-    // sessions with basic device/app-state breadcrumbs.
+    // Firebase
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.crashlytics)
-    implementation(libs.firebase.crashlytics.ndk)
     implementation(libs.firebase.analytics)
 
     // Compose BOM
@@ -132,27 +122,26 @@ dependencies {
     implementation(libs.hilt.work)
     ksp(libs.hilt.compiler.androidx)
 
-    // Media3 / ExoPlayer — media3-transformer handles .ts → .mp4 remuxing
+    // Media3 / ExoPlayer
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
     implementation(libs.media3.datasource.okhttp)
-    implementation(libs.media3.datasource)       // SimpleCache + CacheDataSource
+    implementation(libs.media3.datasource)
     implementation(libs.media3.transformer)
 
-    // Database
+    // Database (smart cache — lean schema)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 
-    // Network
+    // Network — modern Retrofit stack
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp.core)
     implementation(libs.okhttp.logging)
-    implementation(libs.okhttp.sse)
 
     // Image
     implementation(libs.coil.compose)
@@ -175,24 +164,20 @@ dependencies {
     // Permissions
     implementation(libs.accompanist.permissions)
 
-    // Ads — AppLovin MAX + IMA for VAST pre-roll
+    // Ads — AppLovin MAX + IMA
     implementation("com.applovin:applovin-sdk:12.5.0")
     implementation("com.google.ads.interactivemedia.v3:interactivemedia:3.33.0")
     implementation("androidx.media3:media3-exoplayer-ima:1.3.1")
 
-    // Nearby Connections — Google Play Services P2P transfer (Wi-Fi/BT auto-negotiated,
-    // same stack behind Quick Share / Nearby Share). This replaces manual
-    // WifiP2pManager / LocalOnlyHotspot / WifiNetworkSuggestion handling: Play Services
-    // runs with system-level trust our app doesn't have, so it can silently perform the
-    // Wi-Fi upgrade that a normal app is blocked from doing on API 29+.
-    implementation("com.google.android.gms:play-services-nearby:19.3.0")
-
-    // QR code
+    // QR code (transfer screen)
     implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.camera:camera-core:1.3.4")
     implementation("androidx.camera:camera-camera2:1.3.4")
     implementation("androidx.camera:camera-lifecycle:1.3.4")
     implementation("androidx.camera:camera-view:1.3.4")
+
+    // Nearby Connections (transfer feature)
+    implementation("com.google.android.gms:play-services-nearby:19.3.0")
 
     debugImplementation(libs.compose.ui.tooling)
 }

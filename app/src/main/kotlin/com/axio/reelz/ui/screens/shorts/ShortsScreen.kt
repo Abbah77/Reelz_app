@@ -53,8 +53,6 @@ import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ads.ShortsNativeAdPage
 import com.axio.reelz.data.model.ShortVideo
 import com.axio.reelz.data.repository.MediaRepository
-import com.axio.reelz.remoteconfig.RemoteConfigRepository
-import com.axio.reelz.remoteconfig.ShortCategory
 // StreamHeaders removed — using inline UA constant below
 import com.axio.reelz.ui.components.CinematicSpinner
 import com.axio.reelz.ui.components.IconBookmark
@@ -248,10 +246,10 @@ private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = bu
 class ShortsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repo: MediaRepository,
-    private val remoteConfig: RemoteConfigRepository,
+    private val configRepo: com.axio.reelz.data.repository.ConfigRepository,
 ) : ViewModel() {
 
-    val shortsConfig       get() = remoteConfig.shortsConfig()
+    val shortsConfig       get() = configRepo.shortsConfig()
     private val categories get() = shortsConfig.categories
     private val archiveCfg get() = shortsConfig.archiveOrg
 
@@ -395,7 +393,7 @@ class ShortsViewModel @Inject constructor(
     init {
         _ui.update { it.copy(forYouLoading = true) }
         viewModelScope.launch {
-            remoteConfig.config
+            configRepo.config
                 .filterNotNull()
                 .collect {
                     _ui.update { s -> s.copy(categories = categories) }

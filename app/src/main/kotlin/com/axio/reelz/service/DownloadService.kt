@@ -14,16 +14,14 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.axio.reelz.data.local.DownloadDao
-import com.axio.reelz.data.local.DownloadMetadataWriter
-import com.axio.reelz.data.local.DownloadPaths
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.QualityTrack
+import com.axio.reelz.data.model.fromJsonSafe
 // NativeBridge removed — M3U8 parsing now pure Kotlin
-import com.axio.reelz.stream.BackendStreamRepository
+import com.axio.reelz.data.repository.StreamRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
@@ -76,8 +74,7 @@ import kotlin.random.Random
 class DownloadService : Service() {
 
     @Inject lateinit var downloadDao: DownloadDao
-    @Inject lateinit var streamRepo: BackendStreamRepository
-    @Inject lateinit var metadataWriter: DownloadMetadataWriter
+    @Inject lateinit var streamRepo: StreamRepository
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val gson  = Gson()
@@ -191,20 +188,11 @@ class DownloadService : Service() {
             downloadDao.markPaused(dlId)
         }
 
-        // ── Structured output paths via DownloadPaths ─────────────────────────
-        // Paths are determined BEFORE resolving the stream URL so we know the
+                // Paths are determined BEFORE resolving the stream URL so we know the
         // format (HLS vs MP4) upfront only after resolving. We detect format
         // from the resolved URL and pass the correct File to the downloader.
         val isHlsHint = item.streamUrl.contains(".m3u8", ignoreCase = true)
-        val outputFile = DownloadPaths.videoFile(
-            ctx       = this,
-            tmdbId    = item.tmdbId,
-            mediaType = item.mediaType,
-            season    = item.season,
-            episode   = item.episode,
-            quality   = item.quality,
-            isHls     = isHlsHint,
-        )
+        val outputFile = File(getExternalFilesDir(null), "downloads/${item.mediaId}/${item.season}_${item.episode}_${item.quality}.mp4").also { it.parentFile?.mkdirs() }
 
         downloadDao.updateMetadata(dlId, DownloadStatus.DOWNLOADING.name, item.sizeBytes)
         updateNotif("Downloading", item.title, 0, 0)
@@ -230,15 +218,7 @@ class DownloadService : Service() {
 
             // Re-derive output file now we have the resolved URL (may differ from hint)
             val isHls = freshItem.streamUrl.contains(".m3u8", ignoreCase = true)
-            val resolvedOutputFile = DownloadPaths.videoFile(
-                ctx       = this,
-                tmdbId    = freshItem.tmdbId,
-                mediaType = freshItem.mediaType,
-                season    = freshItem.season,
-                episode   = freshItem.episode,
-                quality   = freshItem.quality,
-                isHls     = isHls,
-            )
+            val resolvedOutputFile = File(getExternalFilesDir(null), "downloads/${item.mediaId}/${item.season}_${item.episode}_${item.quality}.mp4").also { it.parentFile?.mkdirs() }
 
             if (isHls) {
                 downloadHls(freshItem, resolvedOutputFile, dlId)
@@ -300,7 +280,7 @@ class DownloadService : Service() {
         return try {
             // Use POST /download — returns deduplicated per-resolution links.
             val links = streamRepo.resolveDownloadLinks(
-                tmdbId    = item.tmdbId,
+                tmdbId    = item.mediaId,
                 mediaType = mediaType,
                 title     = item.title,
                 season    = item.season,
@@ -411,7 +391,7 @@ class DownloadService : Service() {
     ) {
         val chunkCount = 4
         val chunkSize  = totalBytes / chunkCount
-        val segDir     = DownloadPaths.segmentsDir(this, item.tmdbId, item.mediaType, item.season, item.episode, item.quality)
+        val segDir     = File(getExternalFilesDir(null), "segments/${item.mediaId}/${item.season}_${item.episode}/${item.quality}").also { it.mkdirs() }
         val startAt    = resumeFrom
 
         val semaphore = Semaphore(chunkCount)
@@ -502,7 +482,7 @@ class DownloadService : Service() {
 
         val total = segmentUrls.size
         val segDir = if (item.segmentDir.isNotBlank()) File(item.segmentDir)
-        else DownloadPaths.segmentsDir(this, item.tmdbId, item.mediaType, item.season, item.episode, item.quality)
+        else File(getExternalFilesDir(null), "segments/${item.mediaId}/${item.season}_${item.episode}/${item.quality}").also { it.mkdirs() }
 
         val estimatedSize = if (item.sizeBytes <= 0) {
             estimateHlsSize(segmentUrls[0], headers, total)
@@ -835,7 +815,7 @@ class DownloadService : Service() {
         } catch (_: Exception) { emptyMap() }
 
     private fun parseQualityTracks(json: String): List<QualityTrack> =
-        try { gson.fromJson(json, object : com.google.gson.reflect.TypeToken<List<QualityTrack>>() {}.type) }
+        try { gson.fromJsonSafe<List<QualityTrack>>(json) ?: emptyList() }
         catch (_: Exception) { emptyList() }
 
     private fun fetchText(url: String, headers: Map<String, String>): String {

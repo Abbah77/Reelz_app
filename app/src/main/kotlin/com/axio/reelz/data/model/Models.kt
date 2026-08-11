@@ -1,11 +1,15 @@
 package com.axio.reelz.data.model
 
-import androidx.room.Entity
-import androidx.room.PrimaryKey
-import androidx.room.TypeConverter
-import androidx.room.TypeConverters
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+// ─────────────────────────────────────────────────────────────────────────────
+//  Domain Models — Reelz v3
+//
+//  Rules:
+//   • The app only knows the BACKEND. No TMDB shapes here.
+//   • Image URLs are full absolute URLs supplied by the backend.
+//   • All cache TTLs live on the server; the app honours Cache-Control /
+//     X-Cache-TTL headers or the cacheTtlMs field in the response body.
+//   • "Smart" = only cache what the UI actually needs; nothing bulky.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 enum class MediaType   { MOVIE, TV }
@@ -13,111 +17,90 @@ enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
 enum class TransferStatus { IDLE, CONNECTING, TRANSFERRING, DONE, ERROR }
 enum class TransferDirection { SEND, RECEIVE }
 
-// ── Core domain models ────────────────────────────────────────────────────────
+// ── Core card model (what every list/grid item needs) ─────────────────────────
 data class Media(
-    val id: Int,
-    val tmdbId: Int,
+    val id: String,              // backend-assigned stable ID
     val title: String,
-    val overview: String,
-    val posterPath: String?,
-    val backdropPath: String?,
-    val releaseDate: String?,
-    val voteAverage: Double,
-    val voteCount: Int,
-    val popularity: Double,
-    val genreIds: List<Int> = emptyList(),
+    val posterUrl: String?,      // absolute URL, backend-signed if needed
+    val backdropUrl: String?,
+    val releaseYear: String?,
+    val rating: Double,
     val mediaType: MediaType,
-    val adult: Boolean = false,
-    val originalLanguage: String = "en",
+    val genres: List<String> = emptyList(),
+    val language: String = "en",
+    val sectionTag: String = "",   // which feed section this came from
 )
 
+// ── Detail model (everything for the detail screen) ───────────────────────────
 data class MediaDetail(
-    val id: Int,
-    val tmdbId: Int,
+    val id: String,
     val title: String,
     val overview: String,
-    val posterPath: String?,
-    val backdropPath: String?,
-    val releaseDate: String?,
-    val voteAverage: Double,
-    val voteCount: Int,
-    val runtime: Int?,
-    val genres: List<Genre>,
+    val posterUrl: String?,
+    val backdropUrl: String?,
+    val releaseYear: String?,
+    val rating: Double,
+    val runtime: Int?,            // minutes for movies
     val mediaType: MediaType,
+    val genres: List<String>,
     val status: String?,
     val tagline: String?,
     val seasons: List<Season> = emptyList(),
-    val numberOfSeasons: Int = 0,
-    val numberOfEpisodes: Int = 0,
     val cast: List<CastMember> = emptyList(),
-    val trailerKey: String? = null,
+    val trailerUrl: String? = null,
+    val similar: List<Media> = emptyList(),
     val imdbId: String? = null,
     val spokenLanguages: List<String> = emptyList(),
-    val productionCountries: List<String> = emptyList(),
-    val budget: Long = 0,
-    val revenue: Long = 0,
-    val similar: List<Media> = emptyList(),
 )
 
-data class Genre(val id: Int, val name: String)
-
 data class Season(
-    val id: Int,
+    val id: String,
     val seasonNumber: Int,
     val name: String,
     val episodeCount: Int,
-    val posterPath: String?,
+    val posterUrl: String?,
     val overview: String?,
     val airDate: String?,
 )
 
 data class Episode(
-    val id: Int,
+    val id: String,
     val episodeNumber: Int,
     val seasonNumber: Int,
     val name: String,
     val overview: String,
-    val stillPath: String?,
+    val stillUrl: String?,
     val airDate: String?,
     val runtime: Int?,
-    val voteAverage: Double,
+    val rating: Double,
 )
 
 data class CastMember(
-    val id: Int,
+    val id: String,
     val name: String,
     val character: String,
-    val profilePath: String?,
+    val photoUrl: String?,
     val order: Int,
 )
 
-data class HomeSection(val title: String, val items: List<Media>)
-
-// ── Shorts ────────────────────────────────────────────────────────────────────
-data class ShortVideo(
-    val id: String,
-    val title: String,
-    val author: String,
-    val community: String,       // was: subreddit
-    val hlsUrl: String,          // mp4 direct url for ifunny
-    val audioUrl: String?,       // null for ifunny (audio baked in)
-    val fallbackUrl: String,
-    val thumbnail: String,
-    val ups: Int,
-    val duration: Int,
-    val hasAudio: Boolean,
-    val width: Int,
-    val height: Int,
+// ── Feed — what the home screen receives ──────────────────────────────────────
+data class FeedSection(
+    val id: String,           // stable section key e.g. "trending"
+    val title: String,        // display label e.g. "🔥 Trending Now"
+    val items: List<Media>,
+    val hasMore: Boolean = false,
+    val nextCursor: String? = null,
 )
 
-// ── Stream ────────────────────────────────────────────────────────────────────
+// ── Explore filter options from backend ───────────────────────────────────────
+data class Genre(val id: String, val name: String)
+
+// ── Stream result ─────────────────────────────────────────────────────────────
 data class StreamResult(
     val url: String,
     val isHls: Boolean,
     val quality: String = "Auto",
     val headers: Map<String, String> = emptyMap(),
-    val referer: String = "",
-    val origin: String = "",
     val sourceName: String = "",
     val subtitles: List<Subtitle> = emptyList(),
     val qualities: List<QualityTrack> = emptyList(),
@@ -129,111 +112,28 @@ data class QualityTrack(
     val label: String,
     val url: String,
     val bandwidth: Long = 0,
-    /** File size in bytes. Real measured size when [isSizeExact] is true,
-     *  otherwise a bandwidth-based estimate (fallback only). */
     val estimatedSizeBytes: Long = 0,
-    /** True when [estimatedSizeBytes] came from a real measurement (HTTP
-     *  HEAD Content-Length for MP4, or real segment sampling for HLS) rather
-     *  than a bandwidth×runtime guess. UI should show "≈" when this is false. */
-    val isSizeExact: Boolean = false,
 )
 
-// ── Persistent Download Subtitle ─────────────────────────────────────────────
-/**
- * Subtitles that are PERMANENTLY attached to a downloaded video.
- * They survive across sessions until the user explicitly deletes the video.
- * Stream subtitles are NEVER stored here — they are session-only and discarded on quit.
- */
-@Entity(tableName = "download_subtitles")
-data class DownloadSubtitle(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    /** Links to DownloadItem.id */
-    val downloadId: String,
-    val tmdbId: Int,
-    val season: Int = 0,
-    val episode: Int = 0,
-    val language: String,
-    val label: String,
-    /** Local file path to the downloaded .srt/.vtt subtitle file */
-    val localFilePath: String,
-    /** Whether user has this subtitle enabled (toggle on/off without deleting) */
-    val isEnabled: Boolean = true,
-    val addedAt: Long = System.currentTimeMillis(),
-)
-
-// ── Room entities ─────────────────────────────────────────────────────────────
-@Entity(tableName = "watchlist")
-data class WatchlistItem(
-    @PrimaryKey val tmdbId: Int,
+// ── Shorts ────────────────────────────────────────────────────────────────────
+data class ShortVideo(
+    val id: String,
     val title: String,
-    val posterPath: String?,
-    val mediaType: String,
-    val addedAt: Long = System.currentTimeMillis(),
+    val author: String,
+    val hlsUrl: String,
+    val fallbackUrl: String,
+    val thumbnail: String,
+    val duration: Int,
+    val width: Int,
+    val height: Int,
 )
 
-@Entity(tableName = "watch_history")
-data class WatchHistory(
-    @PrimaryKey val key: String,  // "{tmdbId}_{season}_{episode}"
-    val tmdbId: Int,
-    val title: String,
-    val posterPath: String?,
-    val mediaType: String,
-    val season: Int = 0,
-    val episode: Int = 0,
-    val positionMs: Long = 0,
-    val durationMs: Long = 0,
-    val watchedAt: Long = System.currentTimeMillis(),
-)
-
-@Entity(tableName = "liked_media")
-data class LikedItem(
-    @PrimaryKey val tmdbId: Int,
-    val title: String,
-    val posterPath: String?,
-    val mediaType: String,
-    val likedAt: Long = System.currentTimeMillis(),
-)
-
-@Entity(tableName = "recent_searches")
-data class RecentSearch(
-    // Query text itself is the key — re-searching "batman" updates its
-    // timestamp (bumps it to the top) instead of creating a duplicate row.
-    @PrimaryKey val query: String,
-    val searchedAt: Long = System.currentTimeMillis(),
-)
-
-@Entity(tableName = "saved_videos")
-data class SavedVideoItem(
-    @PrimaryKey val tmdbId: Int,
-    val title: String,
-    val posterPath: String?,
-    val mediaType: String,
-    val savedAt: Long = System.currentTimeMillis(),
-)
-
-@Entity(tableName = "cached_media")
-@TypeConverters(MediaConverters::class)
-data class CachedMedia(
-    @PrimaryKey val tmdbId: Int,
-    val title: String,
-    val overview: String,
-    val posterPath: String?,
-    val backdropPath: String?,
-    val releaseDate: String?,
-    val voteAverage: Double,
-    val popularity: Double,
-    val genreIds: String = "[]",  // JSON list
-    val mediaType: String,
-    val cachedAt: Long = System.currentTimeMillis(),
-)
-
-@Entity(tableName = "downloads")
-@TypeConverters(MediaConverters::class)
+// ── Download ──────────────────────────────────────────────────────────────────
 data class DownloadItem(
-    @PrimaryKey val id: String,  // UUID
-    val tmdbId: Int,
+    val id: String,
+    val mediaId: String,
     val title: String,
-    val posterPath: String?,
+    val posterUrl: String?,
     val mediaType: String,
     val season: Int = 0,
     val episode: Int = 0,
@@ -242,73 +142,41 @@ data class DownloadItem(
     val filePath: String = "",
     val sizeBytes: Long = 0,
     val downloadedBytes: Long = 0,
-    val status: String = DownloadStatus.QUEUED.name,
+    val status: DownloadStatus = DownloadStatus.QUEUED,
     val streamUrl: String = "",
-    val headers: String = "{}",  // JSON map
+    val headers: Map<String, String> = emptyMap(),
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
-    val networkSpeedBps: Long = 0,
     val segmentsDone: Int = 0,
     val totalSegments: Int = 0,
-    val segmentDir: String = "",
-    val localPlaylistPath: String = "",
-    val qualityTracksJson: String = "[]",
-    val resolveRequired: Boolean = true,
-    /** Watch progress in milliseconds — updated when user exits the player */
     val watchProgressMs: Long = 0,
-    /** Total duration in milliseconds — set once on first play */
     val durationMs: Long = 0,
-    /** Last played timestamp — for "Last played: X days ago" display */
     val lastPlayedAt: Long = 0,
-    /**
-     * The quality label that was last selected by the user in the player.
-     * Empty string means "use highest available".
-     */
-    val lastSelectedQuality: String = "",
 )
 
-@Entity(tableName = "transfer_history")
-data class TransferRecord(
-    @PrimaryKey val id: String,
-    val fileName: String,
-    val filePath: String,
-    val sizeBytes: Long,
-    val direction: String,  // SEND / RECEIVE
-    val peerName: String,
-    val peerIp: String,
-    val status: String,
-    val createdAt: Long = System.currentTimeMillis(),
-)
-
-/**
- * Local cache of the signed-in user's premium session.
- * Room is the single source of truth — no DataStore duplicate.
- * There is only ever one row (uid is the primary key). In practice the app
- * keeps a single active session at a time — see UserSessionDao.get(),
- * which always takes the most recent one.
- */
-@Entity(tableName = "user_session")
+// ── User session ──────────────────────────────────────────────────────────────
 data class UserSession(
-    @PrimaryKey val uid: String,
+    val uid: String,
     val name: String = "",
     val email: String = "",
     val photoUrl: String? = null,
     val isPremium: Boolean = false,
-    val plan: String = "",              // "monthly" | "yearly" | ""
+    val plan: String = "",
     val expiresAtMs: Long = 0L,
-    val subscribedAtMs: Long = 0L,
     val cachedAtMs: Long = System.currentTimeMillis(),
 )
 
-// ── Type converters ───────────────────────────────────────────────────────────
-class MediaConverters {
-    private val gson = Gson()
-    @TypeConverter fun fromIntList(v: List<Int>?): String = gson.toJson(v ?: emptyList<Int>())
-    @TypeConverter fun toIntList(v: String?): List<Int> =
-        if (v.isNullOrBlank()) emptyList()
-        else gson.fromJson(v, object : TypeToken<List<Int>>() {}.type)
-    @TypeConverter fun fromMap(v: Map<String, String>?): String = gson.toJson(v ?: emptyMap<String,String>())
-    @TypeConverter fun toMap(v: String?): Map<String, String> =
-        if (v.isNullOrBlank()) emptyMap()
-        else gson.fromJson(v, object : TypeToken<Map<String, String>>() {}.type)
+// ── Watched progress (local-only, not synced) ─────────────────────────────────
+data class WatchProgress(
+    val mediaId: String,
+    val season: Int,
+    val episode: Int,
+    val positionMs: Long,
+    val durationMs: Long,
+    val watchedAt: Long = System.currentTimeMillis(),
+) {
+    val percentWatched: Float
+        get() = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+    val isFinished: Boolean
+        get() = percentWatched >= 0.90f
 }

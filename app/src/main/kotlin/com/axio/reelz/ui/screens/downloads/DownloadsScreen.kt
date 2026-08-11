@@ -45,11 +45,11 @@ import javax.inject.Inject
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Groups all DownloadItems for the same movie (same tmdbId) regardless of quality.
+ * Groups all DownloadItems for the same movie (same mediaId) regardless of quality.
  * A movie card shows ONE entry in the list even if 1080p + 480p are both downloaded.
  */
 data class MovieGroup(
-    val tmdbId: Int,
+    val mediaId: String,
     val title: String,
     val posterPath: String?,
     /** All downloads for this movie across every quality. */
@@ -70,7 +70,7 @@ data class MovieGroup(
 }
 
 data class SeriesGroup(
-    val tmdbId: Int,
+    val mediaId: String,
     val title: String,
     val posterPath: String?,
     val seasons: List<SeasonGroup>,
@@ -109,7 +109,7 @@ data class SeasonGroup(
  * E.g. S01E01 might have both 1080p and 480p.
  */
 data class EpisodeGroup(
-    val tmdbId: Int,
+    val mediaId: String,
     val season: Int,
     val episode: Int,
     val episodeName: String,
@@ -145,10 +145,10 @@ class DownloadsViewModel @Inject constructor(
     val movieGroups: StateFlow<List<MovieGroup>> = allDownloads
         .map { list ->
             list.filter { it.mediaType == "MOVIE" && it.status == DownloadStatus.DONE.name }
-                .groupBy { it.tmdbId }
-                .map { (tmdbId, items) ->
+                .groupBy { it.mediaId }
+                .map { (mediaId, items) ->
                     MovieGroup(
-                        tmdbId      = tmdbId,
+                        mediaId     = mediaId,
                         title       = items.first().title,
                         posterPath  = items.first().posterPath,
                         downloads   = items.sortedByDescending { it.sizeBytes },
@@ -179,7 +179,7 @@ class DownloadsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Lazily, 0)
 
     private fun buildSeriesGroups(items: List<DownloadItem>): List<SeriesGroup> =
-        items.groupBy { it.tmdbId }
+        items.groupBy { it.mediaId }
             .map { (tmdbId, eps) ->
                 val seasons = eps
                     .groupBy { it.season }
@@ -188,7 +188,7 @@ class DownloadsViewModel @Inject constructor(
                             .groupBy { it.episode }
                             .map { (epNum, epItems) ->
                                 EpisodeGroup(
-                                    tmdbId      = tmdbId,
+                                    mediaId     = mediaId,
                                     season      = season,
                                     episode     = epNum,
                                     episodeName = epItems.firstOrNull()?.episodeName ?: "",
@@ -200,7 +200,7 @@ class DownloadsViewModel @Inject constructor(
                         SeasonGroup(season, episodeGroups)
                     }
                     .sortedBy { it.season }
-                SeriesGroup(tmdbId, eps.first().title, eps.first().posterPath, seasons)
+                SeriesGroup(mediaId, eps.first().title, eps.first().posterUrl, seasons)
             }
             .sortedByDescending { g ->
                 g.seasons.flatMap { it.episodeGroups }.flatMap { it.downloads }.maxOf { it.createdAt }
@@ -309,7 +309,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                             modifier = Modifier.padding(horizontal = d.screenHorizPad, vertical = d.spaceSm),
                         )
                     }
-                    items(movieGroups, key = { "mg-${it.tmdbId}" }) { group ->
+                    items(movieGroups, key = { "mg-${it.mediaId}" }) { group ->
                         MovieGroupCard(
                             group    = group,
                             onPlay   = { item -> playDownload(ctx, item) },
@@ -329,7 +329,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                             modifier = Modifier.padding(horizontal = d.screenHorizPad, vertical = d.spaceSm),
                         )
                     }
-                    items(seriesGroups, key = { "sg-${it.tmdbId}" }) { group ->
+                    items(seriesGroups, key = { "sg-${it.mediaId}" }) { group ->
                         SeriesRootCard(
                             group    = group,
                             onTap    = { seriesDetailGroup = group },
@@ -469,7 +469,7 @@ private fun SeriesDetailPage(
             verticalArrangement = Arrangement.spacedBy(d.spaceSm),
         ) {
             if (currentSeason != null) {
-                items(currentSeason.episodeGroups, key = { "eg-${it.tmdbId}-${it.season}-${it.episode}" }) { eg ->
+                items(currentSeason.episodeGroups, key = { "eg-${it.mediaId}-${it.season}-${it.episode}" }) { eg ->
                     EpisodeGroupCard(
                         eg       = eg,
                         onPlay   = { item -> playDownload(ctx, item) },
@@ -1723,7 +1723,7 @@ private fun ReelzDeleteDialog(
  */
 private fun playDownload(ctx: Context, dl: DownloadItem) {
     val base = Intent(ctx, PlayerActivity::class.java).apply {
-        putExtra("tmdbId",     dl.tmdbId)
+        putExtra("mediaId",    dl.mediaId)
         putExtra("mediaType",  dl.mediaType)
         putExtra("season",     dl.season)
         putExtra("episode",    dl.episode)

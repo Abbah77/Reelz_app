@@ -28,6 +28,7 @@ import com.axio.reelz.ui.theme.LocalDimensions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.delay
 import javax.inject.Inject
 import java.util.Calendar
 
@@ -50,10 +51,13 @@ data class ExploreFilters(
     val ratingFrom: Float? = null,
     val runtimeFrom: Int? = null,              // movies only
     val runtimeTo: Int? = null,                // movies only
+    val language: String? = null,              // ISO 639-1: "ko","hi","tr","ja","zh","fr","en"
+    val originCountry: String? = null,         // ISO 3166-1: "NG","ZA","US","GB","KR"
 ) {
     val isDefault: Boolean get() =
         genreIds.isEmpty() && sortBy == "popularity.desc" && yearFrom == null &&
-        yearTo == null && ratingFrom == null && runtimeFrom == null && runtimeTo == null
+        yearTo == null && ratingFrom == null && runtimeFrom == null && runtimeTo == null &&
+        language == null && originCountry == null
 }
 
 /** A one-tap mood preset — pre-fills filters so users can dive in without configuring anything. */
@@ -103,6 +107,7 @@ class ExploreViewModel @Inject constructor(
         val page: Int = 1,
         val isLoading: Boolean = true,
         val isLoadingMore: Boolean = false,
+        val isBackgroundRefreshing: Boolean = false,
         val hasMore: Boolean = true,
         val error: String? = null,
         val activeMood: String? = null,
@@ -121,59 +126,224 @@ class ExploreViewModel @Inject constructor(
         runQuery()
     }
 
+    /**
+     * Cache-first query strategy:
+     *
+     *  1. Query Room immediately — zero latency, zero TMDB calls.
+     *     If >= 15 results: show them, fire TMDB silently in background to patch/extend.
+     *     If < 15 results:  show what cache has (may be 0), show loading indicator, fire TMDB.
+     *
+     *  2. TMDB fires with exponential-backoff retry (0ms -> 500ms -> 1500ms) to survive
+     *     rate-limit bursts from the 21 concurrent Home batch calls on app start.
+     *
+     *  3. Filters that cache CANNOT answer (runtimeFrom/To, originCountry) always trigger
+     *     a full TMDB call regardless of cache size — those fields are not stored in CachedMedia.
+     *
+     *  loadMore() always goes to TMDB — the cache only covers one "page" of results.
+     */
     private fun runQuery(resetPage: Boolean = true) {
         viewModelScope.launch {
             val f = _ui.value.filters
-            _ui.update { it.copy(isLoading = resetPage, error = null, page = if (resetPage) 1 else it.page) }
-            try {
-                val page = if (resetPage) 1 else _ui.value.page
-                val items = if (f.mediaType == "MOVIE") {
-                    repo.discoverMoviesAdvanced(
-                        genreIds = f.genreIds.toList(), sortBy = f.sortBy, page = page,
-                        yearFrom = f.yearFrom, yearTo = f.yearTo, ratingFrom = f.ratingFrom,
-                        minVotes = if (f.sortBy == "vote_average.desc") 50 else null,
-                        runtimeFrom = f.runtimeFrom, runtimeTo = f.runtimeTo,
-                    )
+            _ui.update { it.copy(error = null, page = if (resetPage) 1 else it.page) }
+
+            if (resetPage) {
+                // ── Tier 1: query cache ───────────────────────────────────────
+                // Skip cache for filters we cannot answer locally.
+                val cacheUnsupported = f.runtimeFrom != null || f.runtimeTo != null || f.originCountry != null
+                val cacheResults = if (!cacheUnsupported) {
+                    try {
+                        repo.queryExploreFromCache(
+                            mediaType  = f.mediaType,
+                            genreIds   = f.genreIds,
+                            sortBy     = f.sortBy,
+                            yearFrom   = f.yearFrom,
+                            yearTo     = f.yearTo,
+                            ratingFrom = f.ratingFrom,
+                            language   = f.language,
+                        )
+                    } catch (_: Exception) { emptyList() }
+                } else emptyList()
+
+                val cacheAdequate = cacheResults.size >= 15
+
+                if (cacheResults.isNotEmpty()) {
+                    // Show cache immediately — no spinner for the user
+                    _ui.update {
+                        it.copy(
+                            results                = cacheResults,
+                            isLoading              = false,
+                            isBackgroundRefreshing = cacheAdequate,
+                        )
+                    }
                 } else {
-                    repo.discoverTvAdvanced(
-                        genreIds = f.genreIds.toList(), sortBy = f.sortBy, page = page,
-                        yearFrom = f.yearFrom, yearTo = f.yearTo, ratingFrom = f.ratingFrom,
-                        minVotes = if (f.sortBy == "vote_average.desc") 50 else null,
-                    )
+                    // No cache — show full loading state
+                    _ui.update { it.copy(isLoading = true) }
                 }
-                _ui.update {
-                    it.copy(
-                        results = if (resetPage) {
-                            items
-                        } else {
-                            // Use associateBy so any tmdbId that appears on multiple pages
-                            // is deduplicated, keeping the freshest entry. This prevents the
-                            // "Key was already used" crash in LazyVerticalGrid when TMDB's
-                            // ranked pages overlap (e.g. an item shifts from page 2 to page 1
-                            // between the two network calls).
-                            (it.results + items)
-                                .associateBy { item -> item.tmdbId }
-                                .values
-                                .toList()
-                        },
-                        page          = page,
-                        isLoading     = false,
-                        isLoadingMore = false,
-                        hasMore       = items.isNotEmpty(),
-                    )
+
+                // ── Tier 2: TMDB (silent if cache was adequate, visible otherwise) ──
+                val retryDelaysMs = longArrayOf(0L, 500L, 1500L)
+                var lastException: Exception? = null
+                for (delayMs in retryDelaysMs) {
+                    if (delayMs > 0) delay(delayMs)
+                    try {
+                        val items = fetchFromTmdb(f, page = 1)
+                        _ui.update {
+                            it.copy(
+                                results                = items,
+                                page                   = 1,
+                                isLoading              = false,
+                                isLoadingMore          = false,
+                                isBackgroundRefreshing = false,
+                                hasMore                = items.isNotEmpty(),
+                            )
+                        }
+                        return@launch
+                    } catch (e: Exception) {
+                        lastException = e
+                    }
                 }
-            } catch (e: Exception) {
-                _ui.update { it.copy(isLoading = false, isLoadingMore = false, error = friendlyExploreError(e)) }
+
+                // All retries exhausted
+                if (cacheResults.isNotEmpty()) {
+                    // Cache is still showing — swallow the TMDB error silently
+                    _ui.update { it.copy(isLoading = false, isBackgroundRefreshing = false) }
+                } else {
+                    _ui.update {
+                        it.copy(
+                            isLoading              = false,
+                            isLoadingMore          = false,
+                            isBackgroundRefreshing = false,
+                            error                  = friendlyExploreError(lastException!!),
+                        )
+                    }
+                }
+
+            } else {
+                // ── loadMore: cache-first, TMDB as fallback ───────────────────
+                // Strategy:
+                //   1. Try the Explore cache (Room) for items user hasn't seen yet.
+                //      If ≥ 12 new items found → show instantly, no TMDB call.
+                //   2. If cache is thin → fall through to TMDB with retry.
+                //   3. On TMDB failure but cache had results → silently swallow error.
+                //   4. On total failure (no cache + TMDB down) → show non-breaking error.
+                val shownIds = _ui.value.results.map { it.id }.toSet()
+                val cacheUnsupported = f.runtimeFrom != null || f.runtimeTo != null || f.originCountry != null
+
+                val cacheMore = if (!cacheUnsupported) {
+                    try {
+                        repo.queryExploreFromCache(
+                            mediaType  = f.mediaType,
+                            genreIds   = f.genreIds,
+                            sortBy     = f.sortBy,
+                            yearFrom   = f.yearFrom,
+                            yearTo     = f.yearTo,
+                            ratingFrom = f.ratingFrom,
+                            language   = f.language,
+                        ).filter { it.id !in shownIds }
+                    } catch (_: Exception) { emptyList() }
+                } else emptyList()
+
+                if (cacheMore.size >= 12) {
+                    // Enough cache to serve a full visual "page" — no TMDB call
+                    _ui.update {
+                        it.copy(
+                            results       = (it.results + cacheMore)
+                                .associateBy { item -> item.id }.values.toList(),
+                            isLoading     = false,
+                            isLoadingMore = false,
+                            hasMore       = true,
+                        )
+                    }
+                    return@launch
+                }
+
+                // Cache insufficient → TMDB with exponential-backoff retry
+                val retryDelaysMs = longArrayOf(0L, 500L, 1500L)
+                var lastException: Exception? = null
+                for (delayMs in retryDelaysMs) {
+                    if (delayMs > 0) delay(delayMs)
+                    try {
+                        val page = _ui.value.page
+                        val items = fetchFromTmdb(f, page)
+                        _ui.update {
+                            it.copy(
+                                // Deduplicate: TMDB ranked pages can overlap when rankings shift
+                                // between calls. associateBy keeps the freshest entry per tmdbId.
+                                results       = (it.results + items)
+                                    .associateBy { item -> item.id }
+                                    .values.toList(),
+                                page          = page,
+                                isLoading     = false,
+                                isLoadingMore = false,
+                                hasMore       = items.isNotEmpty(),
+                            )
+                        }
+                        return@launch
+                    } catch (e: Exception) {
+                        lastException = e
+                    }
+                }
+                // All retries exhausted
+                if (cacheMore.isNotEmpty()) {
+                    // Show what cache gave us, swallow TMDB error silently
+                    _ui.update {
+                        it.copy(
+                            results       = (it.results + cacheMore)
+                                .associateBy { item -> item.id }.values.toList(),
+                            isLoading     = false,
+                            isLoadingMore = false,
+                            hasMore       = false,
+                        )
+                    }
+                } else {
+                    // Nothing to show at all — show a dismissable error, no crash
+                    _ui.update {
+                        it.copy(
+                            isLoading     = false,
+                            isLoadingMore = false,
+                            error         = friendlyExploreError(lastException!!),
+                        )
+                    }
+                }
             }
         }
     }
 
+    /** Execute the TMDB discover call for the given filters and page. */
+    private suspend fun fetchFromTmdb(f: ExploreFilters, page: Int): List<Media> =
+        if (f.mediaType == "MOVIE") {
+            repo.discoverMoviesAdvanced(
+                genreIds      = f.genreIds.toList(),
+                sortBy        = f.sortBy,
+                page          = page,
+                language      = f.language,
+                originCountry = f.originCountry,
+                yearFrom      = f.yearFrom,
+                yearTo        = f.yearTo,
+                ratingFrom    = f.ratingFrom,
+                minVotes      = if (f.sortBy == "vote_average.desc") 200 else null,
+                runtimeFrom   = f.runtimeFrom,
+                runtimeTo     = f.runtimeTo,
+            )
+        } else {
+            repo.discoverTvAdvanced(
+                genreIds      = f.genreIds.toList(),
+                sortBy        = f.sortBy,
+                page          = page,
+                language      = f.language,
+                originCountry = f.originCountry,
+                yearFrom      = f.yearFrom,
+                yearTo        = f.yearTo,
+                ratingFrom    = f.ratingFrom,
+                minVotes      = if (f.sortBy == "vote_average.desc") 200 else null,
+            )
+        }
+
     fun loadMore() {
         val st = _ui.value
         if (st.isLoading || st.isLoadingMore || !st.hasMore) return
-        // Atomically flip isLoadingMore and bump the page in a single update so
-        // a second call that arrives before recomposition sees isLoadingMore=true
-        // and bails out at the guard above, preventing a double page-increment.
+        // Atomically flip isLoadingMore and bump the page so a second call that arrives
+        // before recomposition sees isLoadingMore=true and bails out.
         _ui.update { it.copy(isLoadingMore = true, page = it.page + 1) }
         runQuery(resetPage = false)
     }
@@ -210,8 +380,18 @@ class ExploreViewModel @Inject constructor(
         runQuery()
     }
 
+    /**
+     * Mood preset — always serves cache first (instant, no spinner), then patches silently.
+     * Mood presets use only filters the cache can answer, so cache hits are near-certain
+     * after the first app session.
+     */
     fun applyMood(preset: MoodPreset) {
-        _ui.update { it.copy(filters = preset.apply(ExploreFilters(mediaType = it.filters.mediaType)), activeMood = preset.label) }
+        _ui.update {
+            it.copy(
+                filters    = preset.apply(ExploreFilters(mediaType = it.filters.mediaType)),
+                activeMood = preset.label,
+            )
+        }
         runQuery()
     }
 
@@ -220,6 +400,7 @@ class ExploreViewModel @Inject constructor(
         runQuery()
     }
 }
+
 
 @Composable
 fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
@@ -254,6 +435,35 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
             }
             Spacer(Modifier.weight(1f))
             Icon(IconCompass, null, tint = Brand.copy(.8f), modifier = Modifier.size(d.iconLg))
+        }
+
+        // ── Background-refresh indicator — thin animated sweep under header ─
+        // Visible only when cache is displayed and TMDB is silently patching it.
+        // Mirrors the BrowseScreen indicator: 2dp line, barely intrusive.
+        if (ui.isBackgroundRefreshing) {
+            val inf   = androidx.compose.animation.core.rememberInfiniteTransition(label = "exploreRefresh")
+            val sweep by inf.animateFloat(
+                0f, 1f,
+                androidx.compose.animation.core.infiniteRepeatable(
+                    androidx.compose.animation.core.tween(1400,
+                        easing = androidx.compose.animation.core.LinearEasing)
+                ),
+                label = "exploreSweep",
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.horizontalGradient(
+                            colorStops = arrayOf(
+                                (sweep - 0.35f).coerceIn(0f, 1f) to androidx.compose.ui.graphics.Color.Transparent,
+                                sweep.coerceIn(0f, 1f)           to Brand.copy(0.9f),
+                                (sweep + 0.35f).coerceIn(0f, 1f) to androidx.compose.ui.graphics.Color.Transparent,
+                            )
+                        )
+                    )
+            )
         }
 
         // ── Movie / TV switch — primary axis, large and obvious ─────────────
@@ -322,9 +532,11 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
         Spacer(Modifier.height(d.spaceMd))
 
         // ── Results grid ───────────────────────────────────────────────────
+        // isLoading = true only when cache was empty AND TMDB hasn't returned yet.
+        // isBackgroundRefreshing = true means cache is shown, TMDB is patching — no spinner.
         when {
-            ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerLg, color = Brand) }
-            ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.applyMood(moodPresets[4]) })
+            ui.isLoading && !ui.isBackgroundRefreshing -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerLg, color = Brand) }
+            ui.error != null && ui.results.isEmpty() -> ErrorState(ui.error!!, onRetry = { vm.applyMood(moodPresets[4]) })
             ui.results.isEmpty() -> ExploreEmptyState(onClear = vm::clearFilters)
             else -> {
                 val gridState = rememberLazyGridState()
@@ -342,18 +554,23 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
                     verticalArrangement   = Arrangement.spacedBy(d.spaceMd),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(ui.results, key = { it.tmdbId }) { m ->
+                    items(ui.results, key = { it.id }) { m ->
                         MediaPosterCard(
                             media   = m,
-                            onClick = { nav.navigate(Route.Detail.go(m.tmdbId, m.mediaType)) },
+                            onClick = { nav.navigate(Route.Detail.go(m.id, m.mediaType)) },
                             modifier = Modifier.aspectRatio(0.65f),
                         )
                     }
+                    // ── Infinite scroll: skeleton grid cards while TMDB loads next page ──
+                    // Three skeleton cards (one full row) shimmer independently with
+                    // staggered phase offsets — gives a ripple-wave feel without
+                    // jarring the user with a spinner that hides what's coming next.
                     if (ui.isLoadingMore) {
-                        item(span = { GridItemSpan(3) }) {
-                            Box(Modifier.fillMaxWidth().padding(vertical = d.spaceLg - d.spaceXxs), Alignment.Center) {
-                                CinematicSpinner(size = d.spinnerMd, color = Brand)
-                            }
+                        items(3, key = { "skGrid_$it" }) { idx ->
+                            SkeletonGridCard(
+                                modifier = Modifier.aspectRatio(0.65f),
+                                phaseOffset = idx * 0.33f,
+                            )
                         }
                     }
                     item(span = { GridItemSpan(3) }) { Spacer(Modifier.height(d.avatarLg + d.spaceLg)) }

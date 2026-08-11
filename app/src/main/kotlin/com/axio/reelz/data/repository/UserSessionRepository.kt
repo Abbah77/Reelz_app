@@ -2,234 +2,138 @@ package com.axio.reelz.data.repository
 
 import android.util.Log
 import com.axio.reelz.data.local.UserSessionDao
+import com.axio.reelz.data.local.UserSessionRow
 import com.axio.reelz.data.model.UserSession
-import com.axio.reelz.remoteconfig.PremiumGate
-import com.axio.reelz.remoteconfig.RemoteConfigRepository
-import java.util.UUID
+import com.axio.reelz.data.remote.api.GoogleAuthBody
+import com.axio.reelz.data.remote.api.ReelzApi
+import com.axio.reelz.network.NetworkResult
+import com.axio.reelz.network.safeApiCall
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private const val TAG = "UserSessionRepo"
-
-/**
- * Contract for resolving subscription status given a user's email.
- * Production binding: [BackendSessionSource] (talks to FastAPI backend).
- * Legacy / fallback binding: [ManualGrantSessionSource] (reads config.json).
- * Swap the binding in AppModule only — nothing else changes.
- */
-interface SessionSource {
-    suspend fun fetch(email: String): Grant?
-
-    data class Grant(
-        val isPremium: Boolean,
-        val plan: String,
-        val expiresAtMs: Long,
-    )
-}
-
-/**
- * Legacy implementation: reads manual_grants from RemoteConfigRepository.
- * Kept as a safe fallback. Production uses [BackendSessionSource] instead.
- */
-@Singleton
-class ManualGrantSessionSource @Inject constructor(
-    private val remoteConfig: RemoteConfigRepository,
-) : SessionSource {
-    override suspend fun fetch(email: String): SessionSource.Grant? {
-        if (email.isBlank()) return null
-        val grant = remoteConfig.premiumConfig().manualGrants
-            .firstOrNull { it.email.trim().equals(email.trim(), ignoreCase = true) }
-            ?: return null
-        if (grant.expiresAtMs <= 0L) return null
-        return SessionSource.Grant(
-            isPremium   = true,
-            plan        = grant.plan,
-            expiresAtMs = grant.expiresAtMs,
-        )
-    }
-}
-
-/**
- * UserSessionRepository
- * ─────────────────────
- * The heart of the premium system. Local-first by design:
- *
- *   1. COLD START      → load from local Room instantly, update UI,
- *                        then refresh in background (only if cache is stale).
- *   2. SIGN-IN         → save basic profile to show name/avatar instantly,
- *                        exchange id_token with backend (background), update session.
- *   3. SIGN-OUT        → clear local state, reset PremiumGate to GUEST.
- *   4. MANUAL REFRESH  → user taps "Refresh status" after paying.
- *
- * Rules:
- *   - ONLY this class calls out for premium status. PremiumGate is the
- *     single in-memory source of truth; every screen reads PremiumGate.
- *   - Any failure fails SAFE toward FREE, never toward premium.
- *   - Backend is hit at most: once on sign-in, once on manual refresh,
- *     once per 24 h on launch. Never per-screen.
- */
 @Singleton
 class UserSessionRepository @Inject constructor(
-    private val dao: UserSessionDao,          // Room — single source of truth
-    private val sessionSource: SessionSource,
-    private val backendAuth: BackendAuthRepository,
-    private val premiumGate: PremiumGate,
+    private val api: ReelzApi,
+    private val dao: UserSessionDao,
 ) {
-    /**
-     * The session currently held in PremiumGate's memory — read by ViewModels
-     * that need name/email/photoUrl, not just the isPremium() boolean.
-     * Always a fast in-memory read.
-     */
-    fun currentSessionOrNull(): UserSession? = premiumGate.currentSession()
+    private val tag = "UserSessionRepository"
 
-    /**
-     * Call once from Application.onCreate(). Reads Room only — never touches
-     * the network. Sets PremiumGate so every screen has a state before any
-     * background work starts.
-     *
-     * UserSessionStore (DataStore) removed — Room is the single source of truth.
-     * The DataStore file (reelz_user_session) is no longer written or read.
-     */
-    suspend fun loadLocalSession() {
-        val cached = dao.get()
-        premiumGate.update(cached)
-        Log.d(TAG, "Loaded local session: premium=${cached?.isPremium} uid=${cached?.uid?.take(8)}")
+    private val _session = MutableStateFlow<UserSession?>(null)
+    val session: StateFlow<UserSession?> = _session.asStateFlow()
+
+    val isPremium: Boolean get() = _session.value?.isPremium == true
+    val accessToken: String get() = _session.value?.let { "Bearer ${it.uid}" } ?: ""
+
+    // ── Init — load from Room on app start ────────────────────────────────────
+
+    suspend fun init() = withContext(Dispatchers.IO) {
+        val row = dao.get()
+        if (row != null) {
+            _session.value = row.toModel()
+            Log.d(tag, "Session loaded: uid=${row.uid.take(8)} premium=${row.isPremium}")
+            // Background refresh if token is stale (> 24h)
+            if (row.isTokenStale()) {
+                refreshSession()
+            }
+        }
     }
 
-    /**
-     * Called right after Google sign-in succeeds.
-     *
-     * 1. Save name/avatar/email immediately → UI updates with zero delay.
-     * 2. Exchange id_token with backend (background, non-blocking for UI).
-     *    - Backend returns a stable user_id (UUID) + subscription status.
-     *    - We store that UUID as our uid — it survives email changes.
-     * 3. If backend is unreachable, fall back to sessionSource (config grants).
-     *
-     * @param idToken The raw Google id_token from CredentialManager — sent to
-     *                the backend for server-side verification. Not stored locally.
-     */
-    suspend fun onSignedIn(
-        idToken: String?,
+    // ── Google sign-in ────────────────────────────────────────────────────────
+
+    suspend fun signInWithGoogle(
+        idToken: String,
         name: String,
         email: String,
         photoUrl: String?,
-    ) {
-        // Step 1: show profile immediately
-        val tempUid = stableUidForEmail(email)
-        val basicSession = UserSession(
-            uid        = tempUid,
-            name       = name,
-            email      = email,
-            photoUrl   = photoUrl,
-            cachedAtMs = System.currentTimeMillis(),
+    ): NetworkResult<UserSession> = withContext(Dispatchers.IO) {
+        // Save profile immediately so UI updates without waiting for backend
+        val tempRow = UserSessionRow(
+            uid      = "temp:${email.lowercase()}",
+            name     = name,
+            email    = email,
+            photoUrl = photoUrl,
         )
-        dao.upsert(basicSession)   // Room only — DataStore removed
-        premiumGate.update(basicSession)
-        Log.i(TAG, "Sign-in: profile saved instantly for ${email.take(6)}...")
+        dao.upsert(tempRow)
+        _session.value = tempRow.toModel()
 
-        // Step 2: exchange token with backend (background)
-        if (!idToken.isNullOrBlank()) {
-            val authResult = try {
-                backendAuth.exchangeToken(idToken)
-            } catch (e: Exception) {
-                Log.e(TAG, "Backend auth failed: ${e.message}")
-                null
-            }
-
-            if (authResult != null) {
-                // Backend gave us a real UUID — use it as the canonical uid.
-                // Prefix "backend:" so BackendSessionSource can recognize it.
-                val backendUid = "backend:${authResult.userId}"
-                val resolved = UserSession(
-                    uid            = backendUid,
-                    name           = name,
-                    email          = email,
-                    photoUrl       = photoUrl,
-                    isPremium      = authResult.isPremium,
-                    plan           = authResult.status,
-                    expiresAtMs    = authResult.expiresAtMs,
-                    subscribedAtMs = if (authResult.isPremium) System.currentTimeMillis() else 0L,
-                    cachedAtMs     = System.currentTimeMillis(),
+        // Exchange token with backend
+        val result = safeApiCall(tag) { api.authWithGoogle(GoogleAuthBody(idToken)) }
+        when (result) {
+            is NetworkResult.Success -> {
+                val dto = result.data
+                if (!dto.ok || dto.userId.isBlank()) {
+                    return@withContext NetworkResult.Error("Auth failed: no user ID returned")
+                }
+                val row = UserSessionRow(
+                    uid          = dto.userId,
+                    name         = dto.name.ifBlank { name },
+                    email        = dto.email.ifBlank { email },
+                    photoUrl     = dto.photoUrl ?: photoUrl,
+                    accessToken  = dto.accessToken,
+                    isPremium    = dto.premium,
+                    plan         = dto.status,
+                    expiresAtMs  = dto.expiresAtMs,
                 )
-                dao.upsert(resolved)   // Room only
-                premiumGate.update(resolved)
-                Log.i(TAG, "Backend session resolved: premium=${authResult.isPremium}")
-                return
+                dao.clear()
+                dao.upsert(row)
+                _session.value = row.toModel()
+                Log.i(tag, "Signed in: uid=${dto.userId.take(8)} premium=${dto.premium}")
+                NetworkResult.Success(row.toModel())
+            }
+            is NetworkResult.Error -> {
+                Log.w(tag, "Backend auth failed: ${result.message} — keeping temp session")
+                // Keep the temp session so the user isn't stuck
+                NetworkResult.Success(_session.value!!, fromCache = true)
+            }
+            else -> result.map { _session.value!! }
+        }
+    }
+
+    // ── Refresh session (background, after payment) ───────────────────────────
+
+    suspend fun refreshSession() = withContext(Dispatchers.IO) {
+        val token = dao.get()?.accessToken?.takeIf { it.isNotBlank() } ?: return@withContext
+        val result = safeApiCall(tag) { api.refreshSession("Bearer $token") }
+        if (result is NetworkResult.Success) {
+            val dto = result.data
+            if (dto.ok && dto.userId.isNotBlank()) {
+                val current = dao.get() ?: return@withContext
+                val updated = current.copy(
+                    isPremium   = dto.premium,
+                    plan        = dto.status,
+                    expiresAtMs = dto.expiresAtMs,
+                    cachedAtMs  = System.currentTimeMillis(),
+                )
+                dao.upsert(updated)
+                _session.value = updated.toModel()
+                Log.d(tag, "Session refreshed: premium=${dto.premium}")
             }
         }
-
-        // Step 3: backend unreachable — fall back to config.json manual grants
-        Log.w(TAG, "Backend unreachable at sign-in — falling back to config grants")
-        refreshFromSource(tempUid, name, email, photoUrl)
     }
 
-    /**
-     * Backward-compatible overload for callers that don't have the id_token
-     * (e.g. the legacy ProfileScreen flow before the CredentialManager upgrade).
-     * Falls straight to the config-grant fallback.
-     */
-    suspend fun onSignedIn(name: String, email: String, photoUrl: String?) {
-        onSignedIn(idToken = null, name = name, email = email, photoUrl = photoUrl)
+    // ── Sign out ──────────────────────────────────────────────────────────────
+
+    suspend fun signOut() = withContext(Dispatchers.IO) {
+        dao.clear()
+        _session.value = null
+        Log.i(tag, "Signed out")
     }
 
-    /**
-     * Re-checks subscription status from the source of truth.
-     * Called:
-     *   • In background on app launch if cache is >24 h stale (caller decides when).
-     *   • When user taps "I've paid — refresh status" on PremiumScreen.
-     *
-     * BackendSessionSource handles its own 24 h cache check internally, so
-     * callers don't need to throttle this themselves.
-     */
-    suspend fun refreshCurrentSession() {
-        val current = dao.get() ?: return   // Room only
-        Log.d(TAG, "Refreshing session for uid=${current.uid.take(8)}...")
-        refreshFromSource(current.uid, current.name, current.email, current.photoUrl)
-    }
+    // ── Mappers ───────────────────────────────────────────────────────────────
 
-    private suspend fun refreshFromSource(
-        uid: String,
-        name: String,
-        email: String,
-        photoUrl: String?,
-    ) {
-        val grant = try {
-            sessionSource.fetch(email)
-        } catch (e: Exception) {
-            Log.e(TAG, "SessionSource.fetch failed: ${e.message}")
-            null // fail safe toward free
-        }
-
-        val resolved = UserSession(
-            uid            = uid,
-            name           = name,
-            email          = email,
-            photoUrl       = photoUrl,
-            isPremium      = grant?.isPremium ?: false,
-            plan           = grant?.plan ?: "",
-            expiresAtMs    = grant?.expiresAtMs ?: 0L,
-            subscribedAtMs = if (grant != null) System.currentTimeMillis() else 0L,
-            cachedAtMs     = System.currentTimeMillis(),
-        )
-
-        dao.upsert(resolved)   // Room only — DataStore removed
-        premiumGate.update(resolved)
-        Log.d(TAG, "Session refreshed: premium=${resolved.isPremium}")
-    }
-
-    suspend fun signOut() {
-        dao.clear()            // Room only
-        premiumGate.update(null)
-        Log.i(TAG, "Signed out — session cleared")
-    }
-
-    /**
-     * Derives a temporary stable uid from the email for the period between
-     * sign-in and backend response. The backend call replaces this with a real
-     * UUID prefixed "backend:". If the backend is never reachable, this
-     * email-based uid is used as a fallback (matches legacy manual_grants logic).
-     */
-    private fun stableUidForEmail(email: String): String =
-        if (email.isBlank()) UUID.randomUUID().toString()
-        else "email:${email.trim().lowercase()}"
+    private fun UserSessionRow.toModel() = UserSession(
+        uid         = uid,
+        name        = name,
+        email       = email,
+        photoUrl    = photoUrl,
+        isPremium   = isPremium,
+        plan        = plan,
+        expiresAtMs = expiresAtMs,
+        cachedAtMs  = cachedAtMs,
+    )
 }

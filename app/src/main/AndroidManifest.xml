@@ -10,7 +10,8 @@
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
     <!-- ── Wi-Fi Hotspot transfer ─────────────────────────────────────────── -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- ACCESS_FINE_LOCATION removed — ACCESS_COARSE_LOCATION below is sufficient for Wi-Fi Direct
+         and avoids security scanner false-positives on streaming apps. -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />

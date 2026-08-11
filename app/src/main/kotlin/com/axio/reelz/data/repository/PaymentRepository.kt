@@ -2,7 +2,8 @@ package com.axio.reelz.data.repository
 
 import android.util.Log
 import com.axio.reelz.data.local.UserSessionDao
-import com.axio.reelz.remoteconfig.RemoteConfigRepository
+import com.axio.reelz.data.remote.api.ReelzApi
+import com.axio.reelz.data.repository.ConfigRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -17,25 +18,18 @@ import javax.inject.Singleton
 private const val TAG = "PaymentRepository"
 
 /**
- * PaymentRepository
- * ─────────────────
- * Calls POST /payments/init on the backend to initialise a Paystack transaction.
+ * PaymentRepository — server-side Paystack transaction init.
  *
- * Why server-side init:
- *   - The backend embeds user_id in the transaction metadata.
- *   - The webhook uses that metadata to identify which user paid.
- *   - Amount is set server-side — cannot be tampered by the client.
+ * The backend initialises the transaction (embeds user_id in metadata),
+ * returns a one-time authorization_url, and handles the webhook that
+ * activates the subscription. The client just opens the URL in the browser.
  *
- * Fallback: if initPayment() fails (backend unreachable), caller opens the
- * static Paystack link from config. The webhook still fires and activates the
- * subscription server-side — no payment is lost.
- *
- * Source of truth: UserSessionDao (Room). UserSessionStore (DataStore) removed.
+ * Falls back to the static Paystack link from config if the backend is down.
  */
 @Singleton
 class PaymentRepository @Inject constructor(
-    private val remoteConfig: RemoteConfigRepository,
-    private val sessionDao: UserSessionDao,   // Room — single source of truth
+    private val configRepo: ConfigRepository,
+    private val sessionDao: UserSessionDao,
 ) {
     private val http = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
@@ -43,50 +37,30 @@ class PaymentRepository @Inject constructor(
         .build()
 
     sealed class InitResult {
-        /** Backend created the transaction — open this URL in the browser sheet. */
         data class Success(val authorizationUrl: String, val reference: String) : InitResult()
-        /** Backend unreachable — caller should open the static fallback URL. */
         data class FallbackToStaticLink(val reason: String) : InitResult()
-        /** Permanent error (e.g. user not signed in, plan unknown). */
         data class Error(val message: String) : InitResult()
     }
 
-    /**
-     * Initialise a Paystack transaction for [plan] ("monthly" | "yearly").
-     *
-     * Returns [InitResult.Success] with a one-time authorization_url on success.
-     * Returns [InitResult.FallbackToStaticLink] if the backend is unreachable,
-     * so the caller can open the static Paystack payment page from config.
-     */
     suspend fun initPayment(plan: String): InitResult = withContext(Dispatchers.IO) {
-
-        // ── 1. Resolve user session from Room ─────────────────────────────
         val session = sessionDao.get()
-        if (session == null) {
-            return@withContext InitResult.Error("Sign in before subscribing.")
-        }
+            ?: return@withContext InitResult.Error("Sign in before subscribing.")
 
-        // Strip the "backend:" prefix stored at sign-in to get the raw UUID.
-        val rawUid = session.uid.removePrefix("backend:").removePrefix("email:")
-        if (rawUid.isBlank() || rawUid.contains("@")) {
-            // Still a legacy email-based uid — user hasn't signed in against the
-            // new backend yet. Fall back to the static link.
-            Log.w(TAG, "Legacy uid — falling back to static Paystack link")
+        val uid = session.uid.removePrefix("backend:").removePrefix("temp:")
+            .removePrefix("email:")
+        if (uid.isBlank() || uid.contains("@")) {
             return@withContext InitResult.FallbackToStaticLink(
-                "Sign out and sign in again to link your account."
+                "Sign out and sign back in to link your account."
             )
         }
 
-        // ── 2. Resolve backend URL from config ────────────────────────────
-        val backendUrl = remoteConfig.backendConfig().normalizedUrl
-        if (backendUrl.isBlank()) {
-            Log.w(TAG, "No backend_url in config — falling back to static link")
+        val backendUrl = configRepo.backendUrl().trimEnd('/')
+        if (backendUrl.isBlank() || backendUrl == "https://your-vps.example.com") {
             return@withContext InitResult.FallbackToStaticLink("Backend not configured.")
         }
 
-        // ── 3. POST /payments/init ────────────────────────────────────────
         val body = JSONObject().apply {
-            put("user_id", rawUid)
+            put("user_id", uid)
             put("plan", plan)
             put("email", session.email)
         }.toString().toRequestBody("application/json".toMediaType())
@@ -98,28 +72,24 @@ class PaymentRepository @Inject constructor(
 
         return@withContext try {
             val response = http.newCall(request).execute()
-
             if (!response.isSuccessful) {
-                val code = response.code
-                Log.w(TAG, "payments/init returned $code — falling back to static link")
-                return@withContext InitResult.FallbackToStaticLink("Server error $code.")
+                return@withContext InitResult.FallbackToStaticLink("Server error ${response.code}.")
             }
-
             val json = JSONObject(response.body?.string() ?: "")
             val url  = json.optString("authorization_url", "")
             val ref  = json.optString("reference", "")
-
             if (url.isBlank()) {
-                Log.e(TAG, "payments/init returned no authorization_url")
                 return@withContext InitResult.FallbackToStaticLink("No checkout URL returned.")
             }
-
             Log.i(TAG, "payments/init OK: ref=$ref")
-            InitResult.Success(authorizationUrl = url, reference = ref)
-
+            InitResult.Success(url, ref)
         } catch (e: Exception) {
-            Log.e(TAG, "payments/init network error: ${e.message}")
-            InitResult.FallbackToStaticLink("Network error: ${e.message}")
+            Log.e(TAG, "payments/init error: ${e.message}")
+            InitResult.FallbackToStaticLink("Network error.")
         }
     }
+
+    // Convenience: static fallback URLs from config
+    fun staticMonthlyUrl(): String = configRepo.current().premium.paystackMonthlyUrl
+    fun staticYearlyUrl(): String  = configRepo.current().premium.paystackYearlyUrl
 }

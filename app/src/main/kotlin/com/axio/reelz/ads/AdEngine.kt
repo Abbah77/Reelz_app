@@ -14,9 +14,8 @@ import com.applovin.mediation.ads.MaxRewardedAd
 import com.applovin.sdk.AppLovinSdk
 import com.applovin.sdk.AppLovinSdkConfiguration
 import com.applovin.sdk.AppLovinSdkSettings
-import com.axio.reelz.remoteconfig.AdNetwork
-import com.axio.reelz.remoteconfig.PremiumGate
-import com.axio.reelz.remoteconfig.RemoteConfigRepository
+import com.axio.reelz.data.repository.ConfigRepository
+import com.axio.reelz.data.repository.UserSessionRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -54,8 +53,8 @@ sealed class NativeAdState {
 
 @Singleton
 class AdEngine @Inject constructor(
-    private val remoteConfig: RemoteConfigRepository,
-    private val premiumGate: PremiumGate,
+    private val configRepo: ConfigRepository,
+    private val sessionRepo: UserSessionRepository,
     private val appPrefs: com.axio.reelz.data.local.AppPreferencesStore,
 ) {
 
@@ -106,8 +105,8 @@ class AdEngine @Inject constructor(
     // Config helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun adsConfig() = remoteConfig.adsConfig()
-    private fun network(): AdNetwork? = remoteConfig.activeAdNetwork()
+    private fun adsConfig() = configRepo.adsConfig()
+    private fun network(): AdNetwork? = configRepo.activeAdNetwork()
 
     /**
      * True only when the remote config master switch, the feature flag, AND the
@@ -116,7 +115,7 @@ class AdEngine @Inject constructor(
      * open, pre-roll) already calls through — see the functions below — so
      * premium stopping ads is a one-line change, exactly as designed.
      */
-    private fun adsEnabled(): Boolean = remoteConfig.areAdsEnabled(isPremiumUser = premiumGate.isPremium())
+    private fun adsEnabled(): Boolean = configRepo.areAdsEnabled(isPremiumUser = sessionRepo.isPremium)
 
     /**
      * Public read for UI surfaces (feed banners, etc.) that want to offer an

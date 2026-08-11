@@ -25,6 +25,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
 import com.axio.reelz.BuildConfig
 import com.axio.reelz.data.model.*
 import com.axio.reelz.ui.theme.*
@@ -804,12 +807,28 @@ fun MediaPosterCard(
                 .border(d.borderThin, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(d.radiusMd))
                 .background(BgRaised)
         ) {
-            AsyncImage(
+            // SubcomposeAsyncImage: each card independently manages its own image state.
+            // Cards show their own skeleton shimmer while Coil fetches the poster —
+            // no "dump all grey boxes at once" — each card transitions on its own timeline.
+            SubcomposeAsyncImage(
                 model = BuildConfig.TMDB_IMG_W342 + media.posterPath,
                 contentDescription = media.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-            )
+            ) {
+                when (painter.state) {
+                    is AsyncImagePainter.State.Loading,
+                    is AsyncImagePainter.State.Empty -> PosterSkeletonShimmer(Modifier.fillMaxSize())
+                    is AsyncImagePainter.State.Error -> Box(
+                        Modifier.fillMaxSize().background(BgRaised),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd))
+                    }
+                    else -> SubcomposeAsyncImageContent()
+                }
+            }
+            // Gradient scrim — applied on top of the image for bottom-text legibility
             Box(Modifier.fillMaxSize().background(
                 Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color(0xCC05050A))
             ))
@@ -899,12 +918,19 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
                 .border(d.borderThin, if (pressed) BlueBorder else GlassBorder, RoundedCornerShape(d.radiusMd))
                 .background(BgRaised)
         ) {
-            AsyncImage(
+            SubcomposeAsyncImage(
                 model = BuildConfig.TMDB_IMG_W342 + media.posterPath,
                 contentDescription = media.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-            )
+            ) {
+                when (painter.state) {
+                    is AsyncImagePainter.State.Loading,
+                    is AsyncImagePainter.State.Empty -> PosterSkeletonShimmer(Modifier.fillMaxSize())
+                    is AsyncImagePainter.State.Error -> Box(Modifier.fillMaxSize().background(BgRaised))
+                    else -> SubcomposeAsyncImageContent()
+                }
+            }
             Box(Modifier.fillMaxSize().background(
                 Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color(0xDD05050A))
             ))
@@ -1073,6 +1099,41 @@ fun SkeletonRowLoader() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Skeleton grid card — used in Explore 3-column grid while loading more.
+// Each skeleton card matches the aspect ratio of a real poster card (0.65f).
+// Staggered animation phase gives a ripple-wave feel without needing a
+// coordinator — each card independently animates with a small offset delay.
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun SkeletonGridCard(modifier: Modifier = Modifier, phaseOffset: Float = 0f) {
+    val inf = rememberInfiniteTransition(label = "skGrid")
+    val offset by inf.animateFloat(
+        initialValue  = -1.5f + phaseOffset,
+        targetValue   = 2.5f  + phaseOffset,
+        animationSpec = infiniteRepeatable(tween(1050, easing = LinearEasing)),
+        label         = "skGridOff",
+    )
+    val shimmerBrush = Brush.linearGradient(
+        colorStops = arrayOf(
+            0f to BgRaised,
+            (offset * 0.4f + 0.3f).coerceIn(0f, 1f) to BgSurface,
+            1f to BgRaised,
+        ),
+        start = Offset.Zero,
+        end   = Offset(Float.POSITIVE_INFINITY, 0f),
+    )
+    val d = LocalDimensions.current
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
+        Box(
+            Modifier.fillMaxWidth().weight(1f)
+                .clip(RoundedCornerShape(d.radiusMd)).background(shimmerBrush)
+        )
+        Box(Modifier.fillMaxWidth(0.85f).height(d.spaceSm + d.spaceXxs).clip(RoundedCornerShape(d.spaceXs)).background(shimmerBrush))
+        Box(Modifier.fillMaxWidth(0.6f).height(d.spaceSm).clip(RoundedCornerShape(d.spaceXs)).background(shimmerBrush))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Premium cinematic loading spinner (kept for reuse)
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
@@ -1234,6 +1295,35 @@ fun DragHandle(modifier: Modifier = Modifier) {
                 .background(Brush.horizontalGradient(listOf(Brand.copy(.4f), Brand2.copy(.4f), Brand.copy(.4f))))
         )
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-poster skeleton shimmer — used inside SubcomposeAsyncImage loading state.
+// This is the "luxury" loading feel: each card shimmers independently so
+// you never see a sudden dump of grey boxes — cards reveal individually.
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun PosterSkeletonShimmer(modifier: Modifier = Modifier) {
+    val inf = rememberInfiniteTransition(label = "posterSk")
+    val offset by inf.animateFloat(
+        initialValue   = -1.5f,
+        targetValue    = 2.5f,
+        animationSpec  = infiniteRepeatable(tween(1100, easing = LinearEasing)),
+        label          = "posterSkOff",
+    )
+    Box(
+        modifier = modifier.background(
+            Brush.linearGradient(
+                colorStops = arrayOf(
+                    0f                                to BgRaised,
+                    (offset * 0.4f + 0.3f).coerceIn(0f, 1f) to BgSurface,
+                    1f                                to BgRaised,
+                ),
+                start = Offset.Zero,
+                end   = Offset(Float.POSITIVE_INFINITY, 0f),
+            )
+        )
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

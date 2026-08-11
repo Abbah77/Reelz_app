@@ -37,11 +37,8 @@ import androidx.navigation.NavController
 import com.axio.reelz.ads.ReelzBrowserSheet
 import com.axio.reelz.data.repository.PaymentRepository
 import com.axio.reelz.data.repository.UserSessionRepository
-import com.axio.reelz.remoteconfig.PremiumConfig
-import com.axio.reelz.remoteconfig.PremiumGate
-import com.axio.reelz.remoteconfig.RemoteConfigRepository
-import com.axio.reelz.remoteconfig.TierConfig
-import com.axio.reelz.remoteconfig.UserState
+import com.axio.reelz.data.repository.ConfigRepository
+import com.axio.reelz.data.repository.UserSessionRepository
 import com.axio.reelz.ui.components.BrandButton
 import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -76,8 +73,8 @@ private val IconX: ImageVector get() = ImageVector.Builder("X", 24.dp, 24.dp, 24
 
 @HiltViewModel
 class PremiumViewModel @Inject constructor(
-    private val remoteConfig: RemoteConfigRepository,
-    private val premiumGate: PremiumGate,
+    private val configRepo: ConfigRepository,
+    private val sessionRepo: UserSessionRepository,
     private val userSessionRepository: UserSessionRepository,
     private val paymentRepository: PaymentRepository,
 ) : ViewModel() {
@@ -102,18 +99,18 @@ class PremiumViewModel @Inject constructor(
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     init {
-        val tiers = remoteConfig.tiersConfig()
+        val tiers = configRepo.tiersConfig()
         _ui.update {
             it.copy(
                 freeTier          = tiers.free,
                 premiumTier       = tiers.premium,
-                premiumConfig     = remoteConfig.premiumConfig(),
-                backendConfigured = remoteConfig.backendConfig().backendUrl.isNotBlank(),
+                premiumConfig     = configRepo.premiumConfig(),
+                backendConfigured = configRepo.current().backendUrl.isNotBlank(),
             )
         }
         viewModelScope.launch {
-            premiumGate.state.collect { state ->
-                _ui.update { it.copy(userState = state, daysUntilExpiry = premiumGate.daysUntilExpiry()) }
+            sessionRepo.state.collect { state ->
+                _ui.update { it.copy(userState = state, daysUntilExpiry = sessionRepo.daysUntilExpiry()) }
             }
         }
     }
@@ -151,8 +148,8 @@ class PremiumViewModel @Inject constructor(
                     // Backend unreachable — use the static link from config so the
                     // user is never blocked from paying.
                     val staticUrl = when (plan) {
-                        "yearly"  -> remoteConfig.premiumConfig().paystackYearlyUrl
-                        else      -> remoteConfig.premiumConfig().paystackMonthlyUrl
+                        "yearly"  -> configRepo.premiumConfig().paystackYearlyUrl
+                        else      -> configRepo.premiumConfig().paystackMonthlyUrl
                     }
                     if (staticUrl.isNotBlank()) {
                         _ui.update {
@@ -191,7 +188,7 @@ class PremiumViewModel @Inject constructor(
         viewModelScope.launch {
             _ui.update { it.copy(isRefreshing = true, refreshMessage = null) }
             userSessionRepository.refreshCurrentSession()
-            val became = premiumGate.isPremium()
+            val became = sessionRepo.isPremium
             _ui.update {
                 it.copy(
                     isRefreshing   = false,

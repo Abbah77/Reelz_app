@@ -56,8 +56,8 @@ sealed class Route(val path: String) {
     object Search          : Route("search")
     object Premium         : Route("premium")
     object Settings        : Route("settings")
-    object Detail          : Route("detail/{tmdbId}/{mediaType}") {
-        fun go(id: Int, type: MediaType) = "detail/$id/${type.name}"
+    object Detail          : Route("detail/{id}/{mediaType}") {
+        fun go(id: String, type: MediaType) = "detail/$id/${type.name}"
     }
 }
 
@@ -179,13 +179,13 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
             composable(
                 route     = Route.Detail.path,
                 arguments = listOf(
-                    navArgument("tmdbId")    { type = NavType.IntType },
+                    navArgument("id")        { type = NavType.StringType },
                     navArgument("mediaType") { type = NavType.StringType },
                 ),
             ) { back ->
-                val id   = back.arguments?.getInt("tmdbId") ?: return@composable
+                val id   = back.arguments?.getString("id") ?: return@composable
                 val type = if (back.arguments?.getString("mediaType") == "TV") MediaType.TV else MediaType.MOVIE
-                DetailScreen(tmdbId = id, mediaType = type, nav = nav, adEngine = adEngine)
+                DetailScreen(id = id, mediaType = type, nav = nav, adEngine = adEngine)
             }
         }
     }

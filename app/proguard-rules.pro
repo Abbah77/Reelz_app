@@ -1,40 +1,52 @@
-# ── Kotlin ────────────────────────────────────────────────────────────────────
--keepattributes *Annotation*, InnerClasses, EnclosingMethod, Signature, Exceptions
--keepattributes SourceFile,LineNumberTable
--keep class kotlin.Metadata { *; }
--keep class kotlin.reflect.** { *; }
--keepclassmembers class kotlinx.** { *; }
+# ─────────────────────────────────────────────────────────────────────────────
+#  Reelz proguard-rules.pro — v3 (server-side edition)
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ── Hilt ──────────────────────────────────────────────────────────────────────
--keep class dagger.hilt.** { *; }
--keep class javax.inject.** { *; }
--keepclassmembers class * { @javax.inject.Inject <fields>; }
--keepclassmembers class * { @dagger.hilt.android.lifecycle.HiltViewModel <init>(...); }
+# ── Kotlin / Coroutines ───────────────────────────────────────────────────────
+-keep class kotlin.** { *; }
+-keepclassmembers class kotlin.** { *; }
+-dontwarn kotlin.**
+-keep class kotlinx.coroutines.** { *; }
 
-# ── Room ──────────────────────────────────────────────────────────────────────
--keep class * extends androidx.room.RoomDatabase
--keep @androidx.room.Entity class *
--keep @androidx.room.Dao class *
--keepclassmembers class * { @androidx.room.* <methods>; }
-
-# ── Retrofit / OkHttp ─────────────────────────────────────────────────────────
+# ── Retrofit + OkHttp ─────────────────────────────────────────────────────────
 -dontwarn okhttp3.**
--dontwarn retrofit2.**
+-dontwarn okio.**
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
 -keep class retrofit2.** { *; }
 -keepclassmembers,allowshrinking,allowobfuscation interface * {
     @retrofit2.http.* <methods>;
 }
 
-# ── Gson / data models ────────────────────────────────────────────────────────
--keep class com.google.gson.** { *; }
--keep class com.axio.reelz.data.model.** { *; }
+# ── Backend DTOs — must survive minification so Gson can deserialise them ─────
 -keep class com.axio.reelz.data.remote.dto.** { *; }
-# Remote config models parsed by Gson - must not be obfuscated
--keep class com.axio.reelz.remoteconfig.** { *; }
--keepclassmembers class com.axio.reelz.remoteconfig.** { *; }
--keepclassmembers class * {
-    @com.google.gson.annotations.SerializedName <fields>;
-}
+-keep class com.axio.reelz.data.remote.api.** { *; }
+
+# ── Domain models ─────────────────────────────────────────────────────────────
+-keep class com.axio.reelz.data.model.** { *; }
+
+# ── Room ──────────────────────────────────────────────────────────────────────
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
+-keep @androidx.room.Dao interface *
+-dontwarn androidx.room.**
+
+# ── Hilt ─────────────────────────────────────────────────────────────────────
+-keep class dagger.hilt.** { *; }
+-keep class javax.inject.** { *; }
+-keep class * extends dagger.hilt.android.internal.managers.ActivityComponentManager { *; }
+-dontwarn dagger.**
+-dontwarn hilt_aggregated_deps.**
+
+# ── Gson ──────────────────────────────────────────────────────────────────────
+-keep class com.google.gson.** { *; }
+-keepattributes Signature
+-keepattributes *Annotation*
+-dontwarn com.google.gson.**
+
+# ── Firebase / Crashlytics ────────────────────────────────────────────────────
+-keep class com.google.firebase.** { *; }
+-dontwarn com.google.firebase.**
 
 # ── Media3 / ExoPlayer ────────────────────────────────────────────────────────
 -keep class androidx.media3.** { *; }
@@ -44,11 +56,28 @@
 -keep class coil.** { *; }
 -dontwarn coil.**
 
-# ── Google Auth / Credentials ─────────────────────────────────────────────────
--keep class com.google.android.libraries.identity.** { *; }
--keep class androidx.credentials.** { *; }
+# ── WorkManager ───────────────────────────────────────────────────────────────
+-keep class androidx.work.** { *; }
+-keep class * extends androidx.work.Worker
+-keep class * extends androidx.work.CoroutineWorker
 
-# ── Suppress common warnings ──────────────────────────────────────────────────
--dontwarn com.google.errorprone.**
--dontwarn sun.misc.**
--dontwarn javax.annotation.**
+# ── Google Credentials / Auth ─────────────────────────────────────────────────
+-keep class com.google.android.gms.** { *; }
+-keep class androidx.credentials.** { *; }
+-dontwarn com.google.android.gms.**
+
+# ── AppLovin MAX ──────────────────────────────────────────────────────────────
+-keep class com.applovin.** { *; }
+-dontwarn com.applovin.**
+
+# ── Keep enum names (used in Room as strings) ─────────────────────────────────
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+# ── Suppress common noise warnings ────────────────────────────────────────────
+-dontwarn org.bouncycastle.**
+-dontwarn org.conscrypt.**
+-dontwarn org.openjsse.**
+-dontwarn java.lang.invoke.**

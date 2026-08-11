@@ -369,7 +369,7 @@ class PlayerActivity : ComponentActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val tmdbId        = intent.getIntExtra("tmdbId", -1)
+        val mediaId       = intent.getStringExtra("mediaId") ?: ""
         val typeStr       = intent.getStringExtra("mediaType") ?: "MOVIE"
         val season        = intent.getIntExtra("season", 0)
         val episode       = intent.getIntExtra("episode", 0)
@@ -388,7 +388,7 @@ class PlayerActivity : ComponentActivity() {
                 MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(primary = Brand)) {
                     PlayerScreen(
                         vm            = vm,
-                        tmdbId        = tmdbId, mediaType = mediaType,
+                        id            = mediaId, mediaType = mediaType,
                         season        = season, episode = episode,
                         title         = title, poster = poster,
                         onBack        = { finish() },
@@ -524,7 +524,7 @@ private enum class DrawerWidthTier(val fraction: Float) {
 @Composable
 fun PlayerScreen(
     vm: PlayerViewModel,
-    tmdbId: Int, mediaType: MediaType,
+    id: String, mediaType: MediaType,
     season: Int, episode: Int,
     title: String, poster: String?,
     onBack: () -> Unit,
@@ -543,8 +543,8 @@ fun PlayerScreen(
     val scope   = rememberCoroutineScope()
     val density = LocalDensity.current
 
-    LaunchedEffect(tmdbId, season, episode) {
-        vm.init(ctx, tmdbId, mediaType, season, episode, title, poster,
+    LaunchedEffect(id, season, episode) {
+        vm.init(ctx, id, mediaType, season, episode, title, poster,
             streamUrl, streamIsHls, streamReferer, streamOrigin, downloadId,
             preferredQuality = preferredQuality)
     }

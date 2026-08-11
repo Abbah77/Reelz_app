@@ -40,8 +40,6 @@ import com.axio.reelz.data.local.DownloadDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
 import com.axio.reelz.data.repository.MediaRepository
-import com.axio.reelz.remoteconfig.PremiumGate
-import com.axio.reelz.stream.BackendStreamRepository
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.downloads.formatSize
 import com.axio.reelz.ui.screens.player.PlayerActivity
@@ -118,11 +116,10 @@ private val IconLock get() = androidx.compose.ui.graphics.vector.ImageVector.Bui
 class DetailViewModel @Inject constructor(
     private val repo: MediaRepository,
     private val downloadRepo: DownloadRepository,
-    private val downloadDao: DownloadDao,
-    private val streamRepo: BackendStreamRepository,
+    private val streamRepo: StreamRepository,
     private val adEngine: com.axio.reelz.ads.AdEngine,
-    private val premiumGate: PremiumGate,
-    @javax.inject.Named("download") private val httpClient: okhttp3.OkHttpClient,
+    private val configRepo: com.axio.reelz.data.repository.ConfigRepository,
+    private val sessionRepo: com.axio.reelz.data.repository.UserSessionRepository,
 ) : ViewModel() {
 
     data class UiState(
@@ -143,7 +140,7 @@ class DetailViewModel @Inject constructor(
         /**
          * The current tier's max download height in px (e.g. 480 for free, 2160
          * for premium), read once when the sheet opens. <= 0 means "no cap" —
-         * see PremiumGate.isDownloadResolutionAllowed(). Drives the lock badge on any
+         * Drives the lock badge on any
          * QualityTrack whose parsed height exceeds this.
          */
         val maxDownloadResolutionHeight: Int = Int.MAX_VALUE,
@@ -208,89 +205,62 @@ class DetailViewModel @Inject constructor(
      */
     private val preResolvedQualities = HashMap<String, List<QualityTrack>>()
 
-    private fun qualityKey(tmdbId: Int, season: Int = 0, episode: Int = 0) =
-        "${tmdbId}_${season}_${episode}"
+    private fun qualityKey(id: String, season: Int = 0, episode: Int = 0) =
+        "${id}_${season}_${episode}"
 
     /** Observe all non-ERROR downloads and push their keys into UiState so the
      *  episode/movie download button can show IconDownloaded in real time. */
     fun observeDownloads() {
         viewModelScope.launch {
-            downloadDao.getAll().collect { items ->
+            downloadRepo.observeAll().collect { items ->
                 val keys = items
-                    .filter { it.status != DownloadStatus.ERROR.name }
-                    .map { "${it.tmdbId}_${it.season}_${it.episode}" }
+                    .filter { it.status != DownloadStatus.ERROR }
+                    .map { "${it.mediaId}_${it.season}_${it.episode}" }
                     .toSet()
                 _ui.update { it.copy(downloadedKeys = keys) }
             }
         }
     }
 
-    fun load(tmdbId: Int, mediaType: MediaType) {
+    fun load(id: String, mediaType: MediaType) {
         viewModelScope.launch {
             _ui.update { it.copy(isLoading = true, error = null) }
             // Count content opens for frequency cap gate
             adEngine.incrementContentOpen()
             try {
-                // Stage 1 — fast fetch (no append_to_response). Screen appears immediately.
-                val inWatchlist = repo.isInWatchlist(tmdbId)
-                val detail      = repo.getDetailFast(tmdbId, mediaType)
-                currentMedia = Media(
-                    id = detail.tmdbId, tmdbId = detail.tmdbId, title = detail.title,
-                    overview = detail.overview, posterPath = detail.posterPath,
-                    backdropPath = detail.backdropPath, releaseDate = detail.releaseDate,
-                    voteAverage = detail.voteAverage, voteCount = detail.voteCount,
-                    popularity = 0.0, mediaType = mediaType,
+                // Stage 1 — cache-first detail (instant if Room hit, network otherwise)
+                val inWatchlist = repo.isInWatchlist(id)
+                val result = repo.getDetail(id)
+                val detail = (result as? com.axio.reelz.network.NetworkResult.Success)?.data
+                    ?: run {
+                        val err = (result as? com.axio.reelz.network.NetworkResult.Error)?.message ?: "Failed to load"
+                        _ui.update { it.copy(isLoading = false, error = err) }
+                        return@launch
+                    }
+                currentMedia = com.axio.reelz.data.model.Media(
+                    id = detail.id, title = detail.title,
+                    posterUrl = detail.posterUrl, backdropUrl = detail.backdropUrl,
+                    releaseYear = detail.releaseYear, rating = detail.rating,
+                    mediaType = mediaType,
                 )
-                // Screen is now visible — isLoading = false, extrasLoading = true
-                _ui.update { it.copy(
-                    isLoading     = false,
-                    extrasLoading = true,
-                    detail        = detail,
-                    isInWatchlist = inWatchlist,
-                ) }
+                _ui.update { it.copy(isLoading = false, detail = detail, isInWatchlist = inWatchlist) }
 
                 if (mediaType == MediaType.TV && detail.seasons.isNotEmpty()) {
-                    loadEpisodes(tmdbId, 1)
+                    loadEpisodes(id, 1)
                 }
 
-                // Stage 2 — heavy extras (credits, videos, similar) in background.
-                // Stage 3 (stream pre-resolve) is nested here so imdbId is guaranteed
-                // available before resolveFirst() is called.
+                // Background: pre-resolve stream so download sheet opens instantly
                 viewModelScope.launch {
                     try {
-                        val extras = repo.getDetailExtras(tmdbId, mediaType)
-                        _ui.update { it.copy(detail = extras, extrasLoading = false) }
-                    } catch (_: Exception) {
-                        _ui.update { it.copy(extrasLoading = false) }
-                    }
-
-                    // Stage 3 — pre-resolve stream after extras (and imdbId) are available.
-                    // resolveFirst() returns on the first stream event so preResolvedStream
-                    // is available quickly. Download qualities and subtitles are collected
-                    // into preResolvedQualities as they arrive on the same connection.
-                    try {
-                        val d = _ui.value.detail
-                        val year = d?.releaseDate?.take(4)?.toIntOrNull()
-                        val key = qualityKey(tmdbId)
-                        val stream = streamRepo.resolveFirst(
-                            tmdbId    = tmdbId,
-                            mediaType = mediaType,
-                            title     = d?.title ?: "",
-                            imdbId    = d?.imdbId,   // now available after Stage 2
-                            year      = year,
-                            onDownload = { track ->
-                                val current = (preResolvedQualities[key] ?: emptyList()).toMutableList()
-                                if (current.none { it.url == track.url }) {
-                                    current.add(track)
-                                    preResolvedQualities[key] = current
-                                }
-                            },
+                        val key = qualityKey(id)
+                        val streamResult = streamRepo.resolveStream(
+                            id = id, title = detail.title, mediaType = mediaType
                         )
-                        if (stream != null) {
-                            preResolvedStream = stream
+                        if (streamResult is com.axio.reelz.network.NetworkResult.Success) {
+                            preResolvedStream = streamResult.data
                             if (preResolvedQualities[key].isNullOrEmpty()) {
-                                preResolvedQualities[key] = stream.qualities.ifEmpty {
-                                    listOf(QualityTrack(stream.quality.ifBlank { "Auto" }, stream.url))
+                                preResolvedQualities[key] = streamResult.data.qualities.ifEmpty {
+                                    listOf(QualityTrack(streamResult.data.quality.ifBlank { "Auto" }, streamResult.data.url))
                                 }
                             }
                         }
@@ -302,28 +272,25 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    fun selectSeason(tmdbId: Int, season: Int) {
+    fun selectSeason(id: String, season: Int) {
         _ui.update { it.copy(selectedSeason = season) }
-        loadEpisodes(tmdbId, season)
+        loadEpisodes(id, season)
     }
 
-    private fun loadEpisodes(tmdbId: Int, season: Int) {
+    private fun loadEpisodes(id: String, season: Int) {
         viewModelScope.launch {
             _ui.update { it.copy(isEpisodesLoading = true) }
-            try {
-                val eps = repo.getSeasonEpisodes(tmdbId, season)
-                _ui.update { it.copy(episodes = eps, isEpisodesLoading = false) }
-            } catch (_: Exception) {
-                _ui.update { it.copy(isEpisodesLoading = false) }
-            }
+            val result = repo.getSeasonEpisodes(id, season)
+            val eps = (result as? com.axio.reelz.network.NetworkResult.Success)?.data ?: emptyList()
+            _ui.update { it.copy(episodes = eps, isEpisodesLoading = false) }
         }
     }
 
     fun toggleWatchlist() {
         val m = currentMedia ?: return
         viewModelScope.launch {
-            val now = repo.toggleWatchlist(m)
-            _ui.update { it.copy(isInWatchlist = now) }
+            val nowIn = repo.toggleWatchlist(m)
+            _ui.update { it.copy(isInWatchlist = nowIn) }
         }
     }
 
@@ -331,22 +298,15 @@ class DetailViewModel @Inject constructor(
 
     /** Called when user taps the Download button on a movie or episode. */
     fun openDownloadSheet(
-        tmdbId: Int,
+        id: String,
         mediaType: MediaType,
         season: Int = 0,
         episode: Int = 0,
         episodeTitle: String = "",
     ) {
         val detail = _ui.value.detail ?: return
-
         viewModelScope.launch {
-            val maxDownloads = premiumGate.maxDownloads()
-            // -1 is the unlimited sentinel (premium tier) — never trips the cap.
-            if (maxDownloads >= 0 && downloadDao.countActive() >= maxDownloads) {
-                _ui.update { it.copy(showDownloadCapSheet = true) }
-                return@launch
-            }
-            openDownloadSheetInternal(tmdbId, mediaType, season, episode, episodeTitle, detail)
+            openDownloadSheetInternal(id, mediaType, season, episode, episodeTitle, detail)
         }
     }
 
@@ -355,7 +315,7 @@ class DetailViewModel @Inject constructor(
     fun openResolutionLockSheet() { _ui.update { it.copy(showResolutionLockSheet = true) } }
 
     private fun openDownloadSheetInternal(
-        tmdbId: Int,
+        id: String,
         mediaType: MediaType,
         season: Int,
         episode: Int,
@@ -373,19 +333,18 @@ class DetailViewModel @Inject constructor(
                 pendingDownloadSeason       = season,
                 pendingDownloadEpisode      = episode,
                 pendingDownloadTitle        = episodeTitle.ifBlank { detail.title },
-                maxDownloadResolutionHeight = premiumGate.maxDownloadResolutionHeight()
-                    .let { h -> if (h <= 0) Int.MAX_VALUE else h },
+                maxDownloadResolutionHeight = if (sessionRepo.isPremium) Int.MAX_VALUE else 720,
             )
         }
 
         // Load already-downloaded qualities for this content in background
         viewModelScope.launch {
-            val downloaded = downloadRepo.getDownloadedQualities(tmdbId, season, episode)
+            val downloaded = downloadRepo.getDownloadedItems(id, season, episode)
             val qualityLabels = downloaded.map { it.quality }.toSet()
             _ui.update { it.copy(alreadyDownloadedQualities = qualityLabels) }
         }
 
-        val key = qualityKey(tmdbId, season, episode)
+        val key = qualityKey(id, season, episode)
 
         // Fast path: use qualities resolved in background when detail loaded
         preResolvedQualities[key]?.let { cached ->
@@ -395,32 +354,21 @@ class DetailViewModel @Inject constructor(
             }
         }
 
-        // POST /download — returns all deduplicated per-resolution links in one shot.
+        // GET /download — resolve quality tracks from backend
         viewModelScope.launch {
-            try {
-                val detail = _ui.value.detail
-                val releaseYear = detail?.releaseDate
-                    ?.take(4)?.toIntOrNull()
-                val tracks = streamRepo.resolveDownloadLinks(
-                    tmdbId    = tmdbId,
-                    mediaType = mediaType,
-                    title     = detail?.title ?: "",
-                    season    = season,
-                    episode   = episode,
-                    imdbId    = detail?.imdbId,
-                    year      = releaseYear,
-                )
-                if (tracks.isNotEmpty()) {
-                    val normalized = normalizeQualities(tracks, _ui.value.detail?.runtime)
-                    preResolvedQualities[key] = normalized
-                    _ui.update { it.copy(downloadQualities = normalized, pendingQualityLabels = emptySet()) }
-                } else {
-                    val fallbackUrl = preResolvedStream?.url ?: ""
-                    val fallback = listOf(QualityTrack("Best available", fallbackUrl))
-                    _ui.update { it.copy(downloadQualities = fallback, pendingQualityLabels = emptySet()) }
-                }
-            } catch (_: Exception) {
-                _ui.update { it.copy(pendingQualityLabels = emptySet()) }
+            val dlResult = streamRepo.getDownloadLinks(
+                id = id, title = detail.title, mediaType = mediaType,
+                season = season, episode = episode,
+            )
+            val tracks = (dlResult as? com.axio.reelz.network.NetworkResult.Success)?.data ?: emptyList()
+            if (tracks.isNotEmpty()) {
+                val normalized = normalizeQualities(tracks, _ui.value.detail?.runtime)
+                preResolvedQualities[key] = normalized
+                _ui.update { it.copy(downloadQualities = normalized, pendingQualityLabels = emptySet()) }
+            } else {
+                val fallbackUrl = preResolvedStream?.url ?: ""
+                val fallback = if (fallbackUrl.isNotBlank()) listOf(QualityTrack("Best available", fallbackUrl)) else emptyList()
+                _ui.update { it.copy(downloadQualities = fallback, pendingQualityLabels = emptySet()) }
             }
         }
     }
@@ -434,33 +382,28 @@ class DetailViewModel @Inject constructor(
         val detail = _ui.value.detail ?: return
         val state  = _ui.value
 
-        // Defense in depth: re-check against PremiumGate here too, not just at the
-        // UI layer. If this were ever reached for a locked track (stale UI state,
-        // future call site, etc.) we still refuse rather than silently honoring a
-        // resolution above the user's config-defined tier.
-        if (!premiumGate.isDownloadResolutionAllowed(trackHeightPx(track.label))) {
+        // Resolution check: free users capped at 720p
+        val trackH = trackHeightPx(track.label)
+        val maxH   = _ui.value.maxDownloadResolutionHeight
+        if (trackH > maxH) {
             _ui.update { it.copy(showResolutionLockSheet = true) }
             return
         }
 
         viewModelScope.launch {
-            // Use headers from the pre-resolved stream (set when detail loaded).
-            val cachedHeaders = preResolvedStream?.headers ?: emptyMap()
-            val qualityTracks = _ui.value.downloadQualities
-
+            val headers = preResolvedStream?.headers ?: emptyMap()
             downloadRepo.enqueue(
-                ctx             = ctx,
-                tmdbId          = detail.tmdbId,
-                title           = state.pendingDownloadTitle,
-                posterPath      = detail.posterPath,
-                mediaType       = detail.mediaType,
-                season          = state.pendingDownloadSeason,
-                episode         = state.pendingDownloadEpisode,
-                episodeName     = if (state.pendingDownloadSeason > 0) state.pendingDownloadTitle else "",
-                quality         = track.label,
-                streamUrl       = track.url,
-                headers         = cachedHeaders,
-                qualityTracks   = qualityTracks,
+                ctx         = ctx,
+                id          = detail.id,
+                title       = state.pendingDownloadTitle,
+                posterUrl   = detail.posterUrl,
+                mediaType   = detail.mediaType,
+                season      = state.pendingDownloadSeason,
+                episode     = state.pendingDownloadEpisode,
+                episodeName = if (state.pendingDownloadSeason > 0) state.pendingDownloadTitle else "",
+                quality     = track.label,
+                streamUrl   = track.url,
+                headers     = headers,
             )
             _ui.update { it.copy(downloadEnqueued = true) }
         }
@@ -549,7 +492,7 @@ class DetailViewModel @Inject constructor(
 // ── Screen ────────────────────────────────────────────────────────────────────
 @Composable
 fun DetailScreen(
-    tmdbId: Int,
+    id: String,
     mediaType: MediaType,
     nav: NavController,
     adEngine: AdEngine,
@@ -573,7 +516,7 @@ fun DetailScreen(
             // PlayerViewModel will call the backend on init (one POST, milliseconds).
             val readyStream = vm.preResolvedStream
             ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
-                putExtra("tmdbId",     d.tmdbId)
+                putExtra("mediaId",    d.id)
                 putExtra("mediaType",  d.mediaType.name)
                 putExtra("season",     season)
                 putExtra("episode",    episode)
@@ -603,21 +546,21 @@ fun DetailScreen(
     Box(Modifier.fillMaxSize().background(Bg)) {
         when {
             ui.isLoading -> DetailSkeleton()
-            ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.load(tmdbId, mediaType) })
+            ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.load(id, mediaType) })
             ui.detail != null -> DetailContent(
                 ui             = ui,
                 extrasLoading  = ui.extrasLoading,
                 onBack         = { nav.popBackStack() },
                 onPlayMovie    = { launchPlayer() },
                 onPlayEpisode  = { s, e, name -> launchPlayer(s, e, name) },
-                onSeasonSelect = { vm.selectSeason(tmdbId, it) },
+                onSeasonSelect = { vm.selectSeason(id, it) },
                 onWatchlist    = { vm.toggleWatchlist() },
                 onSimilarClick = { id, type -> nav.navigate(com.axio.reelz.ui.Route.Detail.go(id, type)) },
                 onDownloadMovie = {
-                    vm.openDownloadSheet(tmdbId, mediaType)
+                    vm.openDownloadSheet(id, mediaType)
                 },
                 onDownloadEpisode = { s, e, name ->
-                    vm.openDownloadSheet(tmdbId, mediaType, s, e, name)
+                    vm.openDownloadSheet(id, mediaType, s, e, name)
                 },
                 downloadedKeys = ui.downloadedKeys,
             )
@@ -681,7 +624,7 @@ fun DownloadQualitySheet(
     enqueued: Boolean,
     onDismiss: () -> Unit,
     onSelectQuality: (QualityTrack) -> Unit,
-    /** Tracks with a parsed height above this are shown locked, not hidden — config-driven via PremiumGate. */
+    /** Tracks with a parsed height above this are shown locked (free tier: 720p cap). */
     maxResolutionHeight: Int = Int.MAX_VALUE,
     onLockedQualityTap: () -> Unit = {},
     /**
@@ -1122,7 +1065,7 @@ private fun DetailContent(
     onPlayEpisode: (Int, Int, String) -> Unit,
     onSeasonSelect: (Int) -> Unit,
     onWatchlist: () -> Unit,
-    onSimilarClick: (Int, MediaType) -> Unit,
+    onSimilarClick: (String, MediaType) -> Unit,
     onDownloadMovie: () -> Unit,
     onDownloadEpisode: (Int, Int, String) -> Unit,
     downloadedKeys: Set<String> = emptySet(),
@@ -1200,7 +1143,7 @@ private fun DetailContent(
                         icon     = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconMd)) },
                     )
                     // ── Download button (movies only) ──────────────────────
-                    val movieDownloaded = "${detail.tmdbId}_0_0" in downloadedKeys
+                    val movieDownloaded = "${detail.id}_0_0" in downloadedKeys
                     OutlinedButton(
                         onClick  = if (movieDownloaded) ({}) else onDownloadMovie,
                         shape    = RoundedCornerShape(d.radiusPill),
@@ -1307,7 +1250,7 @@ private fun DetailContent(
                 item { Box(Modifier.fillMaxWidth().height(d.spaceXxl * 3.75f), Alignment.Center) { CinematicSpinner() } }
             } else {
                 items(ui.episodes, key = { it.id }) { ep ->
-                    val epKey = "${detail.tmdbId}_${ep.seasonNumber}_${ep.episodeNumber}"
+                    val epKey = "${detail.id}_${ep.seasonNumber}_${ep.episodeNumber}"
                     EpisodeRow(
                         episode      = ep,
                         onClick      = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
@@ -1347,8 +1290,8 @@ private fun DetailContent(
                     contentPadding = PaddingValues(horizontal = d.screenHorizPad + d.spaceXs),
                     horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXs),
                 ) {
-                    items(detail.similar, key = { it.tmdbId }) { m ->
-                        com.axio.reelz.ui.components.MediaRowCard(m, onClick = { onSimilarClick(m.tmdbId, m.mediaType) })
+                    items(detail.similar, key = { it.id }) { m ->
+                        com.axio.reelz.ui.components.MediaRowCard(m, onClick = { onSimilarClick(m.id, m.mediaType) })
                     }
                 }
             }

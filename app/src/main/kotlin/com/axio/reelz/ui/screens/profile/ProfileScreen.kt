@@ -123,7 +123,7 @@ class ProfileViewModel @Inject constructor(
     private val historyDao: WatchHistoryDao,
     private val savedVideoDao: SavedVideoDao,
     private val userSessionRepository: com.axio.reelz.data.repository.UserSessionRepository,
-    private val premiumGate: com.axio.reelz.remoteconfig.PremiumGate,
+    private val sessionRepo: com.axio.reelz.data.repository.UserSessionRepository,
 ) : ViewModel() {
 
     companion object {
@@ -140,7 +140,7 @@ class ProfileViewModel @Inject constructor(
         val historyAllLoaded: Boolean = false,
         val saved: List<SavedVideoItem> = emptyList(),
         val activeTab: Int = 0,
-        val userState: com.axio.reelz.remoteconfig.UserState = com.axio.reelz.remoteconfig.UserState.GUEST,
+        val userState: String = "GUEST",
         val daysUntilExpiry: Int = 0,
         val showRenewBanner: Boolean = false,
     )
@@ -306,8 +306,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                         Column(Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                                 Text(ui.profile.name, color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
-                                if (ui.userState == com.axio.reelz.remoteconfig.UserState.PREMIUM_ACTIVE ||
-                                    ui.userState == com.axio.reelz.remoteconfig.UserState.PREMIUM_GRACE) {
+                                if (ui.userState == "PREMIUM_ACTIVE" || ui.userState == "PREMIUM_GRACE") {
                                     Row(
                                         Modifier
                                             .clip(RoundedCornerShape(d.radiusSm))
@@ -367,12 +366,12 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                     ) { Icon(IconCrown, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp)) }
                     Column(Modifier.weight(1f)) {
                         val (title, subtitle) = when (ui.userState) {
-                            com.axio.reelz.remoteconfig.UserState.PREMIUM_GRACE ->
+                            "PREMIUM_GRACE" ->
                                 "Payment due" to "Your premium access ends soon — renew to keep it"
-                            com.axio.reelz.remoteconfig.UserState.PREMIUM_ACTIVE ->
+                            "PREMIUM_ACTIVE" ->
                                 if (ui.showRenewBanner) "Renews in ${ui.daysUntilExpiry} day${if (ui.daysUntilExpiry == 1) "" else "s"}" to "Tap to renew your plan"
                                 else "Premium active" to "Unlimited downloads, 4K, no ads"
-                            com.axio.reelz.remoteconfig.UserState.PREMIUM_EXPIRED ->
+                            "PREMIUM_EXPIRED" ->
                                 "Premium expired" to "Renew to get your benefits back"
                             else -> "Go Premium" to "Upto 4K streaming, unlimited downloads, no ads"
                         }
@@ -417,9 +416,9 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
             0 -> if (ui.watchlist.isEmpty()) {
                 item { EmptyTabHint("Nothing in your watchlist", "Tap + Watchlist on any movie or show\nIt auto-removes once you've watched it") }
             } else {
-                items(ui.watchlist, key = { it.tmdbId }) { w ->
+                items(ui.watchlist, key = { it.mediaId }) { w ->
                     val type = if (w.mediaType == "TV") MediaType.TV else MediaType.MOVIE
-                    LibraryRow(w.title, w.posterPath, "Watchlist") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(w.tmdbId, type)) }
+                    LibraryRow(w.title, w.posterUrl, "Watchlist") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(w.mediaId, type)) }
                 }
                 // Subtle hint about auto-removal
                 item {
@@ -437,9 +436,9 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
             1 -> if (ui.saved.isEmpty()) {
                 item { EmptyTabHint("No saved videos yet", "Tap Save on any movie or show") }
             } else {
-                items(ui.saved, key = { it.tmdbId }) { s ->
+                items(ui.saved, key = { it.mediaId }) { s ->
                     val type = if (s.mediaType == "TV") MediaType.TV else MediaType.MOVIE
-                    LibraryRow(s.title, s.posterPath, "Saved") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(s.tmdbId, type)) }
+                    LibraryRow(s.title, s.posterUrl, "Saved") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(s.mediaId, type)) }
                 }
             }
 
@@ -464,7 +463,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             poster   = h.posterPath,
                             subtitle = if (h.season > 0) "S${h.season} · E${h.episode}" else "Movie",
                             progress = progress,
-                            onClick  = { nav.navigate(com.axio.reelz.ui.Route.Detail.go(h.tmdbId, type)) },
+                            onClick  = { nav.navigate(com.axio.reelz.ui.Route.Detail.go(h.mediaId, type)) },
                         )
                     }
                     // Load-more trigger

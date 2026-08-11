@@ -4,7 +4,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -27,15 +26,14 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.axio.reelz.BuildConfig
 import com.axio.reelz.R
-import com.axio.reelz.remoteconfig.ConfigReadiness
 import com.axio.reelz.ads.AdEngine
-import com.axio.reelz.remoteconfig.RemoteConfigRepository
-import com.axio.reelz.remoteconfig.ConfigSyncWorker
-import com.axio.reelz.remoteconfig.SyncState
+import com.axio.reelz.data.repository.ConfigRepository
+import com.axio.reelz.data.repository.ConfigState
 import com.axio.reelz.ui.screens.update.MaintenanceScreen
 import com.axio.reelz.ui.screens.update.UpdateScreen
 import com.axio.reelz.ui.theme.*
 import com.axio.reelz.ui.theme.LocalDimensions
+import com.axio.reelz.workers.ConfigSyncWorker
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -44,21 +42,15 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    @Inject lateinit var remoteConfig: RemoteConfigRepository
+    @Inject lateinit var configRepo: ConfigRepository
     @Inject lateinit var adEngine: AdEngine
 
-    // Track cold start — App Open ad fires ONCE on cold start, not every resume
     private var isColdStart = true
-
-    override fun onPause() {
-        super.onPause()
-    }
 
     override fun onResume() {
         super.onResume()
-        // Sync config every time user opens/returns to app so updates are instant.
-        remoteConfig.syncInBackground()
-        // Show App Open ad on cold start only (fires during the existing splash gap)
+        // Background config refresh every resume — instant flag updates
+        ConfigSyncWorker.schedule(this)
         if (isColdStart) {
             isColdStart = false
             adEngine.showAppOpenIfReady(this)
@@ -70,102 +62,66 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Set by PlayerActivity when a free user taps "Upgrade to Premium" from
-        // the subtitle drawer — see PLAYER_OPEN_PREMIUM_EXTRA. Read once; not
-        // re-checked across recreation so it never re-fires on rotation etc.
         val openPremiumOnStart = intent?.getBooleanExtra(EXTRA_OPEN_PREMIUM, false) ?: false
 
         setContent {
             ReelzTheme {
-                val readiness by remoteConfig.readiness.collectAsStateWithLifecycle()
-                val config    by remoteConfig.config.collectAsStateWithLifecycle()
+                val configState by configRepo.state.collectAsStateWithLifecycle()
+                val config      by configRepo.config.collectAsStateWithLifecycle()
 
-                when (readiness) {
+                when (configState) {
 
-                    // ── Still reading Room config cache — show nothing (splash is still up) ──
-                    ConfigReadiness.LOADING -> {
+                    // Splash still up — Room is loading
+                    ConfigState.LOADING -> {
                         Box(Modifier.fillMaxSize().background(Bg))
                     }
 
-                    // ── No local config — first install, needs internet ──────────────
-                    ConfigReadiness.NO_CONFIG -> {
-                        var isSyncing by remember { mutableStateOf(true) }
-                        var errorMsg  by remember { mutableStateOf<String?>(null) }
-                        var retryKey  by remember { mutableStateOf(0) }
-                        val syncState by remoteConfig.syncState.collectAsStateWithLifecycle()
-
-                        // Auto-trigger sync on first show, and re-trigger on each retry.
-                        LaunchedEffect(retryKey) {
-                            isSyncing = true
-                            errorMsg  = null
-                            remoteConfig.syncInBackground()
-                        }
-
-                        // React to sync result.
-                        LaunchedEffect(syncState) {
-                            when (syncState) {
-                                is SyncState.Syncing -> { isSyncing = true }
-                                is SyncState.Success -> { isSyncing = false }
-                                is SyncState.Error   -> {
-                                    errorMsg  = (syncState as SyncState.Error).message
-                                    isSyncing = false
-                                }
-                                else -> {}
-                            }
-                        }
-
+                    // First install, no cache — must reach backend
+                    ConfigState.ERROR -> {
+                        var retryKey by remember { mutableStateOf(0) }
+                        LaunchedEffect(retryKey) { configRepo.refresh() }
                         NoConfigScreen(
-                            isSyncing = isSyncing,
-                            errorMsg  = errorMsg,
+                            isSyncing = retryKey > 0,
+                            errorMsg  = "Could not reach server. Check your connection.",
                             onRetry   = { retryKey++ },
                         )
                     }
 
-                    // ── Have config — run the normal app gates ──────────────────────
-                    ConfigReadiness.READY -> {
-                        val flags = config?.featureFlags
-                        val meta  = config?.meta
-
+                    ConfigState.READY -> {
                         // Maintenance gate
-                        if (flags?.forceMaintenance == true) {
+                        if (configRepo.isMaintenanceMode()) {
                             MaintenanceScreen(
-                                message = flags.maintenanceMessage,
-                                onRetry = { ConfigSyncWorker.syncNow(this@MainActivity) },
+                                message = config?.maintenanceMessage ?: "Down for maintenance.",
+                                onRetry = { ConfigSyncWorker.schedule(this@MainActivity) },
                             )
                             return@ReelzTheme
                         }
 
                         // Force / optional update gate
-                        val currentVersionCode = BuildConfig.VERSION_CODE
-                        val minRequired        = meta?.minAppVersion ?: 0
-                        val latestVersion      = meta?.latestAppVersion ?: 0
-                        val downloadUrl        = meta?.latestApkUrl ?: ""
-                        val changelog          = meta?.changelog ?: ""
+                        val current  = BuildConfig.VERSION_CODE
+                        val minVer   = configRepo.minAppVersion()
+                        val latest   = configRepo.latestAppVersion()
+                        val apkUrl   = configRepo.latestApkUrl()
+                        val force    = current < minVer && apkUrl.isNotBlank()
+                        var skipOpt  by remember { mutableStateOf(false) }
+                        val optional = !force && current < latest && apkUrl.isNotBlank() && !skipOpt
 
-                        val forceUpdate  = currentVersionCode < minRequired && downloadUrl.isNotBlank()
-                        var skipOptional by remember { mutableStateOf(false) }
-                        val optionalUpdate = !forceUpdate &&
-                            currentVersionCode < latestVersion &&
-                            downloadUrl.isNotBlank() &&
-                            !skipOptional
-
-                        if (forceUpdate) {
+                        if (force) {
                             UpdateScreen(
-                                latestVersion = "v$latestVersion",
-                                downloadUrl   = downloadUrl,
-                                changelog     = changelog,
+                                latestVersion = "v$latest",
+                                downloadUrl   = apkUrl,
+                                changelog     = "",
                                 forceUpdate   = true,
                             )
                             return@ReelzTheme
                         }
-
-                        if (optionalUpdate) {
+                        if (optional) {
                             UpdateScreen(
-                                latestVersion = "v$latestVersion",
-                                downloadUrl   = downloadUrl,
-                                changelog     = changelog,
+                                latestVersion = "v$latest",
+                                downloadUrl   = apkUrl,
+                                changelog     = "",
                                 forceUpdate   = false,
-                                onSkip        = { skipOptional = true },
+                                onSkip        = { skipOpt = true },
                             )
                             return@ReelzTheme
                         }
@@ -184,94 +140,58 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        /** Set true by PlayerActivity to land directly on the Premium screen after relaunch. */
         const val EXTRA_OPEN_PREMIUM = "com.axio.reelz.EXTRA_OPEN_PREMIUM"
     }
 }
 
-// ── No-config screen (first install, offline) ─────────────────────────────────
+// ── No-config screen ──────────────────────────────────────────────────────────
 
 @Composable
-fun NoConfigScreen(
-    isSyncing: Boolean,
-    errorMsg: String?,
-    onRetry: () -> Unit,
-) {
+fun NoConfigScreen(isSyncing: Boolean, errorMsg: String?, onRetry: () -> Unit) {
     val d = LocalDimensions.current
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Bg),
+        Modifier.fillMaxSize().background(Bg),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
-            modifier = Modifier
-                .padding(horizontal = d.spaceXxl + d.spaceLg)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(horizontal = d.spaceXxl + d.spaceLg).fillMaxWidth(),
         ) {
-            Text(text = "📡", fontSize = (d.textHero.value + 30).sp, textAlign = TextAlign.Center)
-
+            Text("📡", fontSize = (d.textHero.value + 30).sp, textAlign = TextAlign.Center)
             Spacer(Modifier.height(d.spaceXl))
-
             Text(
-                text       = "Connect to get started",
-                color      = Color.White,
-                fontSize = d.textXxl,
-                fontWeight = FontWeight.Bold,
-                textAlign  = TextAlign.Center,
+                "Connect to get started", color = Color.White,
+                fontSize = d.textXxl, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
             )
-
             Spacer(Modifier.height(d.spaceMd - d.spaceXxs))
-
             Text(
-                text       = "Reelz needs a one-time internet connection to set up. After that, it works great even offline.",
-                color      = Color.White.copy(alpha = 0.6f),
-                fontSize = d.textMd,
-                textAlign  = TextAlign.Center,
-                lineHeight = (d.textMd.value * 1.6f).sp,
+                "Reelz needs a one-time internet connection to set up.",
+                color = Color.White.copy(alpha = 0.6f), fontSize = d.textMd,
+                textAlign = TextAlign.Center, lineHeight = (d.textMd.value * 1.6f).sp,
             )
-
-            // Error message
             if (errorMsg != null) {
                 Spacer(Modifier.height(d.spaceLg))
-                Text(
-                    text      = errorMsg,
-                    color     = Color(0xFFFF6B6B),
-                    fontSize = d.textMd,
-                    textAlign = TextAlign.Center,
-                )
+                Text(errorMsg, color = Color(0xFFFF6B6B), fontSize = d.textMd, textAlign = TextAlign.Center)
             }
-
             Spacer(Modifier.height(d.buttonHeightSm - d.spaceXxs))
-
             Button(
-                onClick  = { if (!isSyncing) onRetry() },
-                shape    = RoundedCornerShape(d.radiusMd - d.spaceXxs),
-                colors   = ButtonDefaults.buttonColors(containerColor = Brand),
+                onClick = { if (!isSyncing) onRetry() },
+                shape   = RoundedCornerShape(d.radiusMd - d.spaceXxs),
+                colors  = ButtonDefaults.buttonColors(containerColor = Brand),
                 modifier = Modifier.fillMaxWidth().height(d.avatarMd + d.spaceSm),
             ) {
                 if (isSyncing) {
-                    CircularProgressIndicator(
-                        color            = Color.White,
-                        strokeWidth      = 2.dp,
-                        modifier         = Modifier.size(d.iconMd),
-                    )
+                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(d.iconMd))
                 } else {
-                    Text(
-                        "Try again",
-                        color      = Color.White,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = d.textLg,
-                    )
+                    Text("Try again", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = d.textLg)
                 }
             }
         }
     }
 }
 
-// ── "Powered by" splash ───────────────────────────────────────────────────────
+// ── Powered-by splash ─────────────────────────────────────────────────────────
 
 @Composable
 fun PoweredByScreen(onFinished: () -> Unit) {
@@ -292,57 +212,27 @@ fun PoweredByScreen(onFinished: () -> Unit) {
     }
 
     Box(
-        Modifier
-            .fillMaxSize()
-            .alpha(screenAlpha.value)
-            .background(Bg),
+        Modifier.fillMaxSize().alpha(screenAlpha.value).background(Bg),
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Image(
-                painter            = painterResource(R.drawable.ic_company_logo),
+                painter = painterResource(R.drawable.ic_company_logo),
                 contentDescription = "Company logo",
-                modifier           = Modifier
-                    .size(d.avatarLg + d.spaceMd + d.spaceXxs)
-                    .alpha(logoAlpha.value)
-                    .scale(logoScale.value),
+                modifier = Modifier.size(d.avatarLg + d.spaceMd + d.spaceXxs).alpha(logoAlpha.value).scale(logoScale.value),
             )
             Spacer(Modifier.height(d.spaceXl - d.spaceXs))
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier            = Modifier.alpha(textAlpha.value),
-            ) {
-                Text(
-                    "from",
-                    color         = Color.White.copy(alpha = 0.45f),
-                    fontSize = d.textXs,
-                    fontWeight    = FontWeight.Normal,
-                    letterSpacing = 1.5.sp,
-                )
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.alpha(textAlpha.value)) {
+                Text("from", color = Color.White.copy(alpha = 0.45f), fontSize = d.textXs, letterSpacing = 1.5.sp)
                 Spacer(Modifier.height(d.spaceXs))
                 val inf   = rememberInfiniteTransition(label = "shimmer")
-                val shimX by inf.animateFloat(
-                    0f, 1f,
-                    infiniteRepeatable(tween(2200, easing = LinearEasing)),
-                    "sx",
-                )
+                val shimX by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(2200, easing = LinearEasing)), "sx")
                 Text(
                     "AXIO STUDIO",
                     style = androidx.compose.ui.text.TextStyle(
-                        brush = Brush.linearGradient(
-                            colorStops = arrayOf(
-                                0f    to Brand2,
-                                shimX to Color(0xFFB3D9FF),
-                                1f    to Brand,
-                            )
-                        ),
-                        fontSize = d.textLg,
-                        fontWeight    = FontWeight.Bold,
-                        letterSpacing = 3.sp,
-                        textAlign     = TextAlign.Center,
+                        brush = Brush.linearGradient(colorStops = arrayOf(0f to Brand2, shimX to Color(0xFFB3D9FF), 1f to Brand)),
+                        fontSize = d.textLg, fontWeight = FontWeight.Bold,
+                        letterSpacing = 3.sp, textAlign = TextAlign.Center,
                     ),
                 )
             }

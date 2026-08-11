@@ -2,10 +2,10 @@ package com.axio.reelz.ui.screens.player
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.util.Log
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,39 +16,33 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
-import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import com.axio.reelz.data.local.DownloadSubtitleDao
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
+import com.axio.reelz.ads.AdEngine
+import com.axio.reelz.ads.VastTagProvider
 import com.axio.reelz.data.local.AppPreferencesStore
-import com.axio.reelz.data.model.DownloadSubtitle
-import com.axio.reelz.data.model.MediaType
-import com.axio.reelz.data.model.QualityTrack
-import com.axio.reelz.data.model.StreamResult
-import com.axio.reelz.data.model.Subtitle
+import com.axio.reelz.data.local.DownloadSubtitleDao
+import com.axio.reelz.data.local.DownloadSubtitleRow
+import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.MediaRepository
-import com.axio.reelz.stream.BackendStreamRepository
-import com.axio.reelz.stream.searchSubtitles
+import com.axio.reelz.data.repository.StreamRepository
+import com.axio.reelz.data.repository.UserSessionRepository
+import com.axio.reelz.network.NetworkResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
-import com.axio.reelz.ads.AdEngine
-import com.axio.reelz.ads.VastTagProvider
-import com.axio.reelz.remoteconfig.PremiumGate
 import javax.inject.Inject
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Player states
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Player states ─────────────────────────────────────────────────────────────
 
 sealed class PlayerState {
     object Idle      : PlayerState()
@@ -75,58 +69,51 @@ data class SubtitleOption(
 )
 
 data class PlayerUiState(
-    val state: PlayerState                      = PlayerState.Idle,
-    val networkState: NetworkState              = NetworkState.Unknown,
-    val title: String                           = "",
-    val episodeLabel: String                    = "",
-    val durationMs: Long                        = 0L,
-    val positionMs: Long                        = 0L,
-    val bufferedMs: Long                        = 0L,
-    val showControls: Boolean                   = true,
-    val playbackSpeed: Float                    = 1f,
-    val availableQualities: List<QualityTrack>  = listOf(QualityTrack("Auto", "")),
-    val selectedQuality: String                 = "Auto",
-    // ── Lock & overlay state ───────────────────────────────────────────────
-    val isLocked: Boolean                       = false,
-    val isMuted: Boolean                        = false,
-    // ── Drawer state ───────────────────────────────────────────────────────
-    val isSpeedDrawerOpen: Boolean              = false,
-    val isQualityDrawerOpen: Boolean            = false,
-    val isSettingsDrawerOpen: Boolean           = false,
-    val isSubtitlesDrawerOpen: Boolean          = false,
-    // ── PiP state ──────────────────────────────────────────────────────────
-    val isPipGloballyEnabled: Boolean           = true,
-    val isPipActive: Boolean                    = false,
-    // ── Subtitle state ─────────────────────────────────────────────────────
-    val subtitleOptions: List<SubtitleOption>   = emptyList(),
-    val activeSubtitleLanguage: String          = "off",
-    val subtitlesEnabled: Boolean               = false,
-    val isOfflinePlayback: Boolean              = false,
-    val subtitleOffsetMs: Int                   = 0,
-    val showSubtitleDrawer: Boolean             = false,
-    val isSubtitleSearching: Boolean            = false,
-    val subtitleSearchEmpty: Boolean            = false,
-    val subtitleUpsellMessage: String?          = null,
-    val subtitles: List<Subtitle>               = emptyList(),
-    val selectedSubtitle: String                = "Off",
-    // ── Ads ────────────────────────────────────────────────────────────────
-    val preRollVastUrl: String?                 = null,
-    val isPreRollPlaying: Boolean               = false,
+    val state: PlayerState                     = PlayerState.Idle,
+    val networkState: NetworkState             = NetworkState.Unknown,
+    val title: String                          = "",
+    val episodeLabel: String                   = "",
+    val durationMs: Long                       = 0L,
+    val positionMs: Long                       = 0L,
+    val bufferedMs: Long                       = 0L,
+    val showControls: Boolean                  = true,
+    val playbackSpeed: Float                   = 1f,
+    val availableQualities: List<QualityTrack> = listOf(QualityTrack("Auto", "")),
+    val selectedQuality: String                = "Auto",
+    val isLocked: Boolean                      = false,
+    val isMuted: Boolean                       = false,
+    val isSpeedDrawerOpen: Boolean             = false,
+    val isQualityDrawerOpen: Boolean           = false,
+    val isSettingsDrawerOpen: Boolean          = false,
+    val isSubtitlesDrawerOpen: Boolean         = false,
+    val isPipGloballyEnabled: Boolean          = true,
+    val isPipActive: Boolean                   = false,
+    val subtitleOptions: List<SubtitleOption>  = emptyList(),
+    val activeSubtitleLanguage: String         = "off",
+    val subtitlesEnabled: Boolean              = false,
+    val isOfflinePlayback: Boolean             = false,
+    val subtitleOffsetMs: Int                  = 0,
+    val showSubtitleDrawer: Boolean            = false,
+    val isSubtitleSearching: Boolean           = false,
+    val subtitleSearchEmpty: Boolean           = false,
+    val subtitleUpsellMessage: String?         = null,
+    val subtitles: List<Subtitle>              = emptyList(),
+    val selectedSubtitle: String               = "Off",
+    val preRollVastUrl: String?                = null,
+    val isPreRollPlaying: Boolean              = false,
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ViewModel
-// ─────────────────────────────────────────────────────────────────────────────
+// ── ViewModel ─────────────────────────────────────────────────────────────────
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
-    private val streamRepo: BackendStreamRepository,
-    private val repo: MediaRepository,
+    private val streamRepo: StreamRepository,
+    private val mediaRepo: MediaRepository,
     private val downloadRepo: com.axio.reelz.data.repository.DownloadRepository,
     private val downloadSubtitleDao: DownloadSubtitleDao,
     private val adEngine: AdEngine,
-    private val premiumGate: PremiumGate,
+    private val sessionRepo: UserSessionRepository,
     private val pipPrefs: AppPreferencesStore,
 ) : ViewModel() {
 
@@ -139,13 +126,12 @@ class PlayerViewModel @Inject constructor(
         get() = _exoPlayer.value
         private set(value) { _exoPlayer.value = value }
 
-    private var currentTmdbId   = -1
+    // ── Current media context ─────────────────────────────────────────────────
+    private var currentId       = ""
     private var currentType     = MediaType.MOVIE
     private var currentSeason   = 0
     private var currentEpisode  = 0
     private var currentTitle    = ""
-    private var currentImdbId: String? = null
-    private var currentYear: Int? = null
     private var currentPoster: String? = null
     private var currentDownloadId: String? = null
     private var lastResult: StreamResult? = null
@@ -155,21 +141,9 @@ class PlayerViewModel @Inject constructor(
     private var trackSelector: DefaultTrackSelector? = null
     private var isOnMeteredConnection = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-
-    /**
-     * All downloaded qualities for the current content (set during offline init).
-     * The player quality drawer lists ONLY these when isOfflinePlayback == true.
-     */
-    private var offlineDownloads: List<com.axio.reelz.data.model.DownloadItem> = emptyList()
-    /** Quality the user last selected for this title — "" means auto/highest. */
+    private var offlineDownloads: List<DownloadItem> = emptyList()
     private var preferredOfflineQuality: String = ""
-
-    // ── Bug 3 fix: track whether the Activity was in PiP right before onStop ─
-    // The Activity calls wasInPipBeforeStop() inside onStop to decide whether
-    // the PiP window was dismissed (vs normal background / config change).
     private var _wasInPipBeforeStop = false
-
-    // ── Silent-retry state ────────────────────────────────────────────────────
     private var silentRetryCount = 0
     private val MAX_SILENT_RETRIES = 3
     private var errorHandlerJob: Job? = null
@@ -182,89 +156,57 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun canBackgroundPlay(): Boolean = premiumGate.canBackgroundPlay()
+    // Premium gating — simplified: reads from session repo
+    private fun maxResolutionHeight(): Int = if (sessionRepo.isPremium) Int.MAX_VALUE else 720
+    fun canBackgroundPlay(): Boolean = sessionRepo.isPremium
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // PiP controls
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── PiP ──────────────────────────────────────────────────────────────────
 
-    /**
-     * Called by the Activity whenever the system notifies us that PiP mode
-     * changed. Handles entry, exit (user tapped to return), and dismissal.
-     */
     fun onPipModeChanged(isInPipMode: Boolean) {
         if (isInPipMode) {
-            // Entering PiP — record the flag so onStop can detect dismissal
             _wasInPipBeforeStop = true
         } else {
-            // Exiting PiP back to full screen (user tapped the floating window)
-            // Bug 4 fix: resume playback immediately.
             _wasInPipBeforeStop = false
-            exoPlayer?.let { p ->
-                if (p.mediaItemCount > 0 && !p.isPlaying) p.play()
-            }
+            exoPlayer?.let { p -> if (p.mediaItemCount > 0 && !p.isPlaying) p.play() }
         }
         _ui.update { it.copy(isPipActive = isInPipMode) }
     }
 
-    /**
-     * Called from PlayerActivity.onStop().
-     * Returns true when the Activity stopped while still in the PiP flow,
-     * meaning the user dismissed the floating window via the system X button.
-     * The Activity must then call stopPlaybackAndRelease() + finish().
-     */
     fun wasInPipBeforeStop(): Boolean = _wasInPipBeforeStop
 
-    /**
-     * Bug 3 fix: hard-stop all playback and release the player.
-     * Called when the PiP window is dismissed via the system close button to
-     * prevent ghost audio playing in the background.
-     */
     fun stopPlaybackAndRelease() {
-        exoPlayer?.stop()
-        exoPlayer?.release()
-        exoPlayer = null
+        exoPlayer?.stop(); exoPlayer?.release(); exoPlayer = null
         _wasInPipBeforeStop = false
         _ui.update { it.copy(isPipActive = false, state = PlayerState.Idle) }
     }
 
-    /** Returns true if PiP should be auto-entered (Home / Recents press). */
-    fun shouldAutoPip(): Boolean =
-        _ui.value.isPipGloballyEnabled && _ui.value.state is PlayerState.Playing
+    fun shouldAutoPip(): Boolean = _ui.value.isPipGloballyEnabled && _ui.value.state is PlayerState.Playing
+    fun canManualPip(): Boolean  = _ui.value.isPipGloballyEnabled && _ui.value.state is PlayerState.Playing
 
-    /** Returns true if PiP should be entered when the user taps the PiP icon. */
-    fun canManualPip(): Boolean =
-        _ui.value.isPipGloballyEnabled && _ui.value.state is PlayerState.Playing
-
-    /** Persists the global PiP preference and optimistically updates UI. */
     fun setGlobalPipEnabled(enabled: Boolean) {
         viewModelScope.launch { pipPrefs.setPipEnabled(enabled) }
         _ui.update { it.copy(isPipGloballyEnabled = enabled) }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Drawer controls
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Drawers ───────────────────────────────────────────────────────────────
 
-    fun openSpeedDrawer()     { closeAllDrawers(); _ui.update { it.copy(isSpeedDrawerOpen = true,    showControls = true) } }
-    fun closeSpeedDrawer()    { _ui.update { it.copy(isSpeedDrawerOpen = false) } }
-    fun openQualityDrawer()   { closeAllDrawers(); _ui.update { it.copy(isQualityDrawerOpen = true,   showControls = true) } }
-    fun closeQualityDrawer()  { _ui.update { it.copy(isQualityDrawerOpen = false) } }
-    fun openSettingsDrawer()  { closeAllDrawers(); _ui.update { it.copy(isSettingsDrawerOpen = true,  showControls = true) } }
+    fun openSpeedDrawer()     { closeAllDrawers(); _ui.update { it.copy(isSpeedDrawerOpen    = true, showControls = true) } }
+    fun closeSpeedDrawer()    { _ui.update { it.copy(isSpeedDrawerOpen    = false) } }
+    fun openQualityDrawer()   { closeAllDrawers(); _ui.update { it.copy(isQualityDrawerOpen  = true, showControls = true) } }
+    fun closeQualityDrawer()  { _ui.update { it.copy(isQualityDrawerOpen  = false) } }
+    fun openSettingsDrawer()  { closeAllDrawers(); _ui.update { it.copy(isSettingsDrawerOpen = true, showControls = true) } }
     fun closeSettingsDrawer() { _ui.update { it.copy(isSettingsDrawerOpen = false) } }
+    fun openSubtitleDrawer()  { closeAllDrawers(); _ui.update { it.copy(showSubtitleDrawer   = true, showControls = true) } }
+    fun closeSubtitleDrawer() { _ui.update { it.copy(showSubtitleDrawer   = false, subtitleUpsellMessage = null) } }
 
-    private fun closeAllDrawers() {
-        _ui.update { it.copy(
-            isSpeedDrawerOpen    = false,
-            isQualityDrawerOpen  = false,
-            isSettingsDrawerOpen = false,
-            showSubtitleDrawer   = false,
-        )}
-    }
+    private fun closeAllDrawers() = _ui.update { it.copy(
+        isSpeedDrawerOpen    = false,
+        isQualityDrawerOpen  = false,
+        isSettingsDrawerOpen = false,
+        showSubtitleDrawer   = false,
+    )}
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Network monitoring
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Network monitoring ────────────────────────────────────────────────────
 
     private fun startNetworkMonitor(context: Context) {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -311,33 +253,26 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Init
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Init ──────────────────────────────────────────────────────────────────
 
     @OptIn(UnstableApi::class)
     fun init(
         context: Context,
-        tmdbId: Int, mediaType: MediaType,
+        id: String,
+        mediaType: MediaType,
         season: Int, episode: Int,
-        title: String, posterPath: String?,
+        title: String, posterUrl: String?,
         streamUrl: String? = null,
         streamIsHls: Boolean = false,
-        streamReferer: String = "",
-        streamOrigin: String = "",
         downloadId: String? = null,
-        imdbId: String? = null,
-        year: Int? = null,
         preferredQuality: String? = null,
     ) {
-        currentTmdbId     = tmdbId
+        currentId         = id
         currentType       = mediaType
         currentSeason     = season
         currentEpisode    = episode
         currentTitle      = title
-        currentImdbId     = imdbId
-        currentYear       = year
-        currentPoster     = posterPath
+        currentPoster     = posterUrl
         currentDownloadId = downloadId
         preferredOfflineQuality = preferredQuality ?: ""
 
@@ -360,73 +295,43 @@ class PlayerViewModel @Inject constructor(
         buildPlayer(context)
 
         viewModelScope.launch {
-            if (isOffline && downloadId != null) {
-                loadDownloadedSubtitles(tmdbId, season, episode)
-
-                // ── Multi-quality offline: load all downloaded resolutions for this content ──
-                val allDownloads = downloadRepo.getDownloadedQualities(tmdbId, season, episode)
+            if (isOffline) {
+                loadDownloadedSubtitles(id, season, episode)
+                val allDownloads = downloadRepo.getDownloadedItems(id, season, episode)
                 offlineDownloads = allDownloads
-
-                // Build quality list for the player quality drawer
                 val offlineQualities = allDownloads
-                    .filter { it.status == com.axio.reelz.data.model.DownloadStatus.DONE.name }
+                    .filter { it.status == DownloadStatus.DONE }
                     .sortedByDescending { it.sizeBytes }
-                    .map { QualityTrack(it.quality, it.localPlaylistPath.ifBlank { "file://${it.filePath}" }) }
-
-                // Determine which quality to start with:
-                // 1. preferredQuality intent extra (user's remembered choice)
-                // 2. lastSelectedQuality from DB (remembered from previous play)
-                // 3. Highest available
-                val rememberedQuality = preferredOfflineQuality.ifBlank {
-                    allDownloads.firstOrNull()?.lastSelectedQuality ?: ""
-                }
-                val startQuality = if (rememberedQuality.isNotBlank() &&
-                    offlineQualities.any { it.label == rememberedQuality }
-                ) rememberedQuality
-                else offlineQualities.firstOrNull()?.label ?: ""
-
-                _ui.update { it.copy(
-                    availableQualities = offlineQualities,
-                    selectedQuality    = startQuality,
-                )}
+                    .map { QualityTrack(it.quality, it.filePath) }
+                val startQuality = preferredOfflineQuality.takeIf { q ->
+                    q.isNotBlank() && offlineQualities.any { it.label == q }
+                } ?: offlineQualities.firstOrNull()?.label ?: ""
+                _ui.update { it.copy(availableQualities = offlineQualities, selectedQuality = startQuality) }
             }
 
             if (streamUrl != null) {
-                // Honour the preferred quality for offline playback when a pre-built URL is passed
+                // Pre-fetched URL passed in (e.g. from Detail screen pre-resolve)
                 val resolvedUrl = if (isOffline && offlineDownloads.isNotEmpty()) {
                     val preferred = _ui.value.selectedQuality
-                    val match = offlineDownloads.firstOrNull { it.quality == preferred }
-                        ?: offlineDownloads.firstOrNull { it.status == com.axio.reelz.data.model.DownloadStatus.DONE.name }
-                    when {
-                        match?.localPlaylistPath?.isNotBlank() == true -> "file://${match.localPlaylistPath}"
-                        match?.filePath?.isNotBlank() == true          -> "file://${match.filePath}"
-                        else                                           -> streamUrl
-                    }
+                    val match = offlineDownloads.firstOrNull { it.quality == preferred && it.status == DownloadStatus.DONE }
+                        ?: offlineDownloads.firstOrNull { it.status == DownloadStatus.DONE }
+                    match?.filePath?.takeIf { it.isNotBlank() } ?: streamUrl
                 } else streamUrl
 
-                val result = StreamResult(
-                    url = resolvedUrl, isHls = streamIsHls,
-                    headers = emptyMap(), referer = streamReferer, origin = streamOrigin,
-                    sourceName = "prefetched",
-                )
+                val result = StreamResult(url = resolvedUrl, isHls = streamIsHls, sourceName = "prefetched")
                 lastResult = result
                 playStream(result)
-                if (!isOffline) loadStreamSubtitles(result.subtitles)
             } else {
-                resolveAndPlay(tmdbId, mediaType, title, season, episode, imdbId, year, isOffline)
+                resolveAndPlay(id, mediaType, title, season, episode, isOffline)
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Core resolve — cache-first, then backend
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Resolve ───────────────────────────────────────────────────────────────
 
     private suspend fun resolveAndPlay(
-        tmdbId: Int, type: MediaType, title: String,
-        season: Int, episode: Int,
-        imdbId: String?, year: Int?,
-        isOffline: Boolean = false,
+        id: String, type: MediaType, title: String,
+        season: Int, episode: Int, isOffline: Boolean = false,
         isQualitySwitch: Boolean = false,
     ) {
         val minutesSince = System.currentTimeMillis() / 60_000L - lastPreRollTimeMinutes
@@ -448,85 +353,53 @@ class PlayerViewModel @Inject constructor(
         isFirstPlayThisSession = false
         fallbackIndex = 0
 
-        val result = streamRepo.resolveFirst(
-            tmdbId    = tmdbId,
-            mediaType = type,
-            title     = title,
-            season    = season,
-            episode   = episode,
-            imdbId    = imdbId,
-            year      = year,
-            onStream = { track ->
-                Log.d("PlayerVM", "Fallback URL ready: [${track.label}]")
-            },
-            onDownload = { track ->
-                val current = _ui.value.availableQualities.toMutableList()
-                if (current.none { it.url == track.url }) {
-                    current.add(track)
-                    _ui.update { it.copy(availableQualities = current) }
+        val result = streamRepo.resolveStream(id, title, type, season, episode)
+        when (result) {
+            is NetworkResult.Success -> {
+                val stream = result.data
+                lastResult = stream
+                val qualities = stream.qualities.ifEmpty {
+                    listOf(QualityTrack(stream.quality.ifBlank { "Auto" }, stream.url))
                 }
-            },
-            onSubtitle = { sub ->
-                val option = SubtitleOption(sub.language, sub.label, sub.url)
-                val current = _ui.value.subtitleOptions.toMutableList()
-                if (current.none { it.url == sub.url }) {
-                    current.add(option)
-                    _ui.update { it.copy(subtitleOptions = current, subtitles = current.map {
-                        com.axio.reelz.data.model.Subtitle(it.url, it.language, it.label)
-                    })}
+                _ui.update { it.copy(availableQualities = qualities) }
+                if (stream.subtitles.isNotEmpty()) loadStreamSubtitles(stream.subtitles)
+                playStream(stream)
+                silentRetryCount = 0
+            }
+            is NetworkResult.Error -> {
+                if (result.isNotFound) {
+                    _ui.update { it.copy(state = PlayerState.Error(
+                        "Reelz doesn't have this title yet. Try again later.")) }
+                    return
                 }
-            },
-        )
-
-        if (result == null) {
-            val errType = streamRepo.lastErrorType
-            if (errType == BackendStreamRepository.StreamError.NOT_FOUND) {
-                _ui.update { it.copy(state = PlayerState.Error(
-                    "Reelz doesn't have this title yet. Try again later.",
-                    isNetworkError = false,
-                ))}
-                return
+                val netOk = _ui.value.networkState is NetworkState.Connected
+                if (!netOk) {
+                    _ui.update { it.copy(state = PlayerState.Error(
+                        "No internet connection. Connect and try again.", isNetworkError = true)) }
+                    return
+                }
+                if (silentRetryCount < MAX_SILENT_RETRIES) {
+                    silentRetryCount++
+                    delay(300L * silentRetryCount)
+                    resolveAndPlay(id, type, title, season, episode, isOffline)
+                } else {
+                    _ui.update { it.copy(state = PlayerState.Error("Couldn't load stream. Tap to try again.")) }
+                }
             }
-            val netOk = _ui.value.networkState is NetworkState.Connected
-            if (!netOk) {
-                _ui.update { it.copy(state = PlayerState.Error(
-                    "No internet connection. Connect and try again.",
-                    isNetworkError = true,
-                ))}
-                return
-            }
-            if (silentRetryCount < MAX_SILENT_RETRIES) {
-                silentRetryCount++
-                Log.d("PlayerVM", "Silent retry #$silentRetryCount (errType=$errType)")
-                delay(300L * silentRetryCount)
-                resolveAndPlay(tmdbId, type, title, season, episode, imdbId, year, isOffline)
-            } else {
-                _ui.update { it.copy(state = PlayerState.Error(
-                    "Couldn't load stream. Tap to try again.",
-                    isNetworkError = false,
-                ))}
-            }
-            return
+            else -> {}
         }
-
-        silentRetryCount = 0
-        lastResult = result
-        playStream(result)
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Subtitle handling
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Subtitle handling ─────────────────────────────────────────────────────
 
     private fun loadStreamSubtitles(subtitles: List<Subtitle>) {
-        if (subtitles.isEmpty()) return
         val options = subtitles.map { SubtitleOption(it.language, it.label, it.url) }
         _ui.update { it.copy(subtitleOptions = options, subtitles = subtitles,
             activeSubtitleLanguage = "off", subtitlesEnabled = false) }
     }
 
-    private suspend fun loadDownloadedSubtitles(tmdbId: Int, season: Int, episode: Int) {
-        val saved = downloadSubtitleDao.getForContent(tmdbId, season, episode)
+    private suspend fun loadDownloadedSubtitles(id: String, season: Int, episode: Int) {
+        val saved = downloadSubtitleDao.getForContent(id, season, episode)
         val options = saved.map { SubtitleOption(it.language, it.label, it.localFilePath,
             isPersistent = true, persistentId = it.id, isEnabled = it.isEnabled) }
         val lastEnabled = options.firstOrNull { it.isEnabled }
@@ -536,7 +409,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun searchOnlineSubtitles(query: String = "") {
-        if (!premiumGate.canManualSubtitleSearch()) {
+        if (!sessionRepo.isPremium) {
             _ui.update { it.copy(subtitleUpsellMessage =
                 "Manual subtitle search is a Premium feature. Upgrade to search any language.") }
             return
@@ -549,13 +422,8 @@ class PlayerViewModel @Inject constructor(
         }
         _ui.update { it.copy(isSubtitleSearching = true, subtitleSearchEmpty = false, subtitleUpsellMessage = null) }
         viewModelScope.launch(Dispatchers.IO) {
-            val subs: List<Subtitle> = streamRepo.searchSubtitles(
-                tmdbId    = currentTmdbId,
-                mediaType = currentType,
-                season    = currentSeason,
-                episode   = currentEpisode,
-                languages = langs,
-            )
+            val result = streamRepo.getSubtitles(currentId, currentType, currentSeason, currentEpisode, langs)
+            val subs = (result as? NetworkResult.Success)?.data ?: emptyList()
             if (subs.isNotEmpty()) {
                 val options = subs.map { s -> SubtitleOption(s.language, s.label, s.url) }
                 val currentLang = _ui.value.activeSubtitleLanguage
@@ -564,10 +432,8 @@ class PlayerViewModel @Inject constructor(
                     subtitles           = subs,
                     isSubtitleSearching = false,
                     subtitleSearchEmpty = false,
-                    activeSubtitleLanguage = if (options.any { o -> o.language == currentLang })
-                        currentLang else "off",
-                    subtitlesEnabled = _ui.value.subtitlesEnabled &&
-                        options.any { o -> o.language == currentLang },
+                    activeSubtitleLanguage = if (options.any { o -> o.language == currentLang }) currentLang else "off",
+                    subtitlesEnabled = _ui.value.subtitlesEnabled && options.any { o -> o.language == currentLang },
                 )}
             } else {
                 _ui.update { it.copy(isSubtitleSearching = false, subtitleSearchEmpty = true) }
@@ -578,14 +444,19 @@ class PlayerViewModel @Inject constructor(
     fun addDownloadedSubtitle(sub: Subtitle, localFilePath: String) {
         val downloadId = currentDownloadId ?: return
         viewModelScope.launch {
-            val existing = downloadSubtitleDao.getForContent(currentTmdbId, currentSeason, currentEpisode)
+            val existing = downloadSubtitleDao.getForContent(currentId, currentSeason, currentEpisode)
             if (existing.any { it.language == sub.language }) { selectSubtitle(sub.language); return@launch }
-            downloadSubtitleDao.insert(DownloadSubtitle(
-                downloadId = downloadId, tmdbId = currentTmdbId,
-                season = currentSeason, episode = currentEpisode,
-                language = sub.language, label = sub.label,
-                localFilePath = localFilePath, isEnabled = true))
-            loadDownloadedSubtitles(currentTmdbId, currentSeason, currentEpisode)
+            downloadSubtitleDao.insert(DownloadSubtitleRow(
+                downloadId    = downloadId,
+                mediaId       = currentId,
+                season        = currentSeason,
+                episode       = currentEpisode,
+                language      = sub.language,
+                label         = sub.label,
+                localFilePath = localFilePath,
+                isEnabled     = true,
+            ))
+            loadDownloadedSubtitles(currentId, currentSeason, currentEpisode)
         }
     }
 
@@ -604,7 +475,7 @@ class PlayerViewModel @Inject constructor(
     fun deletePersistentSubtitle(option: SubtitleOption) {
         if (!option.isPersistent) return
         viewModelScope.launch {
-            downloadSubtitleDao.delete(option.persistentId)
+            downloadSubtitleDao.deleteForDownload(option.persistentId.toString())
             val updated = _ui.value.subtitleOptions.filter { it.persistentId != option.persistentId }
             _ui.update { it.copy(subtitleOptions = updated) }
             if (_ui.value.activeSubtitleLanguage == option.language) selectSubtitle("off")
@@ -612,23 +483,19 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectSubtitle(language: String) {
-        val option = _ui.value.subtitleOptions.firstOrNull { it.language == language }
+        val option  = _ui.value.subtitleOptions.firstOrNull { it.language == language }
         val enabled = language != "off" && option != null
-        val resolvedLanguage = if (enabled) language else "off"
         _ui.update { it.copy(
-            activeSubtitleLanguage = resolvedLanguage,
+            activeSubtitleLanguage = if (enabled) language else "off",
             subtitlesEnabled       = enabled,
             selectedSubtitle       = option?.label ?: "Off",
         )}
         trackSelector?.let { ts ->
             val params = ts.buildUponParameters()
             if (enabled) {
-                ts.setParameters(params
-                    .setPreferredTextLanguage(language)
-                    .setIgnoredTextSelectionFlags(0))
+                ts.setParameters(params.setPreferredTextLanguage(language).setIgnoredTextSelectionFlags(0))
             } else {
-                ts.setParameters(params
-                    .setPreferredTextLanguage(null)
+                ts.setParameters(params.setPreferredTextLanguage(null)
                     .setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED))
             }
         }
@@ -636,9 +503,8 @@ class PlayerViewModel @Inject constructor(
 
     fun toggleSubtitlesOnOff() {
         val cur = _ui.value
-        if (cur.subtitlesEnabled) {
-            selectSubtitle("off")
-        } else {
+        if (cur.subtitlesEnabled) selectSubtitle("off")
+        else {
             val target = cur.subtitleOptions.firstOrNull { it.language == cur.activeSubtitleLanguage }
                 ?: cur.subtitleOptions.firstOrNull()
             if (target != null) selectSubtitle(target.language)
@@ -646,15 +512,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun setSubtitleOffset(offsetMs: Int) { _ui.update { it.copy(subtitleOffsetMs = offsetMs) } }
-    fun openSubtitleDrawer()  {
-        closeAllDrawers()
-        _ui.update { it.copy(showSubtitleDrawer = true, showControls = true) }
-    }
-    fun closeSubtitleDrawer() { _ui.update { it.copy(showSubtitleDrawer = false, subtitleUpsellMessage = null) } }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Player build / lifecycle
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Player build ──────────────────────────────────────────────────────────
 
     private fun resetPlayer() {
         exoPlayer?.stop(); exoPlayer?.clearMediaItems(); exoPlayer?.release()
@@ -676,13 +535,12 @@ class PlayerViewModel @Inject constructor(
 
     @OptIn(UnstableApi::class)
     private fun buildPlayer(context: Context) {
-        val maxHeight = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
+        val maxHeight = maxResolutionHeight()
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val isMetered = try { cm?.isActiveNetworkMetered == true } catch (_: Exception) { true }
-        isOnMeteredConnection = isMetered
+        isOnMeteredConnection = try { cm?.isActiveNetworkMetered == true } catch (_: Exception) { true }
 
-        val effectiveMaxHeight  = if (isMetered) minOf(maxHeight, 480) else maxHeight
-        val effectiveMaxBitrate = if (isMetered) 1_200_000 else Int.MAX_VALUE
+        val effectiveMaxHeight  = if (isOnMeteredConnection) minOf(maxHeight, 480) else maxHeight
+        val effectiveMaxBitrate = if (isOnMeteredConnection) 1_200_000 else Int.MAX_VALUE
 
         val ts = DefaultTrackSelector(context).apply {
             setParameters(buildUponParameters()
@@ -700,12 +558,10 @@ class PlayerViewModel @Inject constructor(
             .setTargetBufferBytes(DefaultLoadControl.DEFAULT_TARGET_BUFFER_BYTES * 4)
             .build()
 
-        val videoCache  = getVideoCache(context)
+        val videoCache = getVideoCache(context)
         val upstreamDsf = DefaultHttpDataSource.Factory()
-            .setConnectTimeoutMs(4_000)
-            .setReadTimeoutMs(20_000)
-            .setAllowCrossProtocolRedirects(true)
-            .setTransferListener(bandwidthMeter)
+            .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
+            .setAllowCrossProtocolRedirects(true).setTransferListener(bandwidthMeter)
         val cacheDsf = CacheDataSource.Factory()
             .setCache(videoCache).setUpstreamDataSourceFactory(upstreamDsf)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
@@ -721,7 +577,7 @@ class PlayerViewModel @Inject constructor(
                             Player.STATE_READY     -> _ui.update { it.copy(
                                 state = if (p.playWhenReady) PlayerState.Playing else PlayerState.Paused,
                                 durationMs = p.duration.coerceAtLeast(0)) }
-                            Player.STATE_ENDED -> _ui.update { it.copy(state = PlayerState.Idle) }
+                            Player.STATE_ENDED     -> _ui.update { it.copy(state = PlayerState.Idle) }
                             else -> {}
                         }
                     }
@@ -730,7 +586,7 @@ class PlayerViewModel @Inject constructor(
                     }
                     override fun onPlayerError(error: PlaybackException) { handleError(error) }
                     override fun onTracksChanged(tracks: Tracks) {
-                        val mh = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
+                        val mh = maxResolutionHeight()
                         val qualities = mutableListOf(QualityTrack("Auto", ""))
                         tracks.groups.forEach { g ->
                             if (g.type == C.TRACK_TYPE_VIDEO) {
@@ -751,9 +607,7 @@ class PlayerViewModel @Inject constructor(
                             }
                         }
                         _ui.update { it.copy(availableQualities = qualities.distinctBy { q -> q.label }
-                            .sortedByDescending { q ->
-                                if (q.label == "Auto") Int.MAX_VALUE
-                                else q.label.replace("p","").toIntOrNull() ?: 0 }) }
+                            .sortedByDescending { q -> if (q.label == "Auto") Int.MAX_VALUE else q.label.replace("p","").toIntOrNull() ?: 0 }) }
                     }
                 })
                 p.playWhenReady = true
@@ -770,15 +624,9 @@ class PlayerViewModel @Inject constructor(
         val mediaDsf = if (isLocalFile) {
             DefaultDataSource.Factory(appContext)
         } else {
-            val headers = mutableMapOf<String, String>().apply {
-                putAll(result.headers)
-                if (result.referer.isNotBlank()) put("Referer", result.referer)
-                if (result.origin.isNotBlank())  put("Origin",  result.origin)
-            }
             val upstreamDsf = DefaultHttpDataSource.Factory()
-                .setDefaultRequestProperties(headers)
-                .setConnectTimeoutMs(4_000)
-                .setReadTimeoutMs(20_000)
+                .setDefaultRequestProperties(result.headers)
+                .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
                 .setAllowCrossProtocolRedirects(true)
             CacheDataSource.Factory()
                 .setCache(getVideoCache(appContext)).setUpstreamDataSourceFactory(upstreamDsf)
@@ -791,92 +639,59 @@ class PlayerViewModel @Inject constructor(
             ProgressiveMediaSource.Factory(mediaDsf).createMediaSource(item)
 
         viewModelScope.launch {
-            val resumeMs = repo.getPosition(currentTmdbId, currentSeason, currentEpisode)
+            val resumeMs = mediaRepo.getProgress(currentId, currentSeason, currentEpisode)?.positionMs ?: 0L
             p.setMediaSource(source); p.prepare()
             if (resumeMs > 5_000) p.seekTo(resumeMs)
             p.playWhenReady = true
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Controls
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Controls ──────────────────────────────────────────────────────────────
 
     fun togglePlayPause() { exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() } }
     fun seekTo(ms: Long)  { exoPlayer?.seekTo(ms) }
     fun seekForward(sec: Int = 10)  { exoPlayer?.let { it.seekTo((it.currentPosition + sec * 1000L).coerceAtMost(it.duration)) } }
     fun seekBackward(sec: Int = 10) { exoPlayer?.let { it.seekTo((it.currentPosition - sec * 1000L).coerceAtLeast(0)) } }
-    fun toggleControls()  { _ui.update { it.copy(showControls = !it.showControls) } }
-    fun showControls()    { _ui.update { it.copy(showControls = true) } }
-    fun hideControls()    { _ui.update { it.copy(showControls = false) } }
-    fun toggleLock()      { _ui.update { it.copy(isLocked = !it.isLocked) } }
-    fun toggleMute()      { val newMute = !_ui.value.isMuted; exoPlayer?.volume = if (newMute) 0f else 1f; _ui.update { it.copy(isMuted = newMute) } }
-    fun setMute(muted: Boolean) { exoPlayer?.volume = if (muted) 0f else 1f; _ui.update { it.copy(isMuted = muted) } }
-    fun setSpeed(speed: Float)  { exoPlayer?.setPlaybackSpeed(speed); _ui.update { it.copy(playbackSpeed = speed) } }
+    fun toggleControls() { _ui.update { it.copy(showControls = !it.showControls) } }
+    fun showControls()   { _ui.update { it.copy(showControls = true) } }
+    fun hideControls()   { _ui.update { it.copy(showControls = false) } }
+    fun toggleLock()     { _ui.update { it.copy(isLocked = !it.isLocked) } }
+    fun toggleMute()     { val m = !_ui.value.isMuted; exoPlayer?.volume = if (m) 0f else 1f; _ui.update { it.copy(isMuted = m) } }
+    fun setSpeed(speed: Float) { exoPlayer?.setPlaybackSpeed(speed); _ui.update { it.copy(playbackSpeed = speed) } }
 
     @OptIn(UnstableApi::class)
     fun setQuality(label: String) {
         _ui.update { it.copy(selectedQuality = label) }
-
-        // ── Offline: switch to the corresponding downloaded file ──────────────
         if (_ui.value.isOfflinePlayback && offlineDownloads.isNotEmpty()) {
             preferredOfflineQuality = label
-            val match = offlineDownloads.firstOrNull {
-                it.quality == label && it.status == com.axio.reelz.data.model.DownloadStatus.DONE.name
-            } ?: offlineDownloads.firstOrNull { it.status == com.axio.reelz.data.model.DownloadStatus.DONE.name }
+            val match = offlineDownloads.firstOrNull { it.quality == label && it.status == DownloadStatus.DONE }
+                ?: offlineDownloads.firstOrNull { it.status == DownloadStatus.DONE }
             if (match != null) {
-                val url = when {
-                    match.localPlaylistPath.isNotBlank() -> "file://${match.localPlaylistPath}"
-                    match.filePath.isNotBlank()          -> "file://${match.filePath}"
-                    else                                 -> return
-                }
-                val isHls = match.localPlaylistPath.isNotBlank()
+                val url = match.filePath.takeIf { it.isNotBlank() } ?: return
                 val savedPos = exoPlayer?.currentPosition ?: 0L
-                val result = StreamResult(
-                    url = url, isHls = isHls,
-                    headers = emptyMap(), referer = "", origin = "",
-                    sourceName = "offline-${match.quality}",
-                )
+                val result = StreamResult(url = url, isHls = url.contains(".m3u8", ignoreCase = true))
                 lastResult = result
                 viewModelScope.launch {
                     playStream(result)
                     if (savedPos > 0) exoPlayer?.seekTo(savedPos)
-                }
-                // Persist last selected quality to DB
-                viewModelScope.launch {
-                    downloadRepo.updateWatchProgress(
-                        tmdbId              = currentTmdbId,
-                        season              = currentSeason,
-                        episode             = currentEpisode,
-                        progressMs          = exoPlayer?.currentPosition ?: 0L,
-                        durationMs          = exoPlayer?.duration?.coerceAtLeast(0L) ?: 0L,
-                        lastSelectedQuality = label,
-                    )
+                    downloadRepo.updateWatchProgress(currentId, currentSeason, currentEpisode, savedPos, exoPlayer?.duration?.coerceAtLeast(0L) ?: 0L)
                 }
             }
             return
         }
-
-        // ── Online: HLS adaptive track selector ──────────────────────────────
         val ts = trackSelector ?: return
-        val maxHeight = premiumGate.maxResolutionHeight().let { if (it <= 0) Int.MAX_VALUE else it }
+        val mh = maxResolutionHeight()
         if (label == "Auto") {
-            val autoHeight  = if (isOnMeteredConnection) minOf(maxHeight, 480) else maxHeight
-            val autoBitrate = if (isOnMeteredConnection) 1_200_000 else Int.MAX_VALUE
-            ts.setParameters(ts.buildUponParameters()
-                .clearVideoSizeConstraints().setMaxVideoSize(Int.MAX_VALUE, autoHeight).setMaxVideoBitrate(autoBitrate))
+            val autoH = if (isOnMeteredConnection) minOf(mh, 480) else mh
+            ts.setParameters(ts.buildUponParameters().clearVideoSizeConstraints().setMaxVideoSize(Int.MAX_VALUE, autoH))
         } else {
-            val requested = label.replace("p", "").toIntOrNull() ?: return
-            val height = requested.coerceAtMost(maxHeight)
-            ts.setParameters(ts.buildUponParameters()
-                .setMaxVideoSize(Int.MAX_VALUE, height).setMinVideoSize(0, (height - 80).coerceAtLeast(0))
-                .setMaxVideoBitrate(Int.MAX_VALUE))
+            val requested = label.replace("p","").toIntOrNull() ?: return
+            val h = requested.coerceAtMost(mh)
+            ts.setParameters(ts.buildUponParameters().setMaxVideoSize(Int.MAX_VALUE, h)
+                .setMinVideoSize(0, (h - 80).coerceAtLeast(0)).setMaxVideoBitrate(Int.MAX_VALUE))
         }
     }
 
-    // ── Bug 1 fix: pollPosition runs unconditionally, regardless of PiP state ─
-    // This keeps the seek bar progress flowing inside the PiP window and ensures
-    // watch-progress is saved even when the app is in the floating window.
     fun pollPosition() {
         val p = exoPlayer ?: return
         val pos = p.currentPosition.coerceAtLeast(0)
@@ -884,15 +699,12 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(positionMs = pos, bufferedMs = p.bufferedPosition.coerceAtLeast(0), durationMs = dur) }
         if (dur > 0) {
             viewModelScope.launch {
-                repo.saveProgress(currentTmdbId, currentTitle, currentPoster,
-                    currentType, currentSeason, currentEpisode, pos, dur)
+                mediaRepo.saveProgress(currentId, currentSeason, currentEpisode, pos, dur)
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Error handler
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Error handler ─────────────────────────────────────────────────────────
 
     private fun handleError(error: PlaybackException) {
         errorHandlerJob?.cancel()
@@ -901,7 +713,6 @@ class PlayerViewModel @Inject constructor(
 
     private suspend fun handleErrorInternal(error: PlaybackException) {
         Log.w("PlayerVM", "Playback error: ${error.errorCodeName} — ${error.message}")
-
         val netOk = _ui.value.networkState is NetworkState.Connected
         if (!netOk && !_ui.value.isOfflinePlayback) {
             _ui.update { it.copy(state = PlayerState.Error(
@@ -909,68 +720,42 @@ class PlayerViewModel @Inject constructor(
                 isNetworkError = true)) }
             return
         }
-
         val ladder = lastResult?.qualities ?: emptyList()
         val nextIndex = fallbackIndex + 1
-        if (nextIndex < ladder.size) {
-            val nextTrack = ladder[nextIndex]
-            if (nextTrack.url.isNotBlank()) {
-                Log.d("PlayerVM", "Silent fallback: trying ladder[$nextIndex] ${nextTrack.label}")
-                fallbackIndex = nextIndex
-                val current = lastResult!!
-                val isHls = nextTrack.url.contains(".m3u8", ignoreCase = true) ||
-                        (!nextTrack.url.contains("/api/v1/torrent/") && current.isHls)
-                val fallbackResult = current.copy(
-                    url     = nextTrack.url,
-                    isHls   = isHls,
-                    quality = nextTrack.label,
-                )
-                lastResult = fallbackResult
-                _ui.update { it.copy(state = PlayerState.Buffering) }
-                playStream(fallbackResult)
-                return
-            }
+        if (nextIndex < ladder.size && ladder[nextIndex].url.isNotBlank()) {
+            fallbackIndex = nextIndex
+            val next = ladder[nextIndex]
+            val fallback = lastResult!!.copy(url = next.url, quality = next.label)
+            lastResult = fallback
+            _ui.update { it.copy(state = PlayerState.Buffering) }
+            playStream(fallback)
+            return
         }
-
-        Log.d("PlayerVM", "Fallback ladder exhausted (tried ${fallbackIndex + 1}/${ladder.size})")
-        streamRepo.invalidateCache(currentTmdbId, currentType, currentSeason, currentEpisode)
-
+        streamRepo.invalidate(currentId, currentType, currentSeason, currentEpisode)
         if (silentRetryCount < MAX_SILENT_RETRIES) {
             silentRetryCount++
-            Log.d("PlayerVM", "Silent backend re-fetch #$silentRetryCount")
             _ui.update { it.copy(state = PlayerState.Buffering) }
             delay(200L * silentRetryCount)
-            resolveAndPlay(
-                currentTmdbId, currentType, currentTitle,
-                currentSeason, currentEpisode, currentImdbId, currentYear,
-                _ui.value.isOfflinePlayback,
-            )
+            resolveAndPlay(currentId, currentType, currentTitle, currentSeason, currentEpisode, _ui.value.isOfflinePlayback)
         } else {
             silentRetryCount = 0
-            _ui.update { it.copy(state = PlayerState.Error(
-                "Couldn't load stream. Tap to try again.",
-                isNetworkError = false,
-            ))}
+            _ui.update { it.copy(state = PlayerState.Error("Couldn't load stream. Tap to try again.")) }
         }
     }
 
     fun preRollCompleted() {
         _ui.update { it.copy(preRollVastUrl = null, isPreRollPlaying = false) }
         viewModelScope.launch {
-            resolveAndPlay(currentTmdbId, currentType, currentTitle,
-                currentSeason, currentEpisode, currentImdbId, currentYear)
+            resolveAndPlay(currentId, currentType, currentTitle, currentSeason, currentEpisode)
         }
     }
 
     fun retry() {
-        silentRetryCount = 0
-        fallbackIndex    = 0
-        streamRepo.invalidateCache(currentTmdbId, currentType, currentSeason, currentEpisode)
+        silentRetryCount = 0; fallbackIndex = 0
+        streamRepo.invalidate(currentId, currentType, currentSeason, currentEpisode)
         _ui.update { it.copy(state = PlayerState.Resolving) }
         viewModelScope.launch {
-            resolveAndPlay(currentTmdbId, currentType, currentTitle,
-                currentSeason, currentEpisode, currentImdbId, currentYear,
-                _ui.value.isOfflinePlayback)
+            resolveAndPlay(currentId, currentType, currentTitle, currentSeason, currentEpisode, _ui.value.isOfflinePlayback)
         }
     }
 
@@ -979,28 +764,15 @@ class PlayerViewModel @Inject constructor(
     fun release(context: Context? = null) {
         errorHandlerJob?.cancel()
         stopNetworkMonitor(context)
-
-        // ── Save watch progress for offline downloads before releasing ─────────
         val p = exoPlayer
-        if (p != null && _ui.value.isOfflinePlayback && currentTmdbId > 0) {
+        if (p != null && _ui.value.isOfflinePlayback && currentId.isNotBlank()) {
             val posMs = p.currentPosition.coerceAtLeast(0L)
             val durMs = p.duration.coerceAtLeast(0L)
-            val selQ  = _ui.value.selectedQuality
-            // Use runBlocking-lite: ViewModel scope may be cancelled, so launch with SupervisorJob
             kotlinx.coroutines.runBlocking {
-                try {
-                    downloadRepo.updateWatchProgress(
-                        tmdbId              = currentTmdbId,
-                        season              = currentSeason,
-                        episode             = currentEpisode,
-                        progressMs          = posMs,
-                        durationMs          = durMs,
-                        lastSelectedQuality = selQ,
-                    )
-                } catch (_: Exception) {}
+                try { downloadRepo.updateWatchProgress(currentId, currentSeason, currentEpisode, posMs, durMs) }
+                catch (_: Exception) {}
             }
         }
-
         exoPlayer?.stop(); exoPlayer?.clearMediaItems(); exoPlayer?.release()
         exoPlayer = null
     }
