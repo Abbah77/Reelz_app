@@ -6,6 +6,9 @@ import com.axio.reelz.core.database.AppConfigCacheDao
 import com.axio.reelz.core.database.AppConfigCacheRow
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.dto.AppConfigDto
+import com.axio.reelz.data.dto.PremiumConfig
+import com.axio.reelz.data.dto.TierConfig
+import com.axio.reelz.data.dto.TiersConfig
 import com.axio.reelz.core.network.NetworkResult
 import com.axio.reelz.core.network.safeApiCall
 import com.google.gson.Gson
@@ -49,6 +52,32 @@ class ConfigRepository @Inject constructor(
 
     fun current(): AppConfigDto = _config.value ?: AppConfigDto()
     fun isMaintenanceMode(): Boolean = current().forceMaintenance
+
+    fun tiersConfig(): TiersConfig = TiersConfig()  // extend when backend provides tier data
+
+    fun premiumConfig(): PremiumConfig {
+        val p = current().premium
+        return PremiumConfig(
+            monthlyPriceNgn   = p.monthlyPrice,
+            yearlyPriceNgn    = p.monthlyPrice * 10,
+            paystackMonthlyUrl = p.paystackMonthlyUrl,
+            paystackYearlyUrl  = p.paystackYearlyUrl,
+            paymentNote        = "",
+        )
+    }
+
+    fun tiersConfig(): TiersConfig = TiersConfig()  // extend when backend provides tier data
+
+    fun premiumConfig(): PremiumConfig {
+        val p = current().premium
+        return PremiumConfig(
+            monthlyPriceNgn   = p.monthlyPrice,
+            yearlyPriceNgn    = p.monthlyPrice * 10,
+            paystackMonthlyUrl = p.paystackMonthlyUrl,
+            paystackYearlyUrl  = p.paystackYearlyUrl,
+            paymentNote        = "",
+        )
+    }
     fun areAdsEnabled(isPremiumUser: Boolean = false): Boolean =
         current().ads.enabled && !isPremiumUser
     fun adsConfig() = current().ads
@@ -58,6 +87,8 @@ class ConfigRepository @Inject constructor(
     fun minAppVersion(): Int = current().minAppVersion
     fun latestAppVersion(): Int = current().latestAppVersion
     fun latestApkUrl(): String = current().latestApkUrl
+    fun latestVersionCode(): Int = current().latestAppVersion
+    fun latestVersionName(): String? = current().latestAppVersion.takeIf { it > 0 }?.toString()
 
     // ── Init — called from Application.onCreate() ─────────────────────────────
 

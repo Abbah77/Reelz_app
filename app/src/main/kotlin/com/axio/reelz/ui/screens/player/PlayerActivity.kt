@@ -545,7 +545,7 @@ fun PlayerScreen(
 
     LaunchedEffect(id, season, episode) {
         vm.init(ctx, id, mediaType, season, episode, title, poster,
-            streamUrl, streamIsHls, streamReferer, streamOrigin, downloadId,
+            streamUrl, streamIsHls, downloadId,
             preferredQuality = preferredQuality)
     }
 
@@ -1070,8 +1070,8 @@ fun PlayerScreen(
             onOffsetChange = { vm.setSubtitleOffset(it) },
             onSearchOnline = { query -> vm.searchOnlineSubtitles(query) },
             onUpgradeToPremium = {
-                val intent = android.content.Intent(ctx, com.axio.reelz.ui.MainActivity::class.java).apply {
-                    putExtra(com.axio.reelz.ui.MainActivity.EXTRA_OPEN_PREMIUM, true)
+                val intent = android.content.Intent(ctx, com.axio.reelz.app.MainActivity::class.java).apply {
+                    putExtra(com.axio.reelz.app.MainActivity.EXTRA_OPEN_PREMIUM, true)
                     flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
                             android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
                 }

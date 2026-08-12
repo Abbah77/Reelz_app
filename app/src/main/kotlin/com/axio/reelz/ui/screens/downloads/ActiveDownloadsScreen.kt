@@ -38,10 +38,10 @@ fun ActiveDownloadsScreen(
     val ctx             = LocalContext.current
     val activeDownloads by vm.activeDownloads.collectAsState()
 
-    val downloading = activeDownloads.filter { it.status == DownloadStatus.DOWNLOADING.name }
-    val paused      = activeDownloads.filter { it.status == DownloadStatus.PAUSED.name }
-    val failed      = activeDownloads.filter { it.status == DownloadStatus.ERROR.name }
-    val queued      = activeDownloads.filter { it.status == DownloadStatus.QUEUED.name }
+    val downloading = activeDownloads.filter { it.status == DownloadStatus.DOWNLOADING }
+    val paused      = activeDownloads.filter { it.status == DownloadStatus.PAUSED }
+    val failed      = activeDownloads.filter { it.status == DownloadStatus.ERROR }
+    val queued      = activeDownloads.filter { it.status == DownloadStatus.QUEUED }
 
     Column(
         Modifier
@@ -221,10 +221,10 @@ private fun ActiveDownloadCard(
     vm: DownloadsViewModel,
 ) {
     val d = LocalDimensions.current
-    val isDownloading = item.status == DownloadStatus.DOWNLOADING.name
-    val isPaused      = item.status == DownloadStatus.PAUSED.name
-    val isQueued      = item.status == DownloadStatus.QUEUED.name
-    val isError       = item.status == DownloadStatus.ERROR.name
+    val isDownloading = item.status == DownloadStatus.DOWNLOADING
+    val isPaused      = item.status == DownloadStatus.PAUSED
+    val isQueued      = item.status == DownloadStatus.QUEUED
+    val isError       = item.status == DownloadStatus.ERROR
 
     var showDeleteDialog by remember { mutableStateOf(false) }
 

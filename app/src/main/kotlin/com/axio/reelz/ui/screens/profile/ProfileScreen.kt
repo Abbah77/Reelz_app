@@ -275,7 +275,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                         .clip(CircleShape)
                         .background(GlassMd)
                         .border(d.borderThin, GlassBorderMd, CircleShape)
-                        .clickable { nav.navigate(com.axio.reelz.ui.Route.Settings.path) },
+                        .clickable { nav.navigate(com.axio.reelz.app.Route.Settings.path) },
                     Alignment.Center,
                 ) {
                     Icon(IconSettings, "Settings", tint = White60, modifier = Modifier.size(d.iconMd - 2.dp))
@@ -362,7 +362,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                     .clip(RoundedCornerShape(d.radiusMd + d.spaceXs))
                     .background(if (ui.showRenewBanner) AmberGlass else BgCard)
                     .border(d.borderThin, if (ui.showRenewBanner) AmberBorder else GlassBorderMd, RoundedCornerShape(d.radiusMd + d.spaceXs))
-                    .clickable { nav.navigate(com.axio.reelz.ui.Route.Premium.path) }
+                    .clickable { nav.navigate(com.axio.reelz.app.Route.Premium.path) }
                     .padding(d.spaceLg),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
@@ -424,7 +424,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
             } else {
                 items(ui.watchlist, key = { it.mediaId }) { w ->
                     val type = if (w.mediaType == "TV") MediaType.TV else MediaType.MOVIE
-                    LibraryRow(w.title, w.posterUrl, "Watchlist") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(w.mediaId, type)) }
+                    LibraryRow(w.title, w.posterUrl, "Watchlist") { nav.navigate(com.axio.reelz.app.Route.Detail.go(w.mediaId, type)) }
                 }
                 // Subtle hint about auto-removal
                 item {
@@ -444,7 +444,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
             } else {
                 items(ui.saved, key = { it.mediaId }) { s ->
                     val type = if (s.mediaType == "TV") MediaType.TV else MediaType.MOVIE
-                    LibraryRow(s.title, s.posterUrl, "Saved") { nav.navigate(com.axio.reelz.ui.Route.Detail.go(s.mediaId, type)) }
+                    LibraryRow(s.title, s.posterUrl, "Saved") { nav.navigate(com.axio.reelz.app.Route.Detail.go(s.mediaId, type)) }
                 }
             }
 
@@ -469,7 +469,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             poster   = h.posterUrl,
                             subtitle = if (h.season > 0) "S${h.season} · E${h.episode}" else "Movie",
                             progress = progress,
-                            onClick  = { nav.navigate(com.axio.reelz.ui.Route.Detail.go(h.mediaId, type)) },
+                            onClick  = { nav.navigate(com.axio.reelz.app.Route.Detail.go(h.mediaId, type)) },
                         )
                     }
                     // Load-more trigger

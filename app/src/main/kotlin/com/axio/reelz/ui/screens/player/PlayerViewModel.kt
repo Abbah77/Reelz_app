@@ -656,6 +656,7 @@ class PlayerViewModel @Inject constructor(
     fun hideControls()   { _ui.update { it.copy(showControls = false) } }
     fun toggleLock()     { _ui.update { it.copy(isLocked = !it.isLocked) } }
     fun toggleMute()     { val m = !_ui.value.isMuted; exoPlayer?.volume = if (m) 0f else 1f; _ui.update { it.copy(isMuted = m) } }
+    fun setMute(muted: Boolean) { exoPlayer?.volume = if (muted) 0f else 1f; _ui.update { it.copy(isMuted = muted) } }
     fun setSpeed(speed: Float) { exoPlayer?.setPlaybackSpeed(speed); _ui.update { it.copy(playbackSpeed = speed) } }
 
     @OptIn(UnstableApi::class)

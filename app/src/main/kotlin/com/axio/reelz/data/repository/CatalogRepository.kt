@@ -2,6 +2,7 @@ package com.axio.reelz.data.repository
 
 import android.util.Log
 import com.axio.reelz.core.network.NetworkResult
+import com.axio.reelz.core.network.map
 import com.axio.reelz.core.network.safeApiCall
 import com.axio.reelz.core.database.*
 import com.axio.reelz.data.model.*

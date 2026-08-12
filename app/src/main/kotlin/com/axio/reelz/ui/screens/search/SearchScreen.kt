@@ -392,7 +392,7 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                                 media   = m,
                                 onClick = {
                                     vm.onResultTap(m)
-                                    nav.navigate(com.axio.reelz.ui.Route.Detail.go(m.id, m.mediaType))
+                                    nav.navigate(com.axio.reelz.app.Route.Detail.go(m.id, m.mediaType))
                                 },
                                 modifier = Modifier.aspectRatio(0.65f),
                             )

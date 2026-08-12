@@ -262,9 +262,14 @@ data class AdPlacementsDto(
 )
 
 data class AdFrequencyDto(
-    @SerializedName("min_content_opens") val minContentOpens: Int = 3,
-    @SerializedName("min_interval_ms")   val minIntervalMs: Long = 60_000L,
-    @SerializedName("retry_delay_ms")    val retryDelayMs: Long = 30_000L,
+    @SerializedName("min_content_opens")       val minContentOpens: Int = 3,
+    @SerializedName("min_interval_ms")         val minIntervalMs: Long = 60_000L,
+    @SerializedName("retry_delay_ms")          val retryDelayMs: Long = 30_000L,
+    // Aliases used by AdEngine.shouldShowInterstitial()
+    @SerializedName("content_opens_before_first") val contentOpensBeforeFirst: Int = 3,
+    @SerializedName("every_n_plays")           val everyNPlays: Int = 3,
+    @SerializedName("min_ms_between")          val minMsBetween: Long = 60_000L,
+    @SerializedName("max_per_session")         val maxPerSession: Int = 10,
 )
 
 data class AdPrerollConfig(

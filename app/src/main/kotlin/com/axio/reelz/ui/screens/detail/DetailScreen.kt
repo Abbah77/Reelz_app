@@ -554,7 +554,7 @@ fun DetailScreen(
                 onPlayEpisode  = { s, e, name -> launchPlayer(s, e, name) },
                 onSeasonSelect = { vm.selectSeason(id, it) },
                 onWatchlist    = { vm.toggleWatchlist() },
-                onSimilarClick = { id, type -> nav.navigate(com.axio.reelz.ui.Route.Detail.go(id, type)) },
+                onSimilarClick = { id, type -> nav.navigate(com.axio.reelz.app.Route.Detail.go(id, type)) },
                 onDownloadMovie = {
                     vm.openDownloadSheet(id, mediaType)
                 },
@@ -595,7 +595,7 @@ fun DetailScreen(
                 onDismiss  = { vm.dismissDownloadCapSheet() },
                 onUpgrade  = {
                     vm.dismissDownloadCapSheet()
-                    nav.navigate(com.axio.reelz.ui.Route.Premium.path)
+                    nav.navigate(com.axio.reelz.app.Route.Premium.path)
                 },
             )
         }
@@ -607,7 +607,7 @@ fun DetailScreen(
                 onDismiss    = { vm.dismissResolutionLockSheet() },
                 onUpgrade    = {
                     vm.dismissResolutionLockSheet()
-                    nav.navigate(com.axio.reelz.ui.Route.Premium.path)
+                    nav.navigate(com.axio.reelz.app.Route.Premium.path)
                 },
             )
         }

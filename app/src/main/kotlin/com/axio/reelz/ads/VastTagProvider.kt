@@ -1,5 +1,6 @@
 package com.axio.reelz.ads
 
+import com.axio.reelz.data.dto.AdPrerollConfig
 
 /**
  * Pure decision logic for IMA pre-roll ads.

@@ -37,8 +37,11 @@ import androidx.navigation.NavController
 import com.axio.reelz.ads.ReelzBrowserSheet
 import com.axio.reelz.data.repository.PaymentRepository
 import com.axio.reelz.data.repository.UserRepository
+import com.axio.reelz.data.dto.TiersConfig
+import com.axio.reelz.data.dto.PremiumConfig
+import com.axio.reelz.data.dto.TierConfig
+import com.axio.reelz.data.dto.UserState
 import com.axio.reelz.data.repository.ConfigRepository
-import com.axio.reelz.data.repository.UserRepository
 import com.axio.reelz.ui.components.BrandButton
 import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -105,11 +108,11 @@ class PremiumViewModel @Inject constructor(
                 freeTier          = tiers.free,
                 premiumTier       = tiers.premium,
                 premiumConfig     = configRepo.premiumConfig(),
-                backendConfigured = configRepo.current().backendUrl.isNotBlank(),
+                backendConfigured = configRepo.backendUrl().isNotBlank(),
             )
         }
         viewModelScope.launch {
-            sessionRepo.state.collect { state ->
+            sessionRepo.userStateFlow.collect { state ->
                 _ui.update { it.copy(userState = state, daysUntilExpiry = sessionRepo.daysUntilExpiry()) }
             }
         }
@@ -187,7 +190,7 @@ class PremiumViewModel @Inject constructor(
     fun refreshStatus() {
         viewModelScope.launch {
             _ui.update { it.copy(isRefreshing = true, refreshMessage = null) }
-            userSessionRepository.refreshCurrentSession()
+            userSessionRepository.refreshSession()
             val became = sessionRepo.isPremium
             _ui.update {
                 it.copy(

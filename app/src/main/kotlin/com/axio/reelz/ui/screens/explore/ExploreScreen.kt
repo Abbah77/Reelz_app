@@ -20,7 +20,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.axio.reelz.data.model.*
-import com.axio.reelz.ui.Route
+import com.axio.reelz.app.Route
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
 import com.axio.reelz.ui.theme.LocalDimensions

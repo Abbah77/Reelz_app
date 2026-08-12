@@ -4,12 +4,15 @@ import android.util.Log
 import com.axio.reelz.core.database.UserSessionDao
 import com.axio.reelz.core.database.UserSessionRow
 import com.axio.reelz.data.model.UserSession
+import com.axio.reelz.data.dto.UserState
 import com.axio.reelz.data.remote.api.GoogleAuthBody
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.core.network.NetworkResult
+import com.axio.reelz.core.network.map
 import com.axio.reelz.core.network.safeApiCall
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext

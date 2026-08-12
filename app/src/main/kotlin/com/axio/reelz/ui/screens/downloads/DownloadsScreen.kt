@@ -28,7 +28,7 @@ import coil.compose.AsyncImage
 import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
-import com.axio.reelz.ui.Route
+import com.axio.reelz.app.Route
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.player.PlayerActivity
 import com.axio.reelz.ui.theme.*
@@ -53,7 +53,7 @@ data class MovieGroup(
     /** All downloads for this movie across every quality. */
     val downloads: List<DownloadItem>,
 ) {
-    val doneDownloads: List<DownloadItem> get() = downloads.filter { it.status == DownloadStatus.DONE.name }
+    val doneDownloads: List<DownloadItem> get() = downloads.filter { it.status == DownloadStatus.DONE }
     val totalSize: Long get() = doneDownloads.sumOf { it.sizeBytes }
     /** The most recently watched/played item, or the highest quality done item. */
     val primaryDownload: DownloadItem get() =
@@ -79,7 +79,7 @@ data class SeriesGroup(
     val isAnyActive: Boolean get() = seasons.any { s ->
         s.episodeGroups.any { eg ->
             eg.downloads.any {
-                it.status == DownloadStatus.DOWNLOADING.name || it.status == DownloadStatus.QUEUED.name
+                it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.QUEUED
             }
         }
     }
@@ -114,7 +114,7 @@ data class EpisodeGroup(
     val posterPath: String?,
     val downloads: List<DownloadItem>,
 ) {
-    val doneDownloads: List<DownloadItem> get() = downloads.filter { it.status == DownloadStatus.DONE.name }
+    val doneDownloads: List<DownloadItem> get() = downloads.filter { it.status == DownloadStatus.DONE }
     val primaryDownload: DownloadItem get() =
         doneDownloads.maxByOrNull { it.lastPlayedAt }
             ?: doneDownloads.maxByOrNull { it.sizeBytes }
@@ -136,13 +136,13 @@ class DownloadsViewModel @Inject constructor(
     private val repo: DownloadRepository,
 ) : ViewModel() {
 
-    private val allDownloads: StateFlow<List<DownloadItem>> = dao.getAll()
+    private val allDownloads: StateFlow<List<DownloadItem>> = repo.observeAll()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     /** Completed movies grouped by tmdbId so multi-resolution shows as one card. */
     val movieGroups: StateFlow<List<MovieGroup>> = allDownloads
         .map { list ->
-            list.filter { it.mediaType == "MOVIE" && it.status == DownloadStatus.DONE.name }
+            list.filter { it.mediaType == "MOVIE" && it.status == DownloadStatus.DONE }
                 .groupBy { it.mediaId }
                 .map { (mediaId, items) ->
                     MovieGroup(
@@ -164,16 +164,16 @@ class DownloadsViewModel @Inject constructor(
     val activeDownloads: StateFlow<List<DownloadItem>> = allDownloads
         .map { list ->
             list.filter {
-                it.status == DownloadStatus.DOWNLOADING.name
-                    || it.status == DownloadStatus.QUEUED.name
-                    || it.status == DownloadStatus.PAUSED.name
-                    || it.status == DownloadStatus.ERROR.name
+                it.status == DownloadStatus.DOWNLOADING
+                    || it.status == DownloadStatus.QUEUED
+                    || it.status == DownloadStatus.PAUSED
+                    || it.status == DownloadStatus.ERROR
             }
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val readyCount: StateFlow<Int> = allDownloads
-        .map { list -> list.count { it.status == DownloadStatus.DONE.name } }
+        .map { list -> list.count { it.status == DownloadStatus.DONE } }
         .stateIn(viewModelScope, SharingStarted.Lazily, 0)
 
     private fun buildSeriesGroups(items: List<DownloadItem>): List<SeriesGroup> =
@@ -336,7 +336,7 @@ fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()
                                 val lastEp = group.seasons
                                     .flatMap { it.episodeGroups }
                                     .flatMap { it.downloads }
-                                    .filter { it.status == DownloadStatus.DONE.name && it.lastPlayedAt > 0 }
+                                    .filter { it.status == DownloadStatus.DONE && it.lastPlayedAt > 0 }
                                     .maxByOrNull { it.lastPlayedAt }
                                 val firstEp = group.seasons
                                     .firstOrNull()?.episodeGroups?.firstOrNull()
@@ -624,10 +624,10 @@ private fun ActiveQueueCard(
     onCancel: () -> Unit,
 ) {
     val d = LocalDimensions.current
-    val isDownloading = item.status == DownloadStatus.DOWNLOADING.name
-    val isPaused      = item.status == DownloadStatus.PAUSED.name
-    val isQueued      = item.status == DownloadStatus.QUEUED.name
-    val isError       = item.status == DownloadStatus.ERROR.name
+    val isDownloading = item.status == DownloadStatus.DOWNLOADING
+    val isPaused      = item.status == DownloadStatus.PAUSED
+    val isQueued      = item.status == DownloadStatus.QUEUED
+    val isError       = item.status == DownloadStatus.ERROR
 
     val pct = if (item.totalSegments > 0) item.segmentsDone.toFloat() / item.totalSegments
               else if (item.sizeBytes > 0) item.downloadedBytes.toFloat() / item.sizeBytes
@@ -1635,15 +1635,14 @@ private fun EmptyDownloadsState() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun StatusPill(status: String) {
+fun StatusPill(status: DownloadStatus) {
     val d = LocalDimensions.current
     val (color, label) = when (status) {
-        DownloadStatus.DONE.name        -> Success to "Ready"
-        DownloadStatus.DOWNLOADING.name -> Brand to "Downloading"
-        DownloadStatus.QUEUED.name      -> White60 to "Queued"
-        DownloadStatus.PAUSED.name      -> White40 to "Paused"
-        DownloadStatus.ERROR.name       -> Error to "Failed"
-        else                            -> White40 to status
+        DownloadStatus.DONE        -> Success to "Ready"
+        DownloadStatus.DOWNLOADING -> Brand to "Downloading"
+        DownloadStatus.QUEUED      -> White60 to "Queued"
+        DownloadStatus.PAUSED      -> White40 to "Paused"
+        DownloadStatus.ERROR       -> Error to "Failed"
     }
     Row(
         Modifier
@@ -1654,7 +1653,7 @@ fun StatusPill(status: String) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
     ) {
-        if (status == DownloadStatus.DONE.name) {
+        if (status == DownloadStatus.DONE) {
             Box(Modifier.size(d.spaceXs).clip(CircleShape).background(Success))
         }
         Text(label, color = color, fontSize = (d.textXxs.value + 1f).sp, fontWeight = FontWeight.SemiBold)
@@ -1734,7 +1733,7 @@ private fun playDownload(ctx: Context, dl: DownloadItem) {
         putExtra("isOffline", true)
     }
     when {
-        dl.status == DownloadStatus.DONE.name && dl.filePath.isNotBlank() -> {
+        dl.status == DownloadStatus.DONE && dl.filePath.isNotBlank() -> {
             base.putExtra("streamUrl",   "file://${dl.filePath}")
             base.putExtra("streamIsHls", false)
             ctx.startActivity(base)
