@@ -1,6 +1,6 @@
 package com.axio.reelz.data.remote.api
 
-import com.axio.reelz.data.remote.dto.*
+import com.axio.reelz.data.dto.*
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -114,12 +114,13 @@ interface ReelzApi {
 
     // ── Auth ──────────────────────────────────────────────────────────────────
     @POST("auth/google")
-    @retrofit2.http.POST("payment/init")
-    suspend fun initPayment(@retrofit2.http.Field("plan") plan: String): com.axio.reelz.data.dto.PaymentInitDto
-
     suspend fun authWithGoogle(
         @Body body: GoogleAuthBody,
     ): Response<AuthResponseDto>
+
+    @FormUrlEncoded
+    @POST("payment/init")
+    suspend fun initPayment(@Field("plan") plan: String): com.axio.reelz.data.dto.PaymentInitDto
 
     @POST("auth/refresh")
     suspend fun refreshSession(
@@ -173,7 +174,7 @@ data class HistorySyncItem(
 
 data class SubtitlesResponseDto(
     val ok: Boolean = false,
-    val subtitles: List<com.axio.reelz.data.remote.dto.SubtitleDto> = emptyList(),
+    val subtitles: List<com.axio.reelz.data.dto.SubtitleDto> = emptyList(),
 )
 
 data class ShortsResponseDto(
@@ -203,7 +204,7 @@ data class ShortVideoDto(
 
 data class SyncResponseDto(
     val ok: Boolean = false,
-    val watchlist: List<com.axio.reelz.data.remote.dto.MediaDto> = emptyList(),
+    val watchlist: List<com.axio.reelz.data.dto.MediaDto> = emptyList(),
     val history: List<SyncHistoryItem> = emptyList(),
 )
 

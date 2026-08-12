@@ -1,7 +1,31 @@
 package com.axio.reelz.ui.components
 
-// MediaPosterCard, MediaRowCard, RatingChip, GenrePill, PosterSkeletonShimmer, ShimmerCard
-// Extracted from CommonComponents.kt
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.*
+import androidx.compose.ui.draw.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.*
+import coil.compose.AsyncImagePainter
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
+import com.axio.reelz.data.model.*
+import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
+
+
 @Composable
 fun MediaPosterCard(
     media: Media,
@@ -272,77 +296,3 @@ fun GenrePill(text: String, selected: Boolean = false, onClick: () -> Unit = {})
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Drag handle for bottom sheets
-// ─────────────────────────────────────────────────────────────────────────────
-@Composable
-fun DragHandle(modifier: Modifier = Modifier) {
-    val d = LocalDimensions.current
-    Box(modifier = modifier.fillMaxWidth().padding(top = d.spaceMd), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .width(d.shimmerBarWidth)
-                .height(d.shimmerBarHeight)
-                .clip(RoundedCornerShape(d.spaceXxs))
-                .background(Brush.horizontalGradient(listOf(Brand.copy(.4f), Brand2.copy(.4f), Brand.copy(.4f))))
-        )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Per-poster skeleton shimmer — used inside SubcomposeAsyncImage loading state.
-// This is the "luxury" loading feel: each card shimmers independently so
-// you never see a sudden dump of grey boxes — cards reveal individually.
-// ─────────────────────────────────────────────────────────────────────────────
-@Composable
-fun PosterSkeletonShimmer(modifier: Modifier = Modifier) {
-    val inf = rememberInfiniteTransition(label = "posterSk")
-    val offset by inf.animateFloat(
-        initialValue   = -1.5f,
-        targetValue    = 2.5f,
-        animationSpec  = infiniteRepeatable(tween(1100, easing = LinearEasing)),
-        label          = "posterSkOff",
-    )
-    Box(
-        modifier = modifier.background(
-            Brush.linearGradient(
-                colorStops = arrayOf(
-                    0f                                to BgRaised,
-                    (offset * 0.4f + 0.3f).coerceIn(0f, 1f) to BgSurface,
-                    1f                                to BgRaised,
-                ),
-                start = Offset.Zero,
-                end   = Offset(Float.POSITIVE_INFINITY, 0f),
-            )
-        )
-    )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Shimmer skeleton card
-// ─────────────────────────────────────────────────────────────────────────────
-@Composable
-fun ShimmerCard(modifier: Modifier = Modifier) {
-    val d = LocalDimensions.current
-    val inf = rememberInfiniteTransition(label = "shimmer")
-    val offset by inf.animateFloat(
-        -1f, 2f, infiniteRepeatable(tween(1200, easing = LinearEasing)), "off"
-    )
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(d.radiusMd))
-            .background(
-                Brush.linearGradient(
-                    colorStops = arrayOf(
-                        0f           to BgRaised,
-                        offset * 0.5f to BgSurface,
-                        1f           to BgRaised,
-                    ),
-                    start = Offset.Zero,
-                    end   = Offset(Float.POSITIVE_INFINITY, 0f),
-                )
-            )
-    )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────

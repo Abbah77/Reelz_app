@@ -1,5 +1,7 @@
 package com.axio.reelz.app
 
+import com.axio.reelz.BuildConfig
+
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
@@ -13,7 +15,7 @@ import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.repository.ConfigRepository
 import com.axio.reelz.data.repository.UserRepository
-import com.axio.reelz.service.DownloadService
+import com.axio.reelz.media.download.ReelzDownloadService
 import com.axio.reelz.core.workers.CacheEvictionWorker
 import com.axio.reelz.core.workers.ConfigSyncWorker
 import com.google.firebase.crashlytics.FirebaseCrashlytics
@@ -78,7 +80,7 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
                             downloadDao.getByStatus(DownloadStatus.DOWNLOADING.name)
                 stuck.forEach { row ->
                     downloadDao.markPaused(row.id)
-                    DownloadService.start(this@ReelzApp, row.id)
+                    androidx.media3.exoplayer.offline.DownloadService.sendResumeDownloads(this@ReelzApp, ReelzDownloadService::class.java, false)
                 }
             } catch (e: Exception) {
                 FirebaseCrashlytics.getInstance().recordException(e)

@@ -7,7 +7,8 @@ import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.QualityTrack
-import com.axio.reelz.service.DownloadService
+import com.axio.reelz.media.download.ReelzDownloadService
+import androidx.media3.exoplayer.offline.DownloadService as Media3DS
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -82,25 +83,25 @@ class DownloadRepository @Inject constructor(
                 status       = DownloadStatus.QUEUED.name,
             )
         )
-        DownloadService.start(ctx, downloadId)
+        Media3DS.sendResumeDownloads(ctx, ReelzDownloadService::class.java, false)
         downloadId
     }
 
     // ── Pause ─────────────────────────────────────────────────────────────────
     suspend fun pause(ctx: Context, item: DownloadItem) = withContext(Dispatchers.IO) {
-        DownloadService.pause(ctx, item.id)
+        Media3DS.sendPauseDownloads(ctx, ReelzDownloadService::class.java, false)
         dao.markPaused(item.id)
     }
 
     // ── Resume ────────────────────────────────────────────────────────────────
     suspend fun resume(ctx: Context, item: DownloadItem) = withContext(Dispatchers.IO) {
         dao.markPaused(item.id)  // ensure state is PAUSED before service starts
-        DownloadService.start(ctx, item.id)
+        Media3DS.sendResumeDownloads(ctx, ReelzDownloadService::class.java, false)
     }
 
     // ── Delete ────────────────────────────────────────────────────────────────
     suspend fun delete(ctx: Context, item: DownloadItem) = withContext(Dispatchers.IO) {
-        DownloadService.pause(ctx, item.id)
+        Media3DS.sendPauseDownloads(ctx, ReelzDownloadService::class.java, false)
         if (item.filePath.isNotBlank()) {
             runCatching { java.io.File(item.filePath).delete() }
         }

@@ -27,6 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.axio.reelz.BuildConfig
 import com.axio.reelz.R
 import com.axio.reelz.ads.AdEngine
+import com.axio.reelz.data.dto.AppConfigDto
 import com.axio.reelz.data.repository.ConfigRepository
 import com.axio.reelz.data.repository.ConfigState
 import com.axio.reelz.ui.screens.update.MaintenanceScreen
@@ -67,7 +68,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             ReelzTheme {
                 val configState by configRepo.state.collectAsStateWithLifecycle()
-                val config      by configRepo.config.collectAsStateWithLifecycle()
+                val config: AppConfigDto? by configRepo.config.collectAsStateWithLifecycle()
 
                 when (configState) {
 

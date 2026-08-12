@@ -492,6 +492,15 @@ interface WatchHistoryDao {
         LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId
         WHERE wp.season = 0 AND wp.episode = 0
         ORDER BY wp.watchedAt DESC
+    """)
+    fun observeAll(): kotlinx.coroutines.flow.Flow<List<WatchHistory>>
+    @Query("""
+        SELECT wp.mediaId, wl.title, wl.posterUrl, wl.mediaType,
+               wp.positionMs, wp.durationMs, wp.watchedAt
+        FROM watch_progress wp
+        LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId
+        WHERE wp.season = 0 AND wp.episode = 0
+        ORDER BY wp.watchedAt DESC
         LIMIT :limit OFFSET :offset
     """)
     suspend fun getPage(limit: Int = 20, offset: Int = 0): List<WatchHistory>

@@ -131,6 +131,8 @@ dependencies {
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.media3.datasource)
     implementation(libs.media3.transformer)
+    implementation("androidx.media3:media3-exoplayer-workmanager:1.4.1")
+    implementation("androidx.media3:media3-database:1.4.1")
 
     // Database (smart cache — lean schema)
     implementation(libs.room.runtime)

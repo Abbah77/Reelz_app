@@ -1,8 +1,25 @@
 package com.axio.reelz.ui.components
 
-// SectionHeader, SkeletonBannerLoader, SkeletonRowLoader, SkeletonGridCard,
-// FullScreenLoader, CinematicSpinner, SmallSpinner, PulsingDot, ErrorState
-// Extracted from CommonComponents.kt
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.*
+import androidx.compose.ui.draw.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.*
+import com.axio.reelz.ui.theme.*
+import com.axio.reelz.ui.theme.LocalDimensions
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Section header row — accent bar + title + optional "See All"
 // ─────────────────────────────────────────────────────────────────────────────

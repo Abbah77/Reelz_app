@@ -252,12 +252,52 @@ data class PremiumConfigDto(
     @SerializedName("paystack_yearly_url") val paystackYearlyUrl: String = "",
 )
 
+data class AdPlacementsDto(
+    @SerializedName("banner_enabled")       val bannerEnabled: Boolean = true,
+    @SerializedName("interstitial_enabled") val interstitialEnabled: Boolean = true,
+    @SerializedName("rewarded_enabled")     val rewardedEnabled: Boolean = true,
+    @SerializedName("native_enabled")       val nativeEnabled: Boolean = true,
+    @SerializedName("app_open_enabled")     val appOpenEnabled: Boolean = false,
+    @SerializedName("preroll_enabled")      val prerollEnabled: Boolean = false,
+)
+
+data class AdFrequencyDto(
+    @SerializedName("min_content_opens") val minContentOpens: Int = 3,
+    @SerializedName("min_interval_ms")   val minIntervalMs: Long = 60_000L,
+    @SerializedName("retry_delay_ms")    val retryDelayMs: Long = 30_000L,
+)
+
+data class AdPrerollConfig(
+    @SerializedName("skip_on_resume")         val skipOnResume: Boolean = true,
+    @SerializedName("skip_on_quality_switch") val skipOnQualitySwitch: Boolean = true,
+    @SerializedName("show_on_movies_only")    val showOnMoviesOnly: Boolean = false,
+    @SerializedName("min_minutes_between")    val minMinutesBetween: Long = 30L,
+)
+
+/** Domain alias that AdEngine uses for the active network's ad unit IDs */
+data class AdNetwork(
+    @SerializedName("banner_id")       val bannerId: String = "",
+    @SerializedName("interstitial_id") val interstitialId: String = "",
+    @SerializedName("rewarded_id")     val rewardedId: String = "",
+    @SerializedName("native_id")       val nativeId: String = "",
+    @SerializedName("app_open_id")     val appOpenId: String = "",
+    @SerializedName("vast_tag_url")    val vastTagUrl: String = "",
+)
+
 data class AdsConfigDto(
     val enabled: Boolean = false,
-    @SerializedName("applovin_sdk_key") val applovinSdkKey: String = "",
-    @SerializedName("banner_id") val bannerId: String = "",
-    @SerializedName("interstitial_id") val interstitialId: String = "",
-    @SerializedName("rewarded_id") val rewardedId: String = "",
+    @SerializedName("applovin_sdk_key")       val applovinSdkKey: String = "",
+    @SerializedName("mediation_provider")     val mediationProvider: String = "max",
+    @SerializedName("banner_id")              val bannerId: String = "",
+    @SerializedName("interstitial_id")        val interstitialId: String = "",
+    @SerializedName("rewarded_id")            val rewardedId: String = "",
+    @SerializedName("native_id")              val nativeId: String = "",
+    @SerializedName("app_open_id")            val appOpenId: String = "",
+    @SerializedName("vast_tag_url")           val vastTagUrl: String = "",
+    val placements: AdPlacementsDto = AdPlacementsDto(),
+    @SerializedName("interstitial_frequency") val interstitialFrequency: AdFrequencyDto = AdFrequencyDto(),
+    val preroll: AdPrerollConfig = AdPrerollConfig(),
+    val network: AdNetwork? = null,
 )
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

@@ -28,7 +28,6 @@ import coil.compose.AsyncImage
 import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
-import com.axio.reelz.service.DownloadService
 import com.axio.reelz.ui.Route
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.player.PlayerActivity

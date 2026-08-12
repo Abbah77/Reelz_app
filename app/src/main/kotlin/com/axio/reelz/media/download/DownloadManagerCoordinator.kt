@@ -6,6 +6,7 @@ import androidx.core.app.NotificationCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
@@ -13,26 +14,13 @@ import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadHelper
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
+import androidx.media3.exoplayer.offline.DownloadService
 import com.axio.reelz.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.Executor
+import java.io.IOException
 
-/**
- * DownloadManagerCoordinator — Media3 DownloadManager coordinator.
- *
- * Replaces the bespoke HLS segment-download engine. Responsibilities:
- *  - Singleton Media3 DownloadManager (offline storage + cache)
- *  - Notification building for the foreground service
- *  - Helpers to enqueue, cancel, and remove downloads
- *
- * The old custom engine (Semaphore(4) + M3U8 parser + exponential backoff +
- * segment checkpointing) is deleted. Media3's DownloadManager handles all of
- * that natively and has been tested by Google across millions of devices.
- *
- * Dependency direction: DownloadManagerCoordinator → Media3. Never touches UI.
- */
 @UnstableApi
 object DownloadManagerCoordinator {
 
@@ -53,28 +41,32 @@ object DownloadManagerCoordinator {
         }
 
     private fun buildDownloadManager(context: Context): DownloadManager {
-        val cache = getDownloadCache(context)
+        val ctx = context.applicationContext
+        val databaseProvider = StandaloneDatabaseProvider(ctx)
+        val cache = getDownloadCache(ctx)
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setConnectTimeoutMs(8_000)
             .setReadTimeoutMs(20_000)
             .setAllowCrossProtocolRedirects(true)
 
         return DownloadManager(
-            context,
+            ctx,
+            databaseProvider,
             cache,
             dataSourceFactory,
-            Executor(Runnable::run),
+            Runnable::run,
         ).apply {
             maxParallelDownloads = MAX_PARALLEL_DOWNLOADS
-            // Media3 handles resume, backoff, and progress natively
         }
     }
 
     private fun buildDownloadCache(context: Context): SimpleCache {
-        val downloadDir = File(context.getExternalFilesDir(null), DOWNLOAD_CONTENT_DIRECTORY)
+        val downloadDir = context.getExternalFilesDir(null)
+            ?.let { File(it, DOWNLOAD_CONTENT_DIRECTORY) }
             ?: File(context.filesDir, DOWNLOAD_CONTENT_DIRECTORY)
         downloadDir.mkdirs()
-        return SimpleCache(downloadDir, NoOpCacheEvictor())
+        val databaseProvider = StandaloneDatabaseProvider(context.applicationContext)
+        return SimpleCache(downloadDir, NoOpCacheEvictor(), databaseProvider)
     }
 
     // ── Enqueue a download ────────────────────────────────────────────────────
@@ -92,20 +84,32 @@ object DownloadManagerCoordinator {
             .setMimeType(mimeType)
             .build()
 
-        val downloadHelper = DownloadHelper.forMediaItem(context, mediaItem)
+        val downloadHelper = DownloadHelper.forMediaItem(
+            context,
+            mediaItem,
+            null,
+            DefaultHttpDataSource.Factory(),
+        )
         try {
             downloadHelper.prepare(object : DownloadHelper.Callback {
                 override fun onPrepared(helper: DownloadHelper) {
-                    val request: DownloadRequest = helper.getDownloadRequest(mediaId, null)
-                    DownloadManager.sendAddDownload(context, ReelzDownloadService::class.java, request, false)
+                    val request: DownloadRequest = helper.getDownloadRequest(
+                        androidx.media3.common.util.Util.getUtf8Bytes(mediaId),
+                    )
+                    DownloadService.sendAddDownload(
+                        context, ReelzDownloadService::class.java, request, false,
+                    )
                     helper.release()
                 }
+
                 override fun onPrepareError(helper: DownloadHelper, e: IOException) {
-                    // Fall back to progressive download for direct MP4
-                    val progressiveItem = MediaItem.Builder()
-                        .setUri(url).setMediaId(mediaId).setMimeType(MimeTypes.VIDEO_MP4).build()
-                    val req = DownloadRequest.Builder(mediaId, progressiveItem.localConfiguration!!.uri).build()
-                    DownloadManager.sendAddDownload(context, ReelzDownloadService::class.java, req, false)
+                    val req = DownloadRequest.Builder(
+                        mediaId,
+                        android.net.Uri.parse(url),
+                    ).build()
+                    DownloadService.sendAddDownload(
+                        context, ReelzDownloadService::class.java, req, false,
+                    )
                     helper.release()
                 }
             })
@@ -118,11 +122,15 @@ object DownloadManagerCoordinator {
     // ── Cancel / remove a download ────────────────────────────────────────────
 
     fun cancel(context: Context, mediaId: String) {
-        DownloadManager.sendRemoveDownload(context, ReelzDownloadService::class.java, mediaId, false)
+        DownloadService.sendRemoveDownload(
+            context, ReelzDownloadService::class.java, mediaId, false,
+        )
     }
 
     fun removeAll(context: Context) {
-        DownloadManager.sendRemoveAllDownloads(context, ReelzDownloadService::class.java, false)
+        DownloadService.sendRemoveAllDownloads(
+            context, ReelzDownloadService::class.java, false,
+        )
     }
 
     // ── Notification ──────────────────────────────────────────────────────────

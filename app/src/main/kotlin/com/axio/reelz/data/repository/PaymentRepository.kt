@@ -23,16 +23,10 @@ class PaymentRepository @Inject constructor(
 
     suspend fun initPayment(plan: String): InitResult {
         return try {
-            val result = safeApiCall("PaymentRepository") { api.initPayment(plan) }
-            when (result) {
-                is NetworkResult.Success -> {
-                    val url = result.data.authorizationUrl
-                    if (url.isNotBlank()) InitResult.Success(url)
-                    else InitResult.FallbackToStaticLink
-                }
-                is NetworkResult.Error -> InitResult.FallbackToStaticLink
-                else -> InitResult.FallbackToStaticLink
-            }
+            val dto = api.initPayment(plan)
+            val url = dto.authorizationUrl
+            if (url.isNotBlank()) InitResult.Success(url)
+            else InitResult.FallbackToStaticLink
         } catch (e: Exception) {
             InitResult.FallbackToStaticLink
         }

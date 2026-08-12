@@ -1,3 +1,17 @@
+package com.axio.reelz.ui.screens.browse
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.*
+import androidx.compose.runtime.*
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.axio.reelz.app.Route
+import com.axio.reelz.data.model.MediaType
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.axio.reelz.ui.theme.Bg
+
 
 // ── FeedRow ───────────────────────────────────────────────────────────────────
 // (kept here so BrowseScreen composable can use it without changes)
@@ -48,7 +62,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
         }
         // Keep watchlist set live for hero banner button
         androidx.lifecycle.viewModelScope.launch {
-            watchlistDao.observeAll().collect { list ->
+            libraryRepo.observeWatchlist().collect { list ->
                 _ui.update { it.copy(watchlistedIds = list.map { w -> w.mediaId }.toSet()) }
             }
         }
@@ -74,8 +88,8 @@ class BrowseViewModel @javax.inject.Inject constructor(
 
             // STEP 1 — cache-first
             val cacheResult = repo.getFeed(forceRefresh = false)
-            val cachedSections = (cacheResult as? com.axio.reelz.network.NetworkResult.Success)?.data
-            val fromCache      = (cacheResult as? com.axio.reelz.network.NetworkResult.Success)?.fromCache == true
+            val cachedSections = (cacheResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data
+            val fromCache      = (cacheResult as? com.axio.reelz.core.network.NetworkResult.Success)?.fromCache == true
 
             if (!cachedSections.isNullOrEmpty()) {
                 _ui.update {
@@ -95,7 +109,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
             // Genres in parallel
             launch {
                 val gResult = repo.getGenres("movie")
-                val genres  = (gResult as? com.axio.reelz.network.NetworkResult.Success)?.data ?: emptyList()
+                val genres  = (gResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data ?: emptyList()
                 if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
             }
 
@@ -103,7 +117,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
             if (cachedSections.isNullOrEmpty() || fromCache) {
                 val freshResult = repo.getFeed(forceRefresh = fromCache)
                 when (freshResult) {
-                    is com.axio.reelz.network.NetworkResult.Success -> {
+                    is com.axio.reelz.core.network.NetworkResult.Success -> {
                         val fresh = freshResult.data
                         _ui.update {
                             it.copy(
@@ -116,7 +130,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
                             )
                         }
                     }
-                    is com.axio.reelz.network.NetworkResult.Error -> {
+                    is com.axio.reelz.core.network.NetworkResult.Error -> {
                         if (cachedSections.isNullOrEmpty()) {
                             _ui.update {
                                 it.copy(
@@ -160,13 +174,13 @@ class BrowseViewModel @javax.inject.Inject constructor(
 
             launch {
                 val gResult = repo.getGenres("movie")
-                val genres  = (gResult as? com.axio.reelz.network.NetworkResult.Success)?.data ?: emptyList()
+                val genres  = (gResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data ?: emptyList()
                 if (genres.isNotEmpty()) _ui.update { it.copy(genres = genres) }
             }
 
             val result = repo.getFeed(forceRefresh = true)
             when (result) {
-                is com.axio.reelz.network.NetworkResult.Success -> {
+                is com.axio.reelz.core.network.NetworkResult.Success -> {
                     val sections = result.data
                     _ui.update {
                         it.copy(
@@ -177,7 +191,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
                         )
                     }
                 }
-                is com.axio.reelz.network.NetworkResult.Error ->
+                is com.axio.reelz.core.network.NetworkResult.Error ->
                     _ui.update { it.copy(isRefreshing = false, error = result.message) }
                 else -> _ui.update { it.copy(isRefreshing = false) }
             }
@@ -200,7 +214,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
 
             val result = repo.discover(cursor = infiniteCursor)
             when (result) {
-                is com.axio.reelz.network.NetworkResult.Success -> {
+                is com.axio.reelz.core.network.NetworkResult.Success -> {
                     val (items, nextCursor) = result.data
                     val fresh = items.filter { it.id !in existingIds }
                     if (fresh.isEmpty()) {
@@ -239,7 +253,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
         androidx.lifecycle.viewModelScope.launch {
             val result = repo.discover(genre = genreId)
             when (result) {
-                is com.axio.reelz.network.NetworkResult.Success -> {
+                is com.axio.reelz.core.network.NetworkResult.Success -> {
                     _ui.update { it.copy(
                         genreItems      = result.data.first,
                         genreCursor     = result.data.second,
@@ -259,7 +273,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
             _ui.update { it.copy(isGenreLoading = true) }
             val result = repo.discover(genre = st.selectedGenreId, cursor = st.genreCursor)
             when (result) {
-                is com.axio.reelz.network.NetworkResult.Success -> {
+                is com.axio.reelz.core.network.NetworkResult.Success -> {
                     val (items, nextCursor) = result.data
                     _ui.update { it.copy(
                         genreItems        = (it.genreItems + items).distinctBy { m -> m.id },
@@ -269,6 +283,153 @@ class BrowseViewModel @javax.inject.Inject constructor(
                     )}
                 }
                 else -> _ui.update { it.copy(isGenreLoading = false) }
+            }
+        }
+    }
+}
+
+
+
+// ── BrowseScreen composable ──────────────────────────────────────────────────
+
+@androidx.compose.runtime.Composable
+fun BrowseScreen(
+    nav: androidx.navigation.NavController,
+    adEngine: com.axio.reelz.ads.AdEngine,
+    viewModel: BrowseViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
+    listState: androidx.compose.foundation.lazy.LazyListState =
+        androidx.compose.foundation.lazy.rememberLazyListState(),
+) {
+    val ui by viewModel.ui.collectAsState()
+
+    androidx.compose.foundation.lazy.LazyColumn(
+        state    = listState,
+        modifier = androidx.compose.ui.Modifier
+            .fillMaxSize()
+            .background(com.axio.reelz.ui.theme.Bg),
+    ) {
+        // Loading state
+        if (ui.isLoading) {
+            item { com.axio.reelz.ui.components.SkeletonBannerLoader() }
+            item { com.axio.reelz.ui.components.SkeletonRowLoader() }
+            item { com.axio.reelz.ui.components.SkeletonRowLoader() }
+            return@LazyColumn
+        }
+
+        // Error state
+        ui.error?.let { err ->
+            item {
+                com.axio.reelz.ui.components.ErrorState(
+                    message  = err,
+                    onRetry  = { viewModel.load() },
+                    modifier = androidx.compose.ui.Modifier.fillParentMaxSize(),
+                )
+            }
+            return@LazyColumn
+        }
+
+        // Featured hero row
+        if (ui.featured.isNotEmpty()) {
+            item {
+                androidx.compose.foundation.lazy.LazyRow(
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 16.dp, vertical = 8.dp,
+                    ),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                ) {
+                    items(ui.featured) { media ->
+                        com.axio.reelz.ui.components.MediaPosterCard(
+                            media   = media,
+                            onClick = {
+                                nav.navigate(
+                                    com.axio.reelz.app.Route.Detail.go(
+                                        media.id,
+                                        media.mediaType,
+                                    )
+                                )
+                            },
+                            modifier = androidx.compose.ui.Modifier.width(160.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        // Feed rows
+        items(
+            count = ui.feedRows.size,
+            key   = { index ->
+                when (val row = ui.feedRows[index]) {
+                    is FeedRow.Section      -> "section_${row.section.id}"
+                    is FeedRow.InfinitePage -> "page_${row.page}"
+                    FeedRow.NativeAdPlacement -> "native_$index"
+                }
+            },
+        ) { index ->
+            when (val row = ui.feedRows[index]) {
+                is FeedRow.Section -> {
+                    com.axio.reelz.ui.components.SectionHeader(title = row.section.title)
+                    androidx.compose.foundation.lazy.LazyRow(
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 16.dp, vertical = 4.dp,
+                        ),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(row.section.items) { media ->
+                            com.axio.reelz.ui.components.MediaPosterCard(
+                                media   = media,
+                                onClick = {
+                                    nav.navigate(
+                                        com.axio.reelz.app.Route.Detail.go(
+                                            media.id,
+                                            media.mediaType,
+                                        )
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+                is FeedRow.InfinitePage -> {
+                    androidx.compose.foundation.lazy.LazyRow(
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 16.dp, vertical = 4.dp,
+                        ),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(row.items) { media ->
+                            com.axio.reelz.ui.components.MediaPosterCard(
+                                media   = media,
+                                onClick = {
+                                    nav.navigate(
+                                        com.axio.reelz.app.Route.Detail.go(
+                                            media.id,
+                                            media.mediaType,
+                                        )
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+                FeedRow.NativeAdPlacement -> com.axio.reelz.ads.NativeAdCard(adEngine = adEngine)
+            }
+        }
+
+        // Infinite scroll trigger + loader
+        item {
+            if (ui.isLoadingMore) {
+                androidx.compose.foundation.layout.Box(
+                    modifier = androidx.compose.ui.Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    contentAlignment = androidx.compose.ui.Alignment.Center,
+                ) {
+                    com.axio.reelz.ui.components.SmallSpinner()
+                }
+            }
+            androidx.compose.runtime.LaunchedEffect(ui.feedRows.size) {
+                viewModel.loadMoreInfinite()
             }
         }
     }

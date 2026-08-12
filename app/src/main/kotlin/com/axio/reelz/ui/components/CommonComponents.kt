@@ -1,9 +1,5 @@
 package com.axio.reelz.ui.components
 
-// Truly shared: custom vector icons, GlassCard, BrandButton, GhostButton,
-// DragHandle, AdBannerPlaceholder, RemoveAdsBanner
-// Split from original monolithic CommonComponents.kt
-
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*

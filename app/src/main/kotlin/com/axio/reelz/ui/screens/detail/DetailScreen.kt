@@ -230,9 +230,9 @@ class DetailViewModel @Inject constructor(
                 // Stage 1 — cache-first detail (instant if Room hit, network otherwise)
                 val inWatchlist = libraryRepo.isInWatchlist(id)
                 val result = repo.getDetail(id)
-                val detail = (result as? com.axio.reelz.network.NetworkResult.Success)?.data
+                val detail = (result as? com.axio.reelz.core.network.NetworkResult.Success)?.data
                     ?: run {
-                        val err = (result as? com.axio.reelz.network.NetworkResult.Error)?.message ?: "Failed to load"
+                        val err = (result as? com.axio.reelz.core.network.NetworkResult.Error)?.message ?: "Failed to load"
                         _ui.update { it.copy(isLoading = false, error = err) }
                         return@launch
                     }
@@ -255,7 +255,7 @@ class DetailViewModel @Inject constructor(
                         val streamResult = streamRepo.resolveStream(
                             id = id, title = detail.title, mediaType = mediaType
                         )
-                        if (streamResult is com.axio.reelz.network.NetworkResult.Success) {
+                        if (streamResult is com.axio.reelz.core.network.NetworkResult.Success) {
                             preResolvedStream = streamResult.data
                             if (preResolvedQualities[key].isNullOrEmpty()) {
                                 preResolvedQualities[key] = streamResult.data.qualities.ifEmpty {
@@ -280,7 +280,7 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             _ui.update { it.copy(isEpisodesLoading = true) }
             val result = repo.getSeasonEpisodes(id, season)
-            val eps = (result as? com.axio.reelz.network.NetworkResult.Success)?.data ?: emptyList()
+            val eps = (result as? com.axio.reelz.core.network.NetworkResult.Success)?.data ?: emptyList()
             _ui.update { it.copy(episodes = eps, isEpisodesLoading = false) }
         }
     }
@@ -359,7 +359,7 @@ class DetailViewModel @Inject constructor(
                 id = id, title = detail.title, mediaType = mediaType,
                 season = season, episode = episode,
             )
-            val tracks = (dlResult as? com.axio.reelz.network.NetworkResult.Success)?.data ?: emptyList()
+            val tracks = (dlResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data ?: emptyList()
             if (tracks.isNotEmpty()) {
                 val normalized = normalizeQualities(tracks, _ui.value.detail?.runtime)
                 preResolvedQualities[key] = normalized
