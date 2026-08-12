@@ -9,6 +9,7 @@ import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.repository.ConfigRepository
 import com.axio.reelz.data.repository.UserRepository
 import com.google.gson.Gson
+import dagger.Lazy
 import com.google.gson.GsonBuilder
 import dagger.Module
 import dagger.Provides
@@ -55,9 +56,9 @@ object AppModule {
 
     @Provides @Singleton
     fun provideOkHttpClient(
-        configRepo: ConfigRepository,
-        userRepo: UserRepository,
-    ) = buildOkHttpClient(configRepo, userRepo)
+        configRepo: Lazy<ConfigRepository>,
+        userRepo: Lazy<UserRepository>,
+    ) = buildOkHttpClient(configRepo::get, userRepo::get)
 
     // ── Retrofit ──────────────────────────────────────────────────────────────
 

@@ -26,15 +26,15 @@ import java.util.concurrent.TimeUnit
 const val PLACEHOLDER_BASE = "https://placeholder.reelz.app/"
 
 fun buildOkHttpClient(
-    configRepo: ConfigRepository,
-    userRepo: UserRepository,
+    configRepo: () -> ConfigRepository,
+    userRepo: () -> UserRepository,
 ): OkHttpClient {
 
     // 1. Dynamic base URL — reads live URL from ConfigRepository on each call.
     //    On first launch before config loads: uses BuildConfig.BACKEND_URL.
     val dynamicBaseUrl = Interceptor { chain ->
         val original = chain.request()
-        val liveBase = configRepo.backendUrl().trimEnd('/') + "/"
+        val liveBase = configRepo().backendUrl().trimEnd('/') + "/"
 
         val rewrittenUrl = original.url.toString()
             .replaceFirst(PLACEHOLDER_BASE, liveBase)
@@ -48,7 +48,7 @@ fun buildOkHttpClient(
 
     // 2. Auth — Bearer token from live session (no rebuild needed on sign-in/out)
     val auth = Interceptor { chain ->
-        val token = userRepo.accessToken
+        val token = userRepo().accessToken
         val req = if (token.isNotBlank()) {
             chain.request().newBuilder().header("Authorization", token).build()
         } else chain.request()
