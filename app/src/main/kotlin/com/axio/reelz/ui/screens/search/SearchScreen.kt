@@ -59,7 +59,7 @@ class SearchViewModel @Inject constructor(
         val hasSearched: Boolean = false,
         val filters: SearchFilters = SearchFilters(),
         val genres: List<Genre> = emptyList(),
-        val selectedGenreId: Int? = null,
+        val selectedGenreId: String? = null,
         val showFilters: Boolean = false,
         val recentSearches: List<String> = emptyList(),
     )
@@ -187,8 +187,7 @@ class SearchViewModel @Inject constructor(
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return
         viewModelScope.launch {
-            recentSearchDao.insert(com.axio.reelz.data.model.RecentSearch(query = trimmed))
-            recentSearchDao.trimToLimit(15)
+            searchRepo.saveRecentSearch(trimmed)
         }
     }
 
@@ -204,7 +203,7 @@ class SearchViewModel @Inject constructor(
     fun setMediaType(type: String?) {
         _ui.update { it.copy(filters = it.filters.copy(mediaType = type)) }; reFilter()
     }
-    fun setGenre(id: Int?) { _ui.update { it.copy(selectedGenreId = id) }; reFilter() }
+    fun setGenre(id: String?) { _ui.update { it.copy(selectedGenreId = id) }; reFilter() }
     fun setMinRating(rating: Float?) {
         _ui.update { it.copy(filters = it.filters.copy(minRating = rating)) }; reFilter()
     }
@@ -226,11 +225,11 @@ class SearchViewModel @Inject constructor(
         var list = raw
         val genre = _ui.value.selectedGenreId
         if (f.mediaType != null) list = list.filter { it.mediaType.name == f.mediaType }
-        if (genre != null) list = list.filter { genre in it.genreIds }
-        if (f.minRating != null) list = list.filter { it.voteAverage >= f.minRating }
+        if (genre != null) list = list.filter { genre in it.genres }
+        if (f.minRating != null) list = list.filter { it.rating >= f.minRating }
         list = when (f.sortBy) {
-            "rating" -> list.sortedByDescending { it.voteAverage }
-            "newest" -> list.sortedByDescending { it.releaseDate ?: "" }
+            "rating" -> list.sortedByDescending { it.rating }
+            "newest" -> list.sortedByDescending { it.releaseYear ?: "" }
             "title"  -> list.sortedBy { it.title }
             else     -> list // popularity — already sorted by TMDB/FTS
         }
@@ -531,10 +530,10 @@ private fun RecentSearchRow(query: String, onTap: () -> Unit, onDelete: () -> Un
 fun FilterPanel(
     filters: SearchFilters,
     genres: List<Genre>,
-    selectedGenre: Int?,
+    selectedGenre: String?,
     hasActive: Boolean,
     onMediaType: (String?) -> Unit,
-    onGenre: (Int?) -> Unit,
+    onGenre: (String?) -> Unit,
     onRating: (Float?) -> Unit,
     onSort: (String) -> Unit,
     onClear: () -> Unit,

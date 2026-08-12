@@ -1674,7 +1674,7 @@ fun QualityChip(quality: String) {
 }
 
 @Composable fun QualityBadge(quality: String) = QualityChip(quality)
-@Composable fun StatusBadge(status: String)   = StatusPill(status)
+@Composable fun StatusBadge(status: com.axio.reelz.data.model.DownloadStatus) = StatusPill(status)
 
 @Composable
 private fun ReelzDeleteDialog(

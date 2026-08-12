@@ -51,6 +51,7 @@ import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ads.ShortsNativeAdPage
+import com.axio.reelz.data.dto.ShortCategory
 import com.axio.reelz.data.model.ShortVideo
 // StreamHeaders removed — using inline UA constant below
 import com.axio.reelz.ui.components.CinematicSpinner

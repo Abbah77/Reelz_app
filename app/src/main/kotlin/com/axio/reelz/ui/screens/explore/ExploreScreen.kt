@@ -43,7 +43,7 @@ private const val CURRENT_YEAR = 2026 // fallback; real value read from Calendar
 
 data class ExploreFilters(
     val mediaType: String = "MOVIE",          // "MOVIE" or "TV" — Explore is single-type per query (clearer mental model)
-    val genreIds: Set<Int> = emptySet(),       // multi-select, AND-matched
+    val genreIds: Set<String> = emptySet(),    // multi-select, AND-matched
     val sortBy: String = "popularity.desc",
     val yearFrom: Int? = null,
     val yearTo: Int? = null,
@@ -151,7 +151,7 @@ class ExploreViewModel @Inject constructor(
                 // ── Tier 1: query cache ───────────────────────────────────────
                 // Skip cache for filters we cannot answer locally.
                 val cacheUnsupported = f.runtimeFrom != null || f.runtimeTo != null || f.originCountry != null
-                val cacheResults = if (!cacheUnsupported) {
+                val cacheResults: List<Media> = if (!cacheUnsupported) {
                     try {
                         emptyList()
                     } catch (_: Exception) { emptyList() }
@@ -222,9 +222,9 @@ class ExploreViewModel @Inject constructor(
                 val shownIds = _ui.value.results.map { it.id }.toSet()
                 val cacheUnsupported = f.runtimeFrom != null || f.runtimeTo != null || f.originCountry != null
 
-                val cacheMore = if (!cacheUnsupported) {
+                val cacheMore: List<Media> = if (!cacheUnsupported) {
                     try {
-                        emptyList().filter { it.id !in shownIds }
+                        emptyList<Media>().filter { it.id !in shownIds }
                     } catch (_: Exception) { emptyList() }
                 } else emptyList()
 
@@ -233,7 +233,7 @@ class ExploreViewModel @Inject constructor(
                     _ui.update {
                         it.copy(
                             results       = (it.results + cacheMore)
-                                .associateBy { item -> item.id }.values.toList(),
+                                .associateBy<Media, String> { item -> item.id }.values.toList(),
                             isLoading     = false,
                             isLoadingMore = false,
                             hasMore       = true,
@@ -255,7 +255,7 @@ class ExploreViewModel @Inject constructor(
                                 // Deduplicate: TMDB ranked pages can overlap when rankings shift
                                 // between calls. associateBy keeps the freshest entry per tmdbId.
                                 results       = (it.results + items)
-                                    .associateBy { item -> item.id }
+                                    .associateBy<Media, String> { item -> item.id }
                                     .values.toList(),
                                 page          = page,
                                 isLoading     = false,
@@ -274,7 +274,7 @@ class ExploreViewModel @Inject constructor(
                     _ui.update {
                         it.copy(
                             results       = (it.results + cacheMore)
-                                .associateBy { item -> item.id }.values.toList(),
+                                .associateBy<Media, String> { item -> item.id }.values.toList(),
                             isLoading     = false,
                             isLoadingMore = false,
                             hasMore       = false,
@@ -297,7 +297,7 @@ class ExploreViewModel @Inject constructor(
     /** Execute the TMDB discover call for the given filters and page. */
     private suspend fun fetchFromTmdb(f: ExploreFilters, page: Int): List<Media> {
         val mediaType = if (f.mediaType == "MOVIE") "movie" else "tv"
-        val genre = f.genreIds.firstOrNull()?.toString()
+        val genre = f.genreIds.firstOrNull()
         val result = repo.discover(
             mediaType = mediaType,
             genre     = genre,
@@ -327,7 +327,7 @@ class ExploreViewModel @Inject constructor(
         runQuery()
     }
 
-    fun toggleGenre(id: Int) {
+    fun toggleGenre(id: String) {
         val current = _ui.value.filters.genreIds
         val updated = if (id in current) current - id else current + id
         _ui.update { it.copy(filters = it.filters.copy(genreIds = updated), activeMood = null) }

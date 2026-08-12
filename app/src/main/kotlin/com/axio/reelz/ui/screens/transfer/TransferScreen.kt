@@ -45,11 +45,9 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.core.database.DownloadRow
 import com.axio.reelz.core.database.TransferDao
+import com.axio.reelz.core.database.TransferRecord
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
-import com.axio.reelz.data.model.TransferRecord
-import com.axio.reelz.transfer.TransferService
-import com.axio.reelz.transfer.NearbyTransferManager
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.screens.downloads.formatSize
 import com.axio.reelz.ui.screens.downloads.formatSpeed
@@ -145,12 +143,15 @@ private val IconWifi: ImageVector get() = ImageVector.Builder("TrWifi", 24.dp, 2
 class TransferViewModel @Inject constructor(
     private val dao: TransferDao,
     private val downloadDao: DownloadDao,
+    private val transferManager: com.axio.reelz.transfer.TransferManager,
 ) : ViewModel() {
 
-    val history: StateFlow<List<TransferRecord>> = dao.getAll()
+    val history: StateFlow<List<com.axio.reelz.core.database.TransferRecord>> = dao.getAll()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    val progress = TransferService.progressFlow.asStateFlow()
+    // Live transfer progress — null when idle
+    private val _progress = MutableStateFlow<com.axio.reelz.transfer.TransferProgress?>(null)
+    val progress: StateFlow<com.axio.reelz.transfer.TransferProgress?> = _progress.asStateFlow()
 
     val completedDownloads: StateFlow<List<DownloadItem>> = downloadDao.observeAll()
         .map { list ->
@@ -171,19 +172,12 @@ class TransferViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // ── P2P state ─────────────────────────────────────────────────────────────
-    // Backed by NearbyTransferManager (Google Play Services Nearby Connections)
-    // instead of hand-rolled WifiP2pManager/LocalOnlyHotspot. See NearbyTransferManager
-    // kdoc for why this is what lets us skip any manual Settings/Wi-Fi navigation.
 
     sealed class P2pUiState {
         object Idle        : P2pUiState()
         object Preparing   : P2pUiState()
         object Connecting  : P2pUiState()
-        /** ssid/passphrase fields are gone — Nearby needs no Wi-Fi credentials at all.
-         *  qr now encodes a short pairing code purely for a nice "scan to find me instantly"
-         *  UX layered on top of Nearby's own radio-level discovery (BLE + Wi-Fi scan). */
         data class SenderReady(val pairingCode: String, val qr: Bitmap?) : P2pUiState()
-        /** peerId is the Nearby endpointId (opaque per-session identifier — replaces the old peerIp). */
         data class Connected(val peerId: String, val isHost: Boolean) : P2pUiState()
         data class Error(val msg: String) : P2pUiState()
     }
@@ -191,40 +185,41 @@ class TransferViewModel @Inject constructor(
     private val _p2p = MutableStateFlow<P2pUiState>(P2pUiState.Idle)
     val p2p: StateFlow<P2pUiState> = _p2p.asStateFlow()
 
-    private var nearby: NearbyTransferManager? = null
-    private var eventsJob: kotlinx.coroutines.Job? = null
-
-    /** Human-readable name we advertise/connect as — shown on the other device. */
     private fun deviceDisplayName(): String =
         "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".take(32)
 
-    // Sender/host: start advertising, show a QR/code so the other device can find us fast.
+    // Sender/host: start advertising and show a QR pairing code.
     fun initAsSender(ctx: Context) {
         if (_p2p.value is P2pUiState.SenderReady || _p2p.value is P2pUiState.Connected) return
         _p2p.value = P2pUiState.Preparing
 
-        val manager = TransferService.ensureManager(ctx).also { nearby = it }
         val name = deviceDisplayName()
         val pairingCode = (100000..999999).random().toString()
 
-        eventsJob = viewModelScope.launch {
-            manager.startAdvertising(name).collect { event -> handleEvent(event, isHost = true) }
-        }
+        transferManager.startAdvertising(name)
 
-        // QR still gives an instant, unambiguous "scan to connect" path for two phones
-        // sitting next to each other, but it no longer carries Wi-Fi credentials —
-        // it's just a hint the receiver's camera flow uses to skip the peer list and
-        // auto-select the right endpoint once Nearby discovery finds it.
         val payload = "reelzp2p://$pairingCode"
         val qr = generateQr(payload, 700)
         _p2p.value = P2pUiState.SenderReady(pairingCode, qr)
+
+        // Observe manager state to detect when a peer connects
+        viewModelScope.launch {
+            transferManager.state.collect { state ->
+                when (state.phase) {
+                    com.axio.reelz.transfer.TransferPhase.Connected ->
+                        _p2p.value = P2pUiState.Connected(
+                            peerId = state.connectedEndpointId, isHost = true
+                        )
+                    com.axio.reelz.transfer.TransferPhase.Error ->
+                        _p2p.value = P2pUiState.Error(state.errorMessage ?: "Connection failed")
+                    else -> Unit
+                }
+            }
+        }
     }
 
-    // Receiver: start discovery, auto-connect to the first/matching endpoint found.
+    // Receiver: validate QR format then start discovery.
     fun connectFromQr(ctx: Context, raw: String) {
-        // We don't strictly need the code's value (Nearby discovery finds any advertising
-        // Reelz endpoint by SERVICE_ID alone) — parsing it just validates it's actually
-        // our QR format before we spin up discovery.
         if (!raw.startsWith("reelzp2p://")) {
             _p2p.value = P2pUiState.Error("Not a Reelz QR code.")
             return
@@ -232,62 +227,51 @@ class TransferViewModel @Inject constructor(
         startDiscoveryAndConnect(ctx)
     }
 
-    /** Also usable without a QR at all — e.g. a plain "Find nearby devices" button. */
     fun startDiscoveryAndConnect(ctx: Context) {
         _p2p.value = P2pUiState.Connecting
-        val manager = TransferService.ensureManager(ctx).also { nearby = it }
-        val name = deviceDisplayName()
+        transferManager.startDiscovery()
 
-        eventsJob = viewModelScope.launch {
-            manager.startDiscovery().collect { event ->
-                if (event is NearbyTransferManager.NearbyEvent.EndpointFound) {
-                    // Connect to the first Reelz endpoint we see — matches the simple
-                    // one-to-one pairing flow of the old QR/hotspot approach. (P2P_STAR
-                    // strategy still allows the host to accept more than one of these.)
-                    manager.requestConnection(name, event.endpointId)
+        viewModelScope.launch {
+            transferManager.state.collect { state ->
+                when (state.phase) {
+                    com.axio.reelz.transfer.TransferPhase.Connecting ->
+                        if (state.pendingEndpointId.isNotBlank()) {
+                            transferManager.requestConnection(state.pendingEndpointId)
+                        }
+                    com.axio.reelz.transfer.TransferPhase.Connected ->
+                        _p2p.value = P2pUiState.Connected(
+                            peerId = state.connectedEndpointId, isHost = false
+                        )
+                    com.axio.reelz.transfer.TransferPhase.Error ->
+                        _p2p.value = P2pUiState.Error(state.errorMessage ?: "Connection failed")
+                    else -> Unit
                 }
-                handleEvent(event, isHost = false)
             }
         }
     }
 
-    private fun handleEvent(event: NearbyTransferManager.NearbyEvent, isHost: Boolean) {
-        when (event) {
-            is NearbyTransferManager.NearbyEvent.Connected ->
-                _p2p.value = P2pUiState.Connected(peerId = event.endpointId, isHost = isHost)
-            is NearbyTransferManager.NearbyEvent.ConnectionFailed ->
-                _p2p.value = P2pUiState.Error(event.reason)
-            is NearbyTransferManager.NearbyEvent.Disconnected ->
-                if (_p2p.value is P2pUiState.Connected) _p2p.value = P2pUiState.Idle
-            else -> Unit
-        }
-    }
-
     fun sendFile(ctx: Context, filePath: String, peerId: String) {
-        ctx.startForegroundService(
-            Intent(ctx, TransferService::class.java)
-                .setAction(TransferService.ACTION_SEND)
-                .putExtra(TransferService.EXTRA_FILE, filePath)
-                .putExtra(TransferService.EXTRA_ENDPOINT_ID, peerId),
+        transferManager.sendFile(filePath)
+        _progress.value = com.axio.reelz.transfer.TransferProgress(
+            fileName  = filePath.substringAfterLast('/'),
+            direction = "SEND",
+            peerName  = peerId,
         )
     }
 
     fun ensureServiceRunning(ctx: Context) {
-        ctx.startForegroundService(Intent(ctx, TransferService::class.java))
+        // TransferManager is a singleton injected via Hilt — no service needed
     }
 
     fun reset() {
-        eventsJob?.cancel()
-        eventsJob = null
-        nearby?.stopAll()
-        nearby = null
+        transferManager.release()
         _p2p.value = P2pUiState.Idle
+        _progress.value = null
     }
 
     override fun onCleared() {
         super.onCleared()
-        eventsJob?.cancel()
-        nearby?.stopAll()
+        transferManager.release()
     }
 }
 

@@ -109,3 +109,16 @@ data class TransferState(
 enum class TransferPhase {
     Idle, Advertising, Discovering, Connecting, Connected, Transferring, Done, Error
 }
+
+// ── TransferProgress — live progress emitted during a transfer ────────────────
+
+data class TransferProgress(
+    val fileName: String = "",
+    val direction: String = "SEND",   // "SEND" | "RECEIVE"
+    val peerName: String = "",
+    val transferredBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val speedBps: Long = 0L,
+    val done: Boolean = false,
+    val error: String? = null,
+)

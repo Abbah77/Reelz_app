@@ -33,7 +33,10 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.axio.reelz.core.database.SavedVideoDao
+import com.axio.reelz.core.database.SavedVideoItem
 import com.axio.reelz.core.database.WatchlistDao
+import com.axio.reelz.core.database.WatchlistItem
+import com.axio.reelz.core.database.WatchHistory
 import com.axio.reelz.core.database.WatchHistoryDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.ui.components.*
@@ -150,7 +153,12 @@ class ProfileViewModel @Inject constructor(
     private var historyOffset = 0
 
     init {
-        viewModelScope.launch { watchlistDao.getAll().collect { wl -> _ui.update { it.copy(watchlist = wl) } } }
+        viewModelScope.launch {
+            watchlistDao.observeAll().collect { rows ->
+                val wl = rows.map { r -> WatchlistItem(r.mediaId, r.title, r.posterUrl, r.mediaType, r.addedAt) }
+                _ui.update { it.copy(watchlist = wl) }
+            }
+        }
         viewModelScope.launch { savedVideoDao.getAll().collect { s -> _ui.update { it.copy(saved = s) } } }
         // History: load first page and total count — everything on demand
         loadNextHistoryPage()
@@ -226,7 +234,7 @@ class ProfileViewModel @Inject constructor(
     fun signOut() {
         _ui.update { it.copy(profile = UserProfile()) }
         viewModelScope.launch {
-            userSessionRepository.signOut()
+            sessionRepo.signOut()
             try {
                 CredentialManager.create(appContext)
                     .clearCredentialState(ClearCredentialStateRequest())

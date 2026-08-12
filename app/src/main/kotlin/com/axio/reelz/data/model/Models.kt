@@ -126,6 +126,10 @@ data class ShortVideo(
     val duration: Int,
     val width: Int,
     val height: Int,
+    val audioUrl: String? = null,
+    val community: String = "",
+    val ups: Int = 0,
+    val hasAudio: Boolean = true,
 )
 
 // ── Download ──────────────────────────────────────────────────────────────────

@@ -112,8 +112,19 @@ class PremiumViewModel @Inject constructor(
             )
         }
         viewModelScope.launch {
-            sessionRepo.userStateFlow.collect { state ->
-                _ui.update { it.copy(userState = state, daysUntilExpiry = sessionRepo.daysUntilExpiry()) }
+            sessionRepo.session.collect { session ->
+                if (session != null) {
+                    val daysLeft = if (session.expiresAtMs > 0) {
+                        ((session.expiresAtMs - System.currentTimeMillis()) / 86_400_000L).toInt().coerceAtLeast(0)
+                    } else 0
+                    val state = when {
+                        !session.isPremium      -> UserState.GUEST
+                        daysLeft in 1..3        -> UserState.PREMIUM_GRACE
+                        session.isPremium       -> UserState.PREMIUM_ACTIVE
+                        else                    -> UserState.PREMIUM_EXPIRED
+                    }
+                    _ui.update { it.copy(userState = state, daysUntilExpiry = daysLeft) }
+                }
             }
         }
     }
