@@ -7,6 +7,7 @@ import com.axio.reelz.core.database.AppConfigCacheRow
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.dto.AppConfigDto
 import com.axio.reelz.data.dto.PremiumConfig
+import com.axio.reelz.data.dto.ShortsConfig
 import com.axio.reelz.data.dto.TierConfig
 import com.axio.reelz.data.dto.TiersConfig
 import com.axio.reelz.core.network.NetworkResult
@@ -66,18 +67,9 @@ class ConfigRepository @Inject constructor(
         )
     }
 
-    fun tiersConfig(): TiersConfig = TiersConfig()  // extend when backend provides tier data
+    fun isUnderMaintenance(): Boolean = isMaintenanceMode()
 
-    fun premiumConfig(): PremiumConfig {
-        val p = current().premium
-        return PremiumConfig(
-            monthlyPriceNgn   = p.monthlyPrice,
-            yearlyPriceNgn    = p.monthlyPrice * 10,
-            paystackMonthlyUrl = p.paystackMonthlyUrl,
-            paystackYearlyUrl  = p.paystackYearlyUrl,
-            paymentNote        = "",
-        )
-    }
+    fun shortsConfig(): ShortsConfig = ShortsConfig()
     fun areAdsEnabled(isPremiumUser: Boolean = false): Boolean =
         current().ads.enabled && !isPremiumUser
     fun adsConfig() = current().ads

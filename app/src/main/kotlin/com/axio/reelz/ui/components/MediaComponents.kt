@@ -109,7 +109,7 @@ fun MediaPosterCard(
                     Brush.radialGradient(listOf(Brand.copy(0.15f), Color.Transparent))
                 ))
             }
-            if (media.voteAverage > 0) {
+            if (media.rating > 0) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -122,7 +122,7 @@ fun MediaPosterCard(
                 ) {
                     Icon(IconStar, null, tint = Gold, modifier = Modifier.size(d.ratingIconSize))
                     Spacer(Modifier.width(d.spaceXxs))
-                    Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = d.ratingFontSize, fontWeight = FontWeight.Bold)
+                    Text("${"%.1f".format(media.rating)}", color = Gold, fontSize = d.ratingFontSize, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -209,7 +209,7 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
             if (pressed) {
                 Box(Modifier.fillMaxSize().background(Brand.copy(0.08f)))
             }
-            if (media.voteAverage > 0) {
+            if (media.rating > 0) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -221,7 +221,7 @@ fun MediaRowCard(media: Media, onClick: () -> Unit, modifier: Modifier = Modifie
                 ) {
                     Icon(IconStar, null, tint = Gold, modifier = Modifier.size(d.ratingIconSize))
                     Spacer(Modifier.width(d.spaceXxs))
-                    Text("${"%.1f".format(media.voteAverage)}", color = Gold, fontSize = d.ratingFontSize, fontWeight = FontWeight.Bold)
+                    Text("${"%.1f".format(media.rating)}", color = Gold, fontSize = d.ratingFontSize, fontWeight = FontWeight.Bold)
                 }
             }
         }

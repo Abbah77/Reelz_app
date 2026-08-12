@@ -60,6 +60,7 @@ class CatalogRepository @Inject constructor(
 
             // Fetch from backend
             val result = safeApiCall(tag) { api.getFeed(refresh = if (forceRefresh) 1 else 0) }
+            @Suppress("UNCHECKED_CAST")
             when (result) {
                 is NetworkResult.Success -> {
                     val dto = result.data
@@ -77,21 +78,21 @@ class CatalogRepository @Inject constructor(
                         feedDao.upsertAll(rows)
                         Log.d(tag, "Feed: cached ${rows.size} sections from network")
                     }
-                    NetworkResult.Success(data = dto.sections.map { it.toModel() })
+                    NetworkResult.Success<List<FeedSection>>(data = dto.sections.map { it.toModel() })
                 }
                 is NetworkResult.Error -> {
                     // Network failed — serve stale cache rather than an error screen
                     if (hasCache) {
                         Log.w(tag, "Feed: network failed, serving stale cache (${result.message})")
-                        NetworkResult.Success(
+                        NetworkResult.Success<List<FeedSection>>(
                             data = cached.map { it.toModel() },
                             fromCache = true,
                         )
                     } else {
-                        result
+                        result as NetworkResult<List<FeedSection>>
                     }
                 }
-                NetworkResult.Loading -> result
+                NetworkResult.Loading -> result as NetworkResult<List<FeedSection>>
             }
         }
 
@@ -188,6 +189,7 @@ class CatalogRepository @Inject constructor(
 
         // 3. Network
         val result = safeApiCall(tag) { api.getDetail(id) }
+        @Suppress("UNCHECKED_CAST")
         when (result) {
             is NetworkResult.Success -> {
                 val dto = result.data
@@ -201,16 +203,16 @@ class CatalogRepository @Inject constructor(
                 )
                 detailDao.evictToLimit(500)
                 detailMemCache[id] = model to System.currentTimeMillis()
-                NetworkResult.Success(model)
+                NetworkResult.Success<MediaDetail>(model)
             }
             is NetworkResult.Error -> {
                 // Serve stale Room cache rather than error
                 if (roomRow != null) {
                     val dto = gson.fromJson(roomRow.detailJson, MediaDetailDto::class.java)
-                    NetworkResult.Success(dto.toModel(), fromCache = true)
-                } else result
+                    NetworkResult.Success<MediaDetail>(dto.toModel(), fromCache = true)
+                } else result as NetworkResult<MediaDetail>
             }
-            else -> result
+            else -> result as NetworkResult<MediaDetail>
         }
     }
 

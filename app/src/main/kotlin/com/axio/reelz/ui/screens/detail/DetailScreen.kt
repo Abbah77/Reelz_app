@@ -501,8 +501,8 @@ fun DetailScreen(
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
 
-    LaunchedEffect(tmdbId) {
-        vm.load(tmdbId, mediaType)
+    LaunchedEffect(id) {
+        vm.load(id, mediaType)
         vm.observeDownloads()
     }
 
@@ -524,8 +524,7 @@ fun DetailScreen(
                 readyStream?.let { stream ->
                     putExtra("streamUrl",     stream.url)
                     putExtra("streamIsHls",   stream.isHls)
-                    putExtra("streamReferer", stream.referer)
-                    putExtra("streamOrigin",  stream.origin)
+                    // referer/origin headers are included in stream.headers map
                 }
             })
         }
@@ -829,8 +828,7 @@ fun DownloadQualitySheet(
                                 }
                                 track.estimatedSizeBytes > 0 -> {
                                     Text(
-                                        if (track.isSizeExact) formatSize(track.estimatedSizeBytes)
-                                        else "~${formatSize(track.estimatedSizeBytes)}",
+                                        "~${formatSize(track.estimatedSizeBytes)}",
                                         color = White60,
                                         fontSize = d.textSm,
                                     )
@@ -1110,11 +1108,11 @@ private fun DetailContent(
                             if (!detail.tagline.isNullOrBlank())
                                 Text(detail.tagline, color = White60, fontSize = d.textSm, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Row(horizontalArrangement = Arrangement.spacedBy(d.spaceSm), verticalAlignment = Alignment.CenterVertically) {
-                                RatingChip(detail.voteAverage)
+                                RatingChip(detail.rating)
                                 Text("•", color = White40)
-                                Text(detail.releaseDate?.take(4) ?: "", color = White60, fontSize = d.textMd)
+                                Text(detail.releaseYear?.take(4) ?: "", color = White60, fontSize = d.textMd)
                                 if (detail.runtime != null) { Text("•", color = White40); Text(formatRuntime(detail.runtime), color = White60, fontSize = d.textMd) }
-                                if (!isMovie) { Text("•", color = White40); Text("${detail.numberOfSeasons}S", color = White60, fontSize = d.textMd) }
+                                if (!isMovie) { Text("•", color = White40); Text("${detail.seasons.size}S", color = White60, fontSize = d.textMd) }
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                                 detail.genres.take(3).forEach { g ->
@@ -1122,7 +1120,7 @@ private fun DetailContent(
                                         Modifier.clip(RoundedCornerShape(d.radiusSm)).background(BgSurface)
                                             .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusSm))
                                             .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceXxs + 1.dp)
-                                    ) { Text(g.name, color = White60, fontSize = d.textXs) }
+                                    ) { Text(g, color = White60, fontSize = d.textXs) }
                                 }
                             }
                         }
@@ -1211,7 +1209,7 @@ private fun DetailContent(
                 ) {
                     detail.runtime?.let { MetaChip("Runtime", formatRuntime(it)) }
                     detail.status?.let   { MetaChip("Status", it) }
-                    if (detail.voteCount > 0) MetaChip("Votes", "${detail.voteCount}")
+                    // voteCount not available in current model
                 }
             }
         }

@@ -360,9 +360,9 @@ private fun ActiveDownloadCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
-                        if (isDownloading && item.networkSpeedBps > 0) {
+                        if (isDownloading) {
                             Text(
-                                "↓ ${formatSpeed(item.networkSpeedBps)}",
+                                "Downloading…",
                                 color = Success.copy(.85f),
                                 fontSize = (d.textXxs.value + 1f).sp,
                                 fontWeight = FontWeight.SemiBold,

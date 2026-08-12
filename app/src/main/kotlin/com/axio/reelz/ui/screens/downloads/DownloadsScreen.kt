@@ -148,7 +148,7 @@ class DownloadsViewModel @Inject constructor(
                     MovieGroup(
                         mediaId     = mediaId,
                         title       = items.first().title,
-                        posterUrl   = items.first().posterUrl,
+                        posterPath  = items.first().posterUrl,
                         downloads   = items.sortedByDescending { it.sizeBytes },
                     )
                 }
@@ -178,7 +178,7 @@ class DownloadsViewModel @Inject constructor(
 
     private fun buildSeriesGroups(items: List<DownloadItem>): List<SeriesGroup> =
         items.groupBy { it.mediaId }
-            .map { (tmdbId, eps) ->
+            .map { (groupMediaId, eps) ->
                 val seasons = eps
                     .groupBy { it.season }
                     .map { (season, seasonEps) ->
@@ -186,11 +186,11 @@ class DownloadsViewModel @Inject constructor(
                             .groupBy { it.episode }
                             .map { (epNum, epItems) ->
                                 EpisodeGroup(
-                                    mediaId     = mediaId,
+                                    mediaId     = groupMediaId,
                                     season      = season,
                                     episode     = epNum,
                                     episodeName = epItems.firstOrNull()?.episodeName ?: "",
-                                    posterUrl   = epItems.firstOrNull()?.posterUrl,
+                                    posterPath  = epItems.firstOrNull()?.posterUrl,
                                     downloads   = epItems.sortedByDescending { it.sizeBytes },
                                 )
                             }
@@ -198,7 +198,7 @@ class DownloadsViewModel @Inject constructor(
                         SeasonGroup(season, episodeGroups)
                     }
                     .sortedBy { it.season }
-                SeriesGroup(mediaId, eps.first().title, eps.first().posterUrl, seasons)
+                SeriesGroup(groupMediaId, eps.first().title, eps.first().posterUrl, seasons)
             }
             .sortedByDescending { g ->
                 g.seasons.flatMap { it.episodeGroups }.flatMap { it.downloads }.maxOf { it.createdAt }
@@ -706,10 +706,9 @@ private fun ActiveQueueCard(
                         isQueued                 -> "Waiting…"
                         isError                  -> "Failed"
                         isPaused                 -> "${(pct * 100).toInt()}% · Paused"
-                        item.networkSpeedBps > 0 -> "${(pct * 100).toInt()}% · ${formatSpeed(item.networkSpeedBps)}"
-                        else                     -> "${(pct * 100).toInt()}%"
+                        else -> "${(pct * 100).toInt()}%"
                     },
-                    color = if (isDownloading && item.networkSpeedBps > 0) Success.copy(.85f) else White40,
+                    color = if (isDownloading) Success.copy(.85f) else White40,
                     fontSize = (d.textXxs.value + 0.5f).sp,
                 )
                 // Pause/Resume icon
@@ -1071,7 +1070,7 @@ fun SeriesRootCard(
                     .background(BgRaised)
             ) {
                 AsyncImage(
-                    model = group.posterUrl,
+                    model = group.posterPath,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -1728,19 +1727,15 @@ private fun playDownload(ctx: Context, dl: DownloadItem) {
         putExtra("posterUrl", dl.posterUrl)
         putExtra("downloadId", dl.id)
         // Hint to player: start from this quality (empty = auto pick highest)
-        putExtra("preferredQuality", dl.lastSelectedQuality)
+        putExtra("preferredQuality", dl.quality)
         // Flag that this is an offline playback
         putExtra("isOffline", true)
     }
     when {
         dl.status == DownloadStatus.DONE && dl.filePath.isNotBlank() -> {
+            val isHls = dl.filePath.endsWith(".m3u8", ignoreCase = true)
             base.putExtra("streamUrl",   "file://${dl.filePath}")
-            base.putExtra("streamIsHls", false)
-            ctx.startActivity(base)
-        }
-        dl.localPlaylistPath.isNotBlank() -> {
-            base.putExtra("streamUrl",   "file://${dl.localPlaylistPath}")
-            base.putExtra("streamIsHls", true)
+            base.putExtra("streamIsHls", isHls)
             ctx.startActivity(base)
         }
     }
