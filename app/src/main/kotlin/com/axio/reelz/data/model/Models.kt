@@ -168,6 +168,7 @@ data class UserSession(
     val plan: String = "",
     val expiresAtMs: Long = 0L,
     val cachedAtMs: Long = System.currentTimeMillis(),
+    val accessToken: String = "",   // JWT issued by the backend after Google sign-in
 )
 
 // ── Watched progress (local-only, not synced) ─────────────────────────────────

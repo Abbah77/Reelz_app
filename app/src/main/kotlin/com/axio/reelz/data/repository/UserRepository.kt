@@ -30,7 +30,10 @@ class UserRepository @Inject constructor(
     val session: StateFlow<UserSession?> = _session.asStateFlow()
 
     val isPremium: Boolean get() = _session.value?.isPremium == true
-    val accessToken: String get() = _session.value?.let { "Bearer ${it.uid}" } ?: ""
+    val accessToken: String get() {
+        val token = _session.value?.accessToken?.takeIf { it.isNotBlank() }
+        return if (token != null) "Bearer $token" else ""
+    }
 
     // ── Init — load from Room on app start ────────────────────────────────────
 
@@ -111,6 +114,7 @@ class UserRepository @Inject constructor(
                     plan        = dto.status,
                     expiresAtMs = dto.expiresAtMs,
                     cachedAtMs  = System.currentTimeMillis(),
+                    accessToken = dto.accessToken.takeIf { it.isNotBlank() } ?: current.accessToken,
                 )
                 dao.upsert(updated)
                 _session.value = updated.toModel()
@@ -138,5 +142,6 @@ class UserRepository @Inject constructor(
         plan        = plan,
         expiresAtMs = expiresAtMs,
         cachedAtMs  = cachedAtMs,
+        accessToken = accessToken,  // carry the JWT through to the domain model
     )
 }

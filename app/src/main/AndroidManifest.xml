@@ -9,21 +9,18 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
-    <!-- ── Wi-Fi Hotspot transfer ─────────────────────────────────────────── -->
-    <!-- ACCESS_FINE_LOCATION removed — ACCESS_COARSE_LOCATION below is sufficient for Wi-Fi Direct
-         and avoids security scanner false-positives on streaming apps. -->
+    <!-- ── Wi-Fi Direct / Nearby transfer ───────────────────────────────── -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- ── Nearby Connections (Bluetooth mediums used for discovery + upgrade) ── -->
-    <!-- Legacy BT permissions for API < 31 -->
+    <!-- ── Bluetooth (Nearby Connections) ───────────────────────────────── -->
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
-    <!-- API 31+ granular BT runtime permissions -->
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
@@ -31,8 +28,6 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
-    <!-- Coarse location: some OEMs (API 29-32) still gate BT/Wi-Fi scan results on it -->
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- ── Storage / Downloads ──────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -42,22 +37,22 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
-    <!-- ── Services ─────────────────────────────────────────────────────── -->
+    <!-- ── Foreground services ──────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <!-- ── Other ────────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
-
-    <!-- ── APK self-update (PackageInstaller) ───────────────────────────── -->
-    <!-- Required for PackageInstaller.Session.commit() on all API levels -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
-        android:name=".ReelzApp"
+        android:name="com.axio.reelz.app.ReelzApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
@@ -74,7 +69,7 @@
 
         <!-- ── Main Activity ─────────────────────────────────────────────── -->
         <activity
-            android:name=".ui.MainActivity"
+            android:name="com.axio.reelz.app.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.Reelz.Splash"
             android:windowSoftInputMode="adjustResize"
@@ -85,7 +80,7 @@
             </intent-filter>
         </activity>
 
-        <!-- ── Player Activity (landscape) ──────────────────────────────── -->
+        <!-- ── Player Activity ───────────────────────────────────────────── -->
         <activity
             android:name=".ui.screens.player.PlayerActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
@@ -94,38 +89,21 @@
             android:theme="@style/Theme.Reelz.Player"
             android:supportsPictureInPicture="true" />
 
-        <!-- ── Playback service ───────────────────────────────────────────── -->
-        <service
-            android:name=".service.ReelzPlaybackService"
-            android:exported="true"
-            android:foregroundServiceType="mediaPlayback"
-            tools:targetApi="29">
-            <intent-filter>
-                <action android:name="androidx.media3.session.MediaSessionService" />
-            </intent-filter>
-        </service>
-
         <!-- ── Download service ──────────────────────────────────────────── -->
         <service
-            android:name=".service.DownloadService"
+            android:name="com.axio.reelz.media.download.ReelzDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync"
             tools:targetApi="29" />
 
         <!-- ── Transfer service ──────────────────────────────────────────── -->
         <service
-            android:name=".transfer.TransferService"
+            android:name="com.axio.reelz.service.TransferService"
             android:exported="false"
             android:foregroundServiceType="dataSync"
             tools:targetApi="29" />
 
-        <!-- ── WorkManager ────────────────────────────────────────────────── -->
-        <!-- tools:node="remove" disables WorkManager's default auto-init.
-             Required because ReelzApp now implements Configuration.Provider
-             to supply a HiltWorkerFactory (see ReelzApp.workManagerConfiguration);
-             leaving auto-init enabled alongside a custom Configuration.Provider
-             throws IllegalStateException at startup ("WorkManager is already
-             initialized"). -->
+        <!-- ── WorkManager — disable auto-init (HiltWorkerFactory via ReelzApp) ── -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
@@ -137,11 +115,7 @@
                 tools:node="remove" />
         </provider>
 
-        <!-- ── AppLovin MAX SDK ──────────────────────────────────────────── -->
-        <!-- The SDK key is supplied at runtime from remote config (ads.applovin_sdk_key) -->
-        <!-- via AdEngine, so no key is hard-coded here. -->
-
-        <!-- AppLovin fullscreen ad activity (required by the SDK) -->
+        <!-- ── AppLovin MAX ──────────────────────────────────────────────── -->
         <activity
             android:name="com.applovin.adview.AppLovinFullscreenActivity"
             android:exported="false"
@@ -150,16 +124,11 @@
             tools:replace="android:configChanges"
             android:configChanges="fontScale|keyboard|keyboardHidden|locale|orientation|screenLayout|screenSize|smallestScreenSize|uiMode" />
 
-        <!-- AppLovin interstitial/rewarded ad activity -->
         <activity
             android:name="com.applovin.mediation.MaxDebuggerActivity"
             android:exported="false"
             tools:replace="android:theme"
             android:theme="@style/com.applovin.mediation.MaxDebuggerActivity.Theme" />
-
-
-        <!-- APK install status receiver is registered programmatically -->
-        <!-- inside ApkUpdateManager — no static declaration needed.   -->
 
     </application>
 </manifest>
