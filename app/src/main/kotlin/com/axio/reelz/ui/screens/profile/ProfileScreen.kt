@@ -469,13 +469,13 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                             TextButton(onClick = { vm.clearHistory() }) { Text("Clear All", color = Error, fontSize = d.textSm) }
                         }
                     }
-                    items(ui.historyPage, key = { it.key }) { h ->
+                    items(ui.historyPage, key = { it.mediaId }) { h ->
                         val type = if (h.mediaType == "TV") MediaType.TV else MediaType.MOVIE
                         val progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
                         LibraryRow(
                             title    = h.title,
-                            poster   = h.posterUrl,
-                            subtitle = if (h.season > 0) "S${h.season} · E${h.episode}" else "Movie",
+                            poster   = h.posterPath,
+                            subtitle = if (h.mediaType == "TV") "TV Show" else "Movie",
                             progress = progress,
                             onClick  = { nav.navigate(com.axio.reelz.app.Route.Detail.go(h.mediaId, type)) },
                         )
