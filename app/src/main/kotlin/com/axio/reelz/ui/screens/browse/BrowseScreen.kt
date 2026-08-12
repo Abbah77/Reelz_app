@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.axio.reelz.ui.theme.Bg
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -59,12 +60,12 @@ class BrowseViewModel @javax.inject.Inject constructor(
     init {
         initLoad()
         // Keep continue-watching row live
-        androidx.lifecycle.viewModelScope.launch {
+        viewModelScope.launch {
             val history = libraryRepo.getRecentProgress(12)
             _ui.update { it.copy(continueWatching = history) }
         }
         // Keep watchlist set live for hero banner button
-        androidx.lifecycle.viewModelScope.launch {
+        viewModelScope.launch {
             libraryRepo.observeWatchlist().collect { list ->
                 _ui.update { it.copy(watchlistedIds = list.map { w -> w.mediaId }.toSet()) }
             }
@@ -73,7 +74,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
 
     /** Toggle a media item in/out of the watchlist from the hero banner. */
     fun toggleHeroWatchlist(media: com.axio.reelz.data.model.Media) {
-        androidx.lifecycle.viewModelScope.launch {
+        viewModelScope.launch {
             libraryRepo.toggleWatchlist(media)
         }
     }
@@ -86,7 +87,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
      *  STEP 3 — Backend response merges in-place; stale sections replaced.
      */
     private fun initLoad() {
-        androidx.lifecycle.viewModelScope.launch {
+        viewModelScope.launch {
             isInfiniteExhausted = false
 
             // STEP 1 — cache-first
@@ -170,7 +171,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
     /** User-triggered pull-to-refresh. */
     fun load(forceRefresh: Boolean = true) {
         if (!forceRefresh) { initLoad(); return }
-        androidx.lifecycle.viewModelScope.launch {
+        viewModelScope.launch {
             _ui.update { it.copy(isRefreshing = true, error = null) }
             isInfiniteExhausted = false
             infiniteCursor = null
@@ -204,7 +205,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
     /** Infinite scroll — fetches discover pages and appends as InfinitePage rows. */
     fun loadMoreInfinite() {
         if (_ui.value.isLoadingMore || isInfiniteExhausted) return
-        androidx.lifecycle.viewModelScope.launch {
+        viewModelScope.launch {
             _ui.update { it.copy(isLoadingMore = true) }
 
             val existingIds = _ui.value.feedRows.flatMap { row ->
@@ -253,7 +254,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
             return
         }
         _ui.update { it.copy(selectedGenreId = genreId, genreItems = emptyList(), genreCursor = null, hasMoreGenrePages = true, isGenreLoading = true) }
-        androidx.lifecycle.viewModelScope.launch {
+        viewModelScope.launch {
             val result = repo.discover(genre = genreId)
             when (result) {
                 is com.axio.reelz.core.network.NetworkResult.Success -> {
@@ -272,7 +273,7 @@ class BrowseViewModel @javax.inject.Inject constructor(
     fun loadMoreGenre() {
         val st = _ui.value
         if (st.isGenreLoading || !st.hasMoreGenrePages) return
-        androidx.lifecycle.viewModelScope.launch {
+        viewModelScope.launch {
             _ui.update { it.copy(isGenreLoading = true) }
             val result = repo.discover(genre = st.selectedGenreId, cursor = st.genreCursor)
             when (result) {
