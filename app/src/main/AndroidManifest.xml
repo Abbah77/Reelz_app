@@ -9,12 +9,15 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
-    <!-- ── Wi-Fi Direct / Nearby transfer ───────────────────────────────── -->
+    <!-- ── Wi-Fi Direct / Beam transfer ──────────────────────────────────── -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Wi-Fi Direct (WifiP2pManager) -->
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
 
     <!-- ── Bluetooth (Nearby Connections) ───────────────────────────────── -->
     <uses-permission android:name="android.permission.BLUETOOTH"
@@ -96,9 +99,9 @@
             android:foregroundServiceType="dataSync"
             tools:targetApi="29" />
 
-        <!-- ── Transfer service ──────────────────────────────────────────── -->
+        <!-- ── Transfer foreground service (Reelz Beam) ─────────────────── -->
         <service
-            android:name="com.axio.reelz.service.TransferService"
+            android:name="com.axio.reelz.transfer.TransferForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync"
             tools:targetApi="29" />

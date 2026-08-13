@@ -52,7 +52,11 @@
 
 # ── Gson ──────────────────────────────────────────────────────────────────────
 -keep class com.google.gson.** { *; }
+-keep class com.google.gson.reflect.TypeToken { *; }
+-keep class * extends com.google.gson.reflect.TypeToken
 -keepattributes Signature
+-keepattributes EnclosingMethod
+-keepattributes InnerClasses
 -keepattributes *Annotation*
 -dontwarn com.google.gson.**
 

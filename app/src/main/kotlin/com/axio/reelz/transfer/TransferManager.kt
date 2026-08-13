@@ -1,124 +1,224 @@
 package com.axio.reelz.transfer
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  TransferManager — bridges P2pEngine ↔ ViewModel
+//
+//  Responsibilities:
+//   • Owns P2pEngine lifecycle
+//   • Translates EngineState → TransferState (UI-friendly)
+//   • Records transfers in Room via TransferRepository
+//   • Exposes simple send/receive commands
+// ─────────────────────────────────────────────────────────────────────────────
+
 import android.content.Context
-import android.util.Log
+import android.graphics.Bitmap
+import android.os.Build
+import com.axio.reelz.core.database.TransferRecord
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.io.File
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * TransferManager — Nearby Connections logic extracted from TransferScreen.
- *
- * Per the restructure plan, TransferScreen.kt was 1,134 lines with all
- * business logic embedded. This class owns:
- *  - Nearby Connections lifecycle (advertising, discovering, connecting)
- *  - QR code generation/scanning coordination
- *  - Transfer state machine
- *  - TransferRepository for persisting transfer history
- *
- * TransferScreen observes TransferViewModel which coordinates TransferManager.
- * TransferScreen never accesses TransferManager directly.
- *
- * Dependency direction: TransferManager → TransferRepository → Room.
- * Never references UI or Activity.
- */
 @Singleton
 class TransferManager @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val transferRepository: TransferRepository,
+    @ApplicationContext private val ctx: Context,
+    private val engine: P2pEngine,
+    private val repo: TransferRepository,
 ) {
-    private val tag = "TransferManager"
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    private val _state = MutableStateFlow(TransferState())
-    val state: StateFlow<TransferState> = _state.asStateFlow()
+    // ── UI state ──────────────────────────────────────────────────────────────
 
-    // ── Advertising ───────────────────────────────────────────────────────────
+    val engineState: StateFlow<EngineState> = engine.state
 
-    fun startAdvertising(deviceName: String) {
-        Log.d(tag, "startAdvertising: $deviceName")
-        _state.update { it.copy(phase = TransferPhase.Advertising, localDeviceName = deviceName) }
-        // TODO: wire Nearby Connections Advertising API here
+    private val _uiState = MutableStateFlow<TransferUiState>(TransferUiState.Idle)
+    val uiState: StateFlow<TransferUiState> = _uiState.asStateFlow()
+
+    init {
+        scope.launch {
+            engine.state.collect { es ->
+                _uiState.value = mapEngineToUi(es)
+            }
+        }
     }
 
-    fun stopAdvertising() {
-        Log.d(tag, "stopAdvertising")
-        _state.update { it.copy(phase = TransferPhase.Idle) }
+    private fun mapEngineToUi(es: EngineState): TransferUiState = when (es) {
+        is EngineState.Idle        -> TransferUiState.Idle
+        is EngineState.Advertising -> TransferUiState.Preparing
+        is EngineState.Negotiating -> TransferUiState.Connecting
+        is EngineState.QrReady     -> {
+            val qr = generateQr(es.qrPayload, 700)
+            TransferUiState.QrReady(
+                qr         = qr,
+                payload    = es.qrPayload,
+                sessionId  = es.sessionId,
+            )
+        }
+        is EngineState.Connected -> TransferUiState.Connected(
+            peerName = es.peerName,
+            tier     = es.tier,
+            isHost   = es.isHost,
+        )
+        is EngineState.Transferring -> TransferUiState.Transferring(
+            fileName         = es.fileName,
+            direction        = es.direction,
+            peerName         = es.peerName,
+            transferredBytes = es.transferredBytes,
+            totalBytes       = es.totalBytes,
+            speedBps         = es.speedBps,
+            tier             = es.tier,
+        )
+        is EngineState.Done  -> TransferUiState.Done
+        is EngineState.Error -> TransferUiState.Error(es.msg, es.retryable)
     }
 
-    // ── Discovery ─────────────────────────────────────────────────────────────
+    // ── Sender ────────────────────────────────────────────────────────────────
 
-    fun startDiscovery() {
-        Log.d(tag, "startDiscovery")
-        _state.update { it.copy(phase = TransferPhase.Discovering) }
-        // TODO: wire Nearby Connections Discovery API here
+    fun startAsSender() {
+        val name = deviceName()
+        _uiState.value = TransferUiState.Preparing
+        scope.launch(Dispatchers.IO) {
+            val payload = engine.prepareAsSender(name)
+            val qr = generateQr(payload, 700)
+            val parts = payload.removePrefix("reelzbeam://").split("|")
+            _uiState.value = TransferUiState.QrReady(
+                qr        = qr,
+                payload   = payload,
+                sessionId = parts.getOrElse(0) { "" },
+            )
+        }
     }
 
-    fun stopDiscovery() {
-        Log.d(tag, "stopDiscovery")
-        _state.update { it.copy(phase = TransferPhase.Idle) }
+    // ── Receiver ──────────────────────────────────────────────────────────────
+
+    fun connectFromQr(rawQr: String) {
+        engine.connectFromQr(rawQr, deviceName())
     }
 
-    // ── Connection ────────────────────────────────────────────────────────────
+    // ── Send file ─────────────────────────────────────────────────────────────
 
-    fun requestConnection(endpointId: String) {
-        Log.d(tag, "requestConnection: $endpointId")
-        _state.update { it.copy(phase = TransferPhase.Connecting, pendingEndpointId = endpointId) }
+    fun sendFile(filePath: String, fileName: String, peerName: String) {
+        engine.sendFile(
+            filePath   = filePath,
+            fileName   = fileName,
+            onProgress = { sent, total, bps ->
+                _uiState.value = TransferUiState.Transferring(
+                    fileName = fileName, direction = "SEND", peerName = peerName,
+                    transferredBytes = sent, totalBytes = total, speedBps = bps,
+                    tier = (engine.state.value as? EngineState.Transferring)?.tier,
+                )
+            },
+            onDone = {
+                scope.launch {
+                    repo.recordTransfer(
+                        TransferRecord(
+                            id        = UUID.randomUUID().toString(),
+                            fileName  = fileName,
+                            sizeBytes = File(filePath).length(),
+                            direction = "SEND",
+                            peerName  = peerName,
+                            status    = "DONE",
+                        )
+                    )
+                }
+            },
+            onError = { msg -> _uiState.value = TransferUiState.Error(msg, retryable = false) },
+        )
     }
 
-    fun acceptConnection(endpointId: String) {
-        Log.d(tag, "acceptConnection: $endpointId")
-        _state.update { it.copy(phase = TransferPhase.Connected, connectedEndpointId = endpointId) }
+    // ── Receive file (called by receiver after connect) ───────────────────────
+
+    fun startReceiving(saveDir: File, peerName: String) {
+        engine.receiveFile(
+            saveDir    = saveDir,
+            onProgress = { recv, total, bps, fileName ->
+                _uiState.value = TransferUiState.Transferring(
+                    fileName = fileName, direction = "RECEIVE", peerName = peerName,
+                    transferredBytes = recv, totalBytes = total, speedBps = bps,
+                    tier = (engine.state.value as? EngineState.Transferring)?.tier,
+                )
+            },
+            onDone = { file ->
+                scope.launch {
+                    repo.recordTransfer(
+                        TransferRecord(
+                            id        = UUID.randomUUID().toString(),
+                            fileName  = file.name,
+                            sizeBytes = file.length(),
+                            direction = "RECEIVE",
+                            peerName  = peerName,
+                            status    = "DONE",
+                        )
+                    )
+                }
+            },
+            onError = { msg -> _uiState.value = TransferUiState.Error(msg, retryable = false) },
+        )
     }
+
+    // ── Disconnect / reset ────────────────────────────────────────────────────
 
     fun disconnect() {
-        Log.d(tag, "disconnect")
-        _state.update { TransferState() }
-    }
-
-    // ── Transfer ──────────────────────────────────────────────────────────────
-
-    fun sendFile(localPath: String) {
-        Log.d(tag, "sendFile: $localPath")
-        _state.update { it.copy(phase = TransferPhase.Transferring, transferFilePath = localPath) }
-        // TODO: wire Nearby Connections Payload API here
+        engine.disconnect()
+        _uiState.value = TransferUiState.Idle
     }
 
     fun release() {
-        stopAdvertising()
-        stopDiscovery()
-        disconnect()
+        engine.release()
+        scope.cancel()
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun deviceName() = "${Build.MANUFACTURER} ${Build.MODEL}".take(24)
 }
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// ─── UI state ─────────────────────────────────────────────────────────────────
 
-data class TransferState(
-    val phase: TransferPhase           = TransferPhase.Idle,
-    val localDeviceName: String        = "",
-    val pendingEndpointId: String      = "",
-    val connectedEndpointId: String    = "",
-    val transferFilePath: String       = "",
-    val progressPercent: Int           = 0,
-    val errorMessage: String?          = null,
-)
-
-enum class TransferPhase {
-    Idle, Advertising, Discovering, Connecting, Connected, Transferring, Done, Error
+sealed class TransferUiState {
+    object Idle       : TransferUiState()
+    object Preparing  : TransferUiState()
+    object Connecting : TransferUiState()
+    data class QrReady(
+        val qr: Bitmap?,
+        val payload: String,
+        val sessionId: String,
+    ) : TransferUiState()
+    data class Connected(
+        val peerName: String,
+        val tier: TransportTier,
+        val isHost: Boolean,
+    ) : TransferUiState()
+    data class Transferring(
+        val fileName: String,
+        val direction: String,   // "SEND" | "RECEIVE"
+        val peerName: String,
+        val transferredBytes: Long,
+        val totalBytes: Long,
+        val speedBps: Long,
+        val tier: TransportTier?,
+    ) : TransferUiState()
+    object Done : TransferUiState()
+    data class Error(val msg: String, val retryable: Boolean) : TransferUiState()
 }
 
-// ── TransferProgress — live progress emitted during a transfer ────────────────
+// ─── QR generator (kept here, shared with screen) ─────────────────────────────
 
-data class TransferProgress(
-    val fileName: String = "",
-    val direction: String = "SEND",   // "SEND" | "RECEIVE"
-    val peerName: String = "",
-    val transferredBytes: Long = 0L,
-    val totalBytes: Long = 0L,
-    val speedBps: Long = 0L,
-    val done: Boolean = false,
-    val error: String? = null,
-)
+fun generateQr(content: String, sizePx: Int): Bitmap? = try {
+    val hints = mapOf(
+        EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
+        EncodeHintType.MARGIN to 1,
+    )
+    val mat = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.RGB_565)
+    for (x in 0 until sizePx) for (y in 0 until sizePx)
+        bmp.setPixel(x, y, if (mat[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+    bmp
+} catch (_: Exception) { null }

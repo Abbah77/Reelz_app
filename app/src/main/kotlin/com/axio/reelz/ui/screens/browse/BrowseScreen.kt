@@ -274,7 +274,7 @@ class BrowseViewModel @Inject constructor(
         _ui.update { it.copy(selectedGenreId = genreId, genreItems = emptyList(), genrePage = 1, hasMoreGenrePages = true, isGenreLoading = true) }
         viewModelScope.launch {
             try {
-                val result = repo.discover(cursor = null, genreId = genreId)
+                val result = repo.discover(cursor = null, genre = genreId)
                 if (result is NetworkResult.Success) {
                     _ui.update { it.copy(genreItems = result.data.first, isGenreLoading = false) }
                 } else {
