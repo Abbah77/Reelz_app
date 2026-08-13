@@ -473,7 +473,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                         val type = if (h.mediaType == "TV") MediaType.TV else MediaType.MOVIE
                         val progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
                         LibraryRow(
-                            title    = h.title,
+                            title    = h.title ?: h.mediaId,
                             poster   = h.posterPath,
                             subtitle = if (h.mediaType == "TV") "TV Show" else "Movie",
                             progress = progress,
