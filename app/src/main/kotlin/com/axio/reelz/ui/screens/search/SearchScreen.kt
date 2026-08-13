@@ -113,55 +113,47 @@ class SearchViewModel @Inject constructor(
         }
 
         searchJob = viewModelScope.launch {
-            // ── Phase 1: FTS5 Room search (instant) ───────────────────────────
-            delay(120) // minimal debounce — just enough to avoid per-keystroke spam
-            _ui.update { it.copy(isLocalLoading = true, error = null) }
+            // Debounce
+            delay(250)
+            _ui.update { it.copy(isNetworkLoading = true, error = null) }
 
-            val localRaw = try {
-                val r = searchRepo.search(q)
-                if (r is com.axio.reelz.core.network.NetworkResult.Success) r.data.first else emptyList()
-            } catch (_: Exception) { emptyList() }
-
-            val local = applyFilters(localRaw)
-            _ui.update { st -> st.copy(
-                localResults = local,
-                results = mergeResults(local, st.networkResults),
-                isLocalLoading = false,
-                hasSearched = local.isNotEmpty(),
-            )}
-
-            // ── Phase 2: TMDB network search (background) ─────────────────────
-            _ui.update { it.copy(isNetworkLoading = true) }
-            networkJob = launch {
-                delay(200) // additional gap to let FTS results settle in UI
-                try {
-                    val networkRaw = run {
-                        val r = searchRepo.search(q)
-                        if (r is com.axio.reelz.core.network.NetworkResult.Success) r.data.first else emptyList()
+            try {
+                val result = searchRepo.search(q, mediaType = _ui.value.filters.mediaType?.lowercase())
+                when (result) {
+                    is com.axio.reelz.core.network.NetworkResult.Success -> {
+                        val items = applyFilters(result.data.first)
+                        _ui.update { st -> st.copy(
+                            results          = items,
+                            localResults     = items,
+                            networkResults   = items,
+                            isNetworkLoading = false,
+                            isLocalLoading   = false,
+                            isOffline        = false,
+                            hasSearched      = true,
+                            error            = null,
+                        )}
+                        if (items.isNotEmpty()) recordSearch(q)
                     }
-                    val network = applyFilters(networkRaw)
-                    _ui.update { st -> st.copy(
-                        networkResults = network,
-                        results = mergeResults(st.localResults, network),
-                        isNetworkLoading = false,
-                        isOffline = false,
-                        hasSearched = true,
-                        error = null,
-                    )}
-                    if (networkRaw.isNotEmpty()) recordSearch(q)
-                } catch (e: Exception) {
-                    val isNet = e is java.net.UnknownHostException ||
-                                e is java.net.SocketTimeoutException
-                    _ui.update { st -> st.copy(
-                        isNetworkLoading = false,
-                        isOffline = isNet,
-                        // Only show error if we have absolutely nothing to display
-                        error = if (st.results.isEmpty()) friendlySearchError(e) else null,
-                        hasSearched = true,
-                    )}
-                    // Even offline: record search if we got local results
-                    if (_ui.value.localResults.isNotEmpty()) recordSearch(q)
+                    is com.axio.reelz.core.network.NetworkResult.Error -> {
+                        _ui.update { st -> st.copy(
+                            isNetworkLoading = false,
+                            isLocalLoading   = false,
+                            isOffline        = result.isNetworkError,
+                            error            = if (st.results.isEmpty()) result.message else null,
+                            hasSearched      = true,
+                        )}
+                    }
+                    else -> _ui.update { it.copy(isNetworkLoading = false, isLocalLoading = false) }
                 }
+            } catch (e: Exception) {
+                val isNet = e is java.net.UnknownHostException || e is java.net.SocketTimeoutException
+                _ui.update { st -> st.copy(
+                    isNetworkLoading = false,
+                    isLocalLoading   = false,
+                    isOffline        = isNet,
+                    error            = if (st.results.isEmpty()) friendlySearchError(e) else null,
+                    hasSearched      = true,
+                )}
             }
         }
     }

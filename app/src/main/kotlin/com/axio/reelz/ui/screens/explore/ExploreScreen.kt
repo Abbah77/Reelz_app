@@ -298,14 +298,27 @@ class ExploreViewModel @Inject constructor(
     private suspend fun fetchFromTmdb(f: ExploreFilters, page: Int): List<Media> {
         val mediaType = if (f.mediaType == "MOVIE") "movie" else "tv"
         val genre = f.genreIds.firstOrNull()
+        // Map dot-notation sort values to backend word-form values
+        val sortBy = when (f.sortBy) {
+            "popularity.desc"             -> "popularity"
+            "vote_average.desc"           -> "rating"
+            "primary_release_date.desc",
+            "first_air_date.desc"         -> "newest"
+            "primary_release_date.asc",
+            "first_air_date.asc"          -> "oldest"
+            "vote_count.desc"             -> "rating"   // best approximation
+            else                          -> "popularity"
+        }
         val result = repo.discover(
             mediaType = mediaType,
             genre     = genre,
             language  = f.language,
-            sortBy    = f.sortBy,
+            sortBy    = sortBy,
             yearFrom  = f.yearFrom,
             yearTo    = f.yearTo,
             ratingMin = f.ratingFrom,
+            cursor    = null,
+            limit     = 20,
         )
         return when (result) {
             is com.axio.reelz.core.network.NetworkResult.Success -> result.data.first

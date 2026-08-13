@@ -277,3 +277,90 @@ fun friendlyError(raw: String): String = when {
 // ─────────────────────────────────────────────────────────────────────────────
 // Rating chip
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Skeleton detail loader — used in DetailScreen while loading metadata
+// Shape mirrors the actual detail layout: backdrop → title → meta → buttons → cast row
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun SkeletonDetailLoader() {
+    val d   = LocalDimensions.current
+    val screenH = LocalConfiguration.current.screenHeightDp.dp
+    val inf = rememberInfiniteTransition(label = "skDetail")
+    val offset by inf.animateFloat(
+        -1.5f, 2.5f, infiniteRepeatable(tween(1000, easing = LinearEasing)), "skDetailOff"
+    )
+    val brush = Brush.linearGradient(
+        colorStops = arrayOf(
+            0f to BgRaised,
+            (offset * 0.4f + 0.3f).coerceIn(0f, 1f) to BgSurface,
+            1f to BgRaised,
+        ),
+        start = Offset.Zero,
+        end   = Offset(Float.POSITIVE_INFINITY, 0f),
+    )
+
+    androidx.compose.foundation.lazy.LazyColumn(
+        modifier = Modifier.fillMaxSize().background(Bg),
+    ) {
+        // Backdrop skeleton
+        item {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(screenH * 0.42f)
+                    .background(brush)
+            )
+        }
+        // Content skeleton
+        item {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = d.screenHorizPad, vertical = d.spaceLg),
+                verticalArrangement = Arrangement.spacedBy(d.spaceMd),
+            ) {
+                // Genre badge
+                Box(Modifier.width(80.dp).height(d.spaceMd + 2.dp).clip(RoundedCornerShape(d.radiusSm)).background(brush))
+                // Title
+                Box(Modifier.fillMaxWidth(0.85f).height(d.textHero.value.dp + 4.dp).clip(RoundedCornerShape(d.spaceSm)).background(brush))
+                Box(Modifier.fillMaxWidth(0.55f).height(d.textHero.value.dp + 4.dp).clip(RoundedCornerShape(d.spaceSm)).background(brush))
+                Spacer(Modifier.height(d.spaceXs))
+                // Meta row
+                Row(horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+                    Box(Modifier.width(50.dp).height(d.spaceMd).clip(RoundedCornerShape(d.spaceXs)).background(brush))
+                    Box(Modifier.width(60.dp).height(d.spaceMd).clip(RoundedCornerShape(d.spaceXs)).background(brush))
+                    Box(Modifier.width(40.dp).height(d.spaceMd).clip(RoundedCornerShape(d.spaceXs)).background(brush))
+                }
+                Spacer(Modifier.height(d.spaceXs))
+                // Action buttons
+                Row(horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+                    Box(Modifier.weight(1f).height(d.buttonHeightMd).clip(RoundedCornerShape(d.radiusPill)).background(brush))
+                    Box(Modifier.weight(0.6f).height(d.buttonHeightMd).clip(RoundedCornerShape(d.radiusPill)).background(brush))
+                }
+                Spacer(Modifier.height(d.spaceMd))
+                // Overview lines
+                repeat(3) {
+                    Box(Modifier.fillMaxWidth(if (it == 2) 0.7f else 1f).height(d.spaceSm + 2.dp).clip(RoundedCornerShape(d.spaceXs)).background(brush))
+                }
+                Spacer(Modifier.height(d.spaceLg))
+                // Cast section header
+                Box(Modifier.fillMaxWidth(0.3f).height(d.spaceMd + 2.dp).clip(RoundedCornerShape(d.spaceXs)).background(brush))
+                Spacer(Modifier.height(d.spaceSm))
+                // Cast row
+                Row(horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+                    repeat(4) {
+                        Column(
+                            Modifier.width(72.dp),
+                            verticalArrangement  = Arrangement.spacedBy(d.spaceSm),
+                            horizontalAlignment  = androidx.compose.ui.Alignment.CenterHorizontally,
+                        ) {
+                            Box(Modifier.size(72.dp).clip(androidx.compose.foundation.shape.CircleShape).background(brush))
+                            Box(Modifier.fillMaxWidth(0.8f).height(d.spaceSm).clip(RoundedCornerShape(d.spaceXxs)).background(brush))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
