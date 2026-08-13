@@ -8,7 +8,6 @@ import com.axio.reelz.data.dto.UserState
 import com.axio.reelz.data.remote.api.GoogleAuthBody
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.core.network.NetworkResult
-import com.axio.reelz.core.network.map
 import com.axio.reelz.core.network.safeApiCall
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,7 +95,10 @@ class UserRepository @Inject constructor(
                 // Keep the temp session so the user isn't stuck
                 NetworkResult.Success(_session.value!!, fromCache = true)
             }
-            else -> result.map { _session.value!! }
+            NetworkResult.Loading -> {
+                // Unlikely but handle: keep the temp session we already set
+                NetworkResult.Success(_session.value!!, fromCache = true)
+            }
         }
     }
 

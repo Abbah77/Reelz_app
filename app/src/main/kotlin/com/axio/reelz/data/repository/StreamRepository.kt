@@ -9,24 +9,27 @@ import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.remote.api.StreamRequestBody
 import com.axio.reelz.data.remote.api.SubtitleRequestBody
 import com.axio.reelz.core.network.NetworkResult
-import com.axio.reelz.core.network.map
 import com.axio.reelz.core.network.safeApiCall
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * FIX: Removed all result.map {} calls — they cause ClassCastException at runtime
+ *      when Kotlin type erasure cannot safely coerce between generic types inside
+ *      a coroutine suspend function. Replaced with explicit when() branches.
+ */
 @Singleton
 class StreamRepository @Inject constructor(
     private val api: ReelzApi,
 ) {
     private val tag = "StreamRepository"
 
-    // ── In-memory URL cache (TTL driven by backend response) ─────────────────
     private data class StreamEntry(
         val result: StreamResult,
         val storedAt: Long = System.currentTimeMillis(),
-        val ttlMs: Long = 240_000L,  // default 4 min; overridden by backend
+        val ttlMs: Long = 240_000L,
     ) {
         fun isAlive() = System.currentTimeMillis() - storedAt < ttlMs
     }
@@ -48,7 +51,6 @@ class StreamRepository @Inject constructor(
 
         val key = cacheKey(id, mediaType, season, episode)
 
-        // 1. Memory cache check
         streamCache[key]?.let { entry ->
             if (entry.isAlive()) {
                 Log.d(tag, "Stream cache HIT for $key")
@@ -59,7 +61,6 @@ class StreamRepository @Inject constructor(
             }
         }
 
-        // 2. Network fetch
         val body = StreamRequestBody(
             id      = id,
             type    = if (mediaType == MediaType.MOVIE) "movie" else "tv",
@@ -69,29 +70,32 @@ class StreamRepository @Inject constructor(
         )
         val result = safeApiCall(tag) { api.resolveStream(body) }
 
-        when (result) {
+        return@withContext when (result) {
             is NetworkResult.Success -> {
                 val dto = result.data
                 if (!dto.ok || dto.streamUrl.isBlank()) {
                     return@withContext NetworkResult.Error(
-                        message = "Content not available yet",
+                        message    = "Content not available yet",
                         isNotFound = true,
                     )
                 }
                 val model = dto.toModel()
-                // Cache with backend-provided TTL
                 streamCache[key] = StreamEntry(
-                    result  = model,
-                    ttlMs   = dto.cacheTtlMs.coerceAtLeast(60_000L),
+                    result = model,
+                    ttlMs  = dto.cacheTtlMs.coerceAtLeast(60_000L),
                 )
                 Log.d(tag, "Stream resolved for $key (ttl=${dto.cacheTtlMs}ms)")
-                NetworkResult.Success(model)
+                NetworkResult.Success<StreamResult>(model)
             }
-            else -> result.map { StreamResult("", false) }
+            is NetworkResult.Error -> NetworkResult.Error(
+                message        = result.message,
+                code           = result.code,
+                isNetworkError = result.isNetworkError,
+                isNotFound     = result.isNotFound,
+            )
+            NetworkResult.Loading -> NetworkResult.Loading
         }
     }
-
-    // ── Invalidate cache (call when a URL dies mid-playback) ──────────────────
 
     fun invalidate(id: String, mediaType: MediaType, season: Int, episode: Int) {
         val key = cacheKey(id, mediaType, season, episode)
@@ -117,18 +121,23 @@ class StreamRepository @Inject constructor(
             episode = episode,
         )
         val result = safeApiCall(tag) { api.getDownloadLinks(body) }
-        when (result) {
+        return@withContext when (result) {
             is NetworkResult.Success -> {
                 val tracks = result.data.links.map { it.toTrack() }
-                NetworkResult.Success(tracks)
+                NetworkResult.Success<List<QualityTrack>>(tracks)
             }
-            else -> result.map { emptyList() }
+            is NetworkResult.Error -> NetworkResult.Error(
+                message        = result.message,
+                code           = result.code,
+                isNetworkError = result.isNetworkError,
+                isNotFound     = result.isNotFound,
+            )
+            NetworkResult.Loading -> NetworkResult.Loading
         }
     }
 
     // ── Subtitles ─────────────────────────────────────────────────────────────
 
-    // Simple session-scoped subtitle cache (rarely changes in a session)
     private val subtitleCache = mutableMapOf<String, List<Subtitle>>()
 
     suspend fun getSubtitles(
@@ -149,13 +158,19 @@ class StreamRepository @Inject constructor(
             languages = languages,
         )
         val result = safeApiCall(tag) { api.getSubtitles(body) }
-        when (result) {
+        return@withContext when (result) {
             is NetworkResult.Success -> {
                 val subs = result.data.subtitles.map { it.toModel() }
                 if (subs.isNotEmpty()) subtitleCache[key] = subs
-                NetworkResult.Success(subs)
+                NetworkResult.Success<List<Subtitle>>(subs)
             }
-            else -> result.map { emptyList() }
+            is NetworkResult.Error -> NetworkResult.Error(
+                message        = result.message,
+                code           = result.code,
+                isNetworkError = result.isNetworkError,
+                isNotFound     = result.isNotFound,
+            )
+            NetworkResult.Loading -> NetworkResult.Loading
         }
     }
 
