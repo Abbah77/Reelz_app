@@ -23,8 +23,9 @@ class PaymentRepository @Inject constructor(
 
     suspend fun initPayment(plan: String): InitResult {
         return try {
-            val dto = api.initPayment(plan)
-            val url = dto.authorizationUrl
+            val response = api.initPayment(plan)
+            val dto = if (response.isSuccessful) response.body() else null
+            val url = dto?.authorizationUrl.orEmpty()
             if (url.isNotBlank()) InitResult.Success(url)
             else InitResult.FallbackToStaticLink
         } catch (e: Exception) {

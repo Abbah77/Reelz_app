@@ -120,7 +120,7 @@ interface ReelzApi {
 
     @FormUrlEncoded
     @POST("payment/init")
-    suspend fun initPayment(@Field("plan") plan: String): com.axio.reelz.data.dto.PaymentInitDto
+    suspend fun initPayment(@Field("plan") plan: String): Response<com.axio.reelz.data.dto.PaymentInitDto>
 
     @POST("auth/refresh")
     suspend fun refreshSession(

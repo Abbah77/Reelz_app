@@ -61,7 +61,7 @@ class CatalogRepository @Inject constructor(
             val result = safeApiCall(tag) { api.getFeed(refresh = if (forceRefresh) 1 else 0) }
 
             return@withContext when (result) {
-                is NetworkResult.Success<FeedResponseDto> -> {
+                is NetworkResult.Success -> {
                     val dto  = result.data
                     val rows = dto.sections.mapNotNull { sectionDto ->
                         if (sectionDto.items.isEmpty()) null
@@ -121,7 +121,7 @@ class CatalogRepository @Inject constructor(
     ): NetworkResult<Pair<List<Media>, String?>> = withContext(Dispatchers.IO) {
         val result = safeApiCall(tag) { api.getFeedSection(sectionId, cursor, limit) }
         return@withContext when (result) {
-            is NetworkResult.Success<PagedResponseDto> -> {
+            is NetworkResult.Success -> {
                 val items = result.data.items.map { it.toModel() }
                 NetworkResult.Success<Pair<List<Media>, String?>>(items to result.data.nextCursor)
             }
@@ -152,7 +152,7 @@ class CatalogRepository @Inject constructor(
             api.discover(mediaType, genre, language, sortBy, yearFrom, yearTo, ratingMin, cursor, limit)
         }
         return@withContext when (result) {
-            is NetworkResult.Success<PagedResponseDto> -> {
+            is NetworkResult.Success -> {
                 val items = result.data.items.map { it.toModel() }
                 NetworkResult.Success<Pair<List<Media>, String?>>(items to result.data.nextCursor)
             }
@@ -180,7 +180,7 @@ class CatalogRepository @Inject constructor(
             }
             val result = safeApiCall(tag) { api.getGenres(mediaType) }
             return@withContext when (result) {
-                is NetworkResult.Success<List<GenreDto>> -> {
+                is NetworkResult.Success -> {
                     val genres = result.data.map { it.toModel() }
                     genreCache[mediaType] = genres to System.currentTimeMillis()
                     NetworkResult.Success<List<Genre>>(genres)
@@ -235,7 +235,7 @@ class CatalogRepository @Inject constructor(
     ): NetworkResult<MediaDetail> {
         val result = safeApiCall(tag) { api.getDetail(id) }
         return when (result) {
-            is NetworkResult.Success<MediaDetailDto> -> {
+            is NetworkResult.Success -> {
                 val dto   = result.data
                 val model = dto.toModel()
                 detailDao.upsert(
@@ -291,7 +291,7 @@ class CatalogRepository @Inject constructor(
             }
             val result = safeApiCall(tag) { api.getSeasonEpisodes(id, season) }
             return@withContext when (result) {
-                is NetworkResult.Success<SeasonDetailDto> -> {
+                is NetworkResult.Success -> {
                     val eps = result.data.episodes.map { it.toModel() }
                     seasonMemCache[cacheKey] = eps to System.currentTimeMillis()
                     NetworkResult.Success<List<Episode>>(eps)

@@ -46,13 +46,16 @@ fun buildOkHttpClient(
         chain.proceed(newReq)
     }
 
-    // 2. Auth — Bearer token from live session (no rebuild needed on sign-in/out)
+    // 2. Auth — Bearer token from live session (no rebuild needed on sign-in/out).
+    //    UserRepository.accessToken already returns "Bearer <token>" or "".
+    //    Also injects X-Reelz-Token from config (backend uses this for legacy/app auth).
     val auth = Interceptor { chain ->
-        val token = userRepo().accessToken
-        val req = if (token.isNotBlank()) {
-            chain.request().newBuilder().header("Authorization", token).build()
-        } else chain.request()
-        chain.proceed(req)
+        val bearerHeader = userRepo().accessToken   // already "Bearer <token>" or ""
+        val appToken     = try { configRepo().current().backendToken } catch (_: Exception) { "" }
+        val builder = chain.request().newBuilder()
+        if (bearerHeader.isNotBlank()) builder.header("Authorization", bearerHeader)
+        if (appToken.isNotBlank())     builder.header("X-Reelz-Token", appToken)
+        chain.proceed(builder.build())
     }
 
     // 3. Logging
