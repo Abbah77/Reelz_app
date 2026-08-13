@@ -174,6 +174,7 @@ data class GenreDto(val id: String = "", val name: String = "") {
     fun toModel() = Genre(id = id, name = name)
 }
 
+
 // ── Stream response ───────────────────────────────────────────────────────────
 data class StreamQualityDto(
     val label: String = "Auto",
