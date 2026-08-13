@@ -172,6 +172,9 @@ interface WatchProgressDao {
     @Query("SELECT * FROM watch_progress ORDER BY watchedAt DESC LIMIT :limit")
     suspend fun getRecent(limit: Int = 20): List<WatchProgressRow>
 
+    @Query("SELECT * FROM watch_progress ORDER BY watchedAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int = 20): Flow<List<WatchProgressRow>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(row: WatchProgressRow)
 

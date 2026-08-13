@@ -97,10 +97,9 @@ class BrowseViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            try {
-                val recent = libraryRepo.getRecentProgress(10)
+            libraryRepo.observeRecentProgress(10).collect { recent ->
                 _ui.update { it.copy(continueWatching = recent) }
-            } catch (_: Exception) {}
+            }
         }
     }
 

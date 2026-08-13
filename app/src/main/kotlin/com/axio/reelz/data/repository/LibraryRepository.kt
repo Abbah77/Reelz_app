@@ -31,6 +31,8 @@ class LibraryRepository @Inject constructor(
         watchProgressDao.getRecent(limit)
     }
 
+    fun observeRecentProgress(limit: Int = 10) = watchProgressDao.observeRecent(limit)
+
     suspend fun getProgress(id: String, season: Int, episode: Int): WatchProgressRow? =
         withContext(Dispatchers.IO) { watchProgressDao.get(id, season, episode) }
 
