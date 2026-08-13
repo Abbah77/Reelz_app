@@ -150,6 +150,10 @@ data class WatchProgressRow(
     val positionMs: Long,
     val durationMs: Long,
     val watchedAt: Long = System.currentTimeMillis(),
+    // Added in DB v3: human-readable title for "Continue Watching" UI.
+    // Stored here so ContinueCard never has to join another table.
+    // Default empty string keeps Migration 2→3 safe (existing rows get "").
+    @androidx.room.ColumnInfo(defaultValue = "") val title: String = "",
 ) {
     val percentWatched: Float
         get() = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
@@ -412,6 +416,17 @@ interface DownloadSubtitleDao {
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
+// ── Migration 2 → 3 ──────────────────────────────────────────────────────────
+// Adds `title` column to watch_progress. Existing rows default to empty string;
+// the title will be populated correctly on the next save from the player.
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE watch_progress ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+        )
+    }
+}
+
 @Database(
     entities = [
         CachedFeedRow::class,
@@ -426,7 +441,7 @@ interface DownloadSubtitleDao {
         DownloadSubtitleRow::class,
         TransferRecord::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {
@@ -463,9 +478,14 @@ data class WatchlistItem(
 
 data class WatchHistory(
     val mediaId: String,
-    val title: String,
+    // Nullable: LEFT JOIN wl may return NULL when the item was watched but
+    // never added to the watchlist table (e.g. user watched without saving).
+    // Room calls getString() on the cursor column — if the column is NULL and
+    // the Kotlin field is non-nullable, Room throws NullPointerException at
+    // runtime (obfuscated in release builds as "getString(...) must not be null").
+    val title: String?,
     @androidx.room.ColumnInfo(name = "posterUrl") val posterPath: String?,
-    val mediaType: String,
+    val mediaType: String?,
     val positionMs: Long,
     val durationMs: Long,
     val watchedAt: Long,
@@ -486,7 +506,10 @@ data class SavedVideoItem(
 @Dao
 interface WatchHistoryDao {
     @Query("""
-        SELECT wp.mediaId, wl.title, wl.posterUrl, wl.mediaType,
+        SELECT wp.mediaId,
+               COALESCE(wl.title, wp.mediaId) AS title,
+               wl.posterUrl,
+               COALESCE(wl.mediaType, 'movie') AS mediaType,
                wp.positionMs, wp.durationMs, wp.watchedAt
         FROM watch_progress wp
         LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId
@@ -495,7 +518,10 @@ interface WatchHistoryDao {
     """)
     fun observeAll(): kotlinx.coroutines.flow.Flow<List<WatchHistory>>
     @Query("""
-        SELECT wp.mediaId, wl.title, wl.posterUrl, wl.mediaType,
+        SELECT wp.mediaId,
+               COALESCE(wl.title, wp.mediaId) AS title,
+               wl.posterUrl,
+               COALESCE(wl.mediaType, 'movie') AS mediaType,
                wp.positionMs, wp.durationMs, wp.watchedAt
         FROM watch_progress wp
         LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId

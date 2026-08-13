@@ -699,7 +699,7 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(positionMs = pos, bufferedMs = p.bufferedPosition.coerceAtLeast(0), durationMs = dur) }
         if (dur > 0) {
             viewModelScope.launch {
-                libraryRepo.saveProgress(currentId, currentSeason, currentEpisode, pos, dur)
+                libraryRepo.saveProgress(currentId, currentSeason, currentEpisode, pos, dur, currentTitle)
             }
         }
     }

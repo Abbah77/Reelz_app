@@ -984,7 +984,11 @@ fun ContinueCard(
             )
         }
         Spacer(Modifier.height(d.spaceSm))
-        Text(h.mediaId, color = White80, fontSize = d.textSm, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+        Text(
+            h.title.ifBlank { h.mediaId },  // fallback to mediaId only if title wasn't saved yet
+            color = White80, fontSize = d.textSm, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium,
+        )
         if (h.season > 0) Text("S${h.season} · E${h.episode}", color = Brand.copy(.8f), fontSize = d.textXxs, fontWeight = FontWeight.SemiBold)
     }
 }

@@ -37,6 +37,7 @@ class LibraryRepository @Inject constructor(
     suspend fun saveProgress(
         id: String, season: Int, episode: Int,
         positionMs: Long, durationMs: Long,
+        title: String = "",
     ) = withContext(Dispatchers.IO) {
         watchProgressDao.upsert(
             WatchProgressRow(
@@ -45,6 +46,7 @@ class LibraryRepository @Inject constructor(
                 episode    = episode,
                 positionMs = positionMs,
                 durationMs = durationMs,
+                title      = title,
             )
         )
         watchProgressDao.trimToLimit()
