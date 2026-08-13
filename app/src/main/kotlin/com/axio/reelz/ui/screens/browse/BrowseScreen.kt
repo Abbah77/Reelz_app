@@ -393,7 +393,6 @@ fun BrowseScreen(
 
 // ── Hero Banner Carousel ──────────────────────────────────────────────────────
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HeroBannerCarousel(
     items: List<Media>,
