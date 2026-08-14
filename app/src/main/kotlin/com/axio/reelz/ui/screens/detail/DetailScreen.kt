@@ -425,7 +425,60 @@ class DetailViewModel @Inject constructor(
             _ui.update { it.copy(downloadEnqueued = true) }
         }
     }
+}
 
+// ── Screen ────────────────────────────────────────────────────────────────────
+@Composable
+fun DetailScreen(
+    id: String,
+    mediaType: MediaType,
+    nav: NavController,
+    adEngine: AdEngine,
+    vm: DetailViewModel = hiltViewModel(),
+) {
+    val d = LocalDimensions.current
+    val ui  by vm.ui.collectAsState()
+    val ctx = LocalContext.current
+
+    LaunchedEffect(id) {
+        vm.load(id, mediaType)
+        vm.observeDownloads()
+    }
+
+    fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
+        val d = ui.detail ?: return
+
+        // Helper so both the ad-dismissed path and the direct path share one call-site
+        fun startPlayerActivity() {
+            // Use pre-resolved stream if background resolve finished; otherwise
+            // PlayerViewModel will call the backend on init (one POST, milliseconds).
+            val readyStream = vm.preResolvedStream
+            ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
+                putExtra("mediaId",    d.id)
+                putExtra("mediaType",  d.mediaType.name)
+                putExtra("season",     season)
+                putExtra("episode",    episode)
+                putExtra("title",      if (epName.isNotBlank()) epName else d.title)
+                putExtra("posterUrl", d.posterUrl)
+                readyStream?.let { stream ->
+                    putExtra("streamUrl",     stream.url)
+                    putExtra("streamIsHls",   stream.isHls)
+                    // referer/origin headers are included in stream.headers map
+                }
+            })
+        }
+
+        adEngine.incrementPlayTap()
+        if (adEngine.shouldShowInterstitial()) {
+            adEngine.showInterstitial(
+                activity    = ctx as android.app.Activity,
+                onDismissed = { startPlayerActivity() },
+                onFailed    = { startPlayerActivity() },
+            )
+        } else {
+            startPlayerActivity()
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
         when {
