@@ -149,12 +149,13 @@ class P2pEngine @Inject constructor(
 
     fun detectCaps(): Int {
         var caps = 0
-        // Bit 0: Wi-Fi Direct
+        // Bit 0: Wi-Fi Direct — hardware feature check
         if (ctx.packageManager.hasSystemFeature("android.hardware.wifi.direct")) caps = caps or 1
-        // Bit 1: Local Wi-Fi (connected to an AP)
-        val wm = ctx.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        if (wm?.isWifiEnabled == true && getLocalIp().isNotEmpty()) caps = caps or 2
-        // Bit 2: Hotspot — we can always try to create one
+        // Bit 1: Local Wi-Fi — verify we actually have a routable IPv4 address.
+        // On Android 10+ isWifiEnabled can return false even when connected via
+        // Wi-Fi suggestion or enterprise network, so check IP directly instead.
+        if (getLocalIp().isNotEmpty()) caps = caps or 2
+        // Bit 2: Hotspot — always advertise; we'll create one at runtime if needed
         caps = caps or 4
         return caps
     }
@@ -166,6 +167,36 @@ class P2pEngine @Inject constructor(
             ?.firstOrNull { !it.isLoopbackAddress && !it.hostAddress.startsWith("169.") }
             ?.hostAddress ?: ""
     } catch (_: Exception) { "" }
+
+    /**
+     * After startLocalOnlyHotspot() fires onStarted(), a new network interface appears
+     * (commonly named wlan1, p2p-wlan0-0, swlan0, etc. — OEM-specific).
+     * We find it by scanning ALL interfaces for a private IPv4 address that is NOT
+     * the existing wlan0 (station) address.  Known hotspot gateway addresses:
+     *   192.168.49.1  — AOSP / Samsung
+     *   192.168.0.1   — Pixel (some builds)
+     *   192.168.43.1  — Xiaomi / MIUI
+     *   192.168.1.1   — some MediaTek OEMs
+     * By querying at runtime we handle all of them without hardcoding.
+     */
+    private fun resolveHotspotIp(): String {
+        val stationIp = getLocalIp()   // current wlan0 IP (may be empty if Wi-Fi is off)
+        // Prefer a hotspot-range address; fall back to any non-loopback IPv4
+        val candidate = try {
+            NetworkInterface.getNetworkInterfaces()?.toList()
+                ?.filter { it.isUp && !it.isLoopback }
+                ?.flatMap { it.inetAddresses.toList() }
+                ?.filterIsInstance<Inet4Address>()
+                ?.filter { addr ->
+                    val h = addr.hostAddress ?: return@filter false
+                    !h.startsWith("169.") &&   // link-local — skip
+                    h != stationIp             // exclude existing Wi-Fi station IP
+                }
+                ?.firstOrNull()
+                ?.hostAddress
+        } catch (_: Exception) { null }
+        return candidate ?: stationIp.ifEmpty { "192.168.49.1" }
+    }
 
     // ── Sender: build QR payload + start server socket ────────────────────────
 
@@ -220,6 +251,8 @@ class P2pEngine @Inject constructor(
             var connected = false
             for (tier in tiers) {
                 Log.d(TAG, "Trying tier: $tier")
+                // Emit per-tier state so the NegotiatingCard UI stays up-to-date
+                _state.value = EngineState.Negotiating
                 connected = tryConnect(tier, remote, myDeviceName)
                 if (connected) break
                 delay(300) // brief gap before next tier
@@ -237,11 +270,15 @@ class P2pEngine @Inject constructor(
     // ── Tier fallback chain ───────────────────────────────────────────────────
 
     private fun buildFallbackChain(sharedCaps: Int): List<TransportTier> {
+        // Priority order (fastest negotiation first):
+        //  1. LOCAL_WIFI  — simple TCP connect; succeeds or fails in < 3s
+        //  2. WIFI_DIRECT — peer discovery can take up to 5s; try after LAN
+        //  3. HOTSPOT     — last resort; creates an AP and waits 30s
         val chain = mutableListOf<TransportTier>()
-        if (sharedCaps and 1 != 0) chain += TransportTier.WIFI_DIRECT
         if (sharedCaps and 2 != 0) chain += TransportTier.LOCAL_WIFI
+        if (sharedCaps and 1 != 0) chain += TransportTier.WIFI_DIRECT
         if (sharedCaps and 4 != 0) chain += TransportTier.HOTSPOT
-        // If nothing shared (shouldn't happen), try everything
+        // If nothing shared (shouldn't happen), try everything in best-effort order
         if (chain.isEmpty()) chain += listOf(
             TransportTier.LOCAL_WIFI,
             TransportTier.WIFI_DIRECT,
@@ -319,14 +356,16 @@ class P2pEngine @Inject constructor(
 
             if (!connectResult.await()) return false
 
-            // Get group info to determine GO IP
+            // Get WifiP2pInfo to resolve the actual group owner IP address
             val groupDeferred = CompletableDeferred<String?>()
             val connReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
                     if (intent.action == WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION) {
-                        p2pMgr.requestGroupInfo(channel) { group ->
-                            val ownerAddr = group?.owner?.deviceAddress
-                            groupDeferred.complete(ownerAddr)
+                        // requestConnectionInfo gives us WifiP2pInfo with groupOwnerAddress (real IP)
+                        p2pMgr.requestConnectionInfo(channel) { info ->
+                            // info.groupOwnerAddress is an InetAddress — the true GO IP on the p2p0 interface
+                            val goIp = info?.groupOwnerAddress?.hostAddress
+                            groupDeferred.complete(goIp)
                         }
                     }
                 }
@@ -334,11 +373,13 @@ class P2pEngine @Inject constructor(
             val connFilter = IntentFilter(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
             ctx.registerReceiver(connReceiver, connFilter)
 
-            val groupOwnerIp = withTimeoutOrNull(5_000) { groupDeferred.await() }
+            val groupOwnerIp = withTimeoutOrNull(8_000) { groupDeferred.await() }
             ctx.unregisterReceiver(connReceiver)
 
-            // Try TCP to group owner; if GO is us, wait for accept; if GO is peer, connect
-            val ip = remote.localIp.ifEmpty { groupOwnerIp } ?: return false
+            // groupOwnerIp is the real IP of the GO on the p2p0 interface (e.g. 192.168.49.1).
+            // If we are the GO, the sender is waiting on serverSocket — no outbound connect needed.
+            // If we are the client, connect to the GO's IP.
+            val ip = groupOwnerIp ?: remote.localIp.ifEmpty { null } ?: return false
             return establishTcpConnection(ip, remote.port, myName, TransportTier.WIFI_DIRECT)
         } catch (e: Exception) {
             Log.w(TAG, "Wi-Fi Direct failed: ${e.message}")
@@ -384,8 +425,15 @@ class P2pEngine @Inject constructor(
                         hotspotSsid = ssid
                         hotspotPassword = reservation.wifiConfiguration?.preSharedKey
                             ?: reservation.softApConfiguration?.passphrase ?: ""
-                        // Our IP on hotspot interface is typically 192.168.49.1
-                        hotspotReady.complete("192.168.49.1")
+                        // Resolve the actual hotspot interface IP — don't hardcode 192.168.49.1.
+                        // Different OEMs use different subnets:
+                        //   Samsung/AOSP → 192.168.49.1 (wlan1 / p2p0)
+                        //   Pixel        → 192.168.0.1
+                        //   Xiaomi       → 192.168.43.1
+                        // We identify the hotspot interface by looking for a non-loopback,
+                        // non-169.x IPv4 address that appeared AFTER hotspot started.
+                        val hotspotIp = resolveHotspotIp()
+                        hotspotReady.complete(hotspotIp)
                     }
                     override fun onFailed(reason: Int) { hotspotReady.completeExceptionally(Exception("Hotspot failed: $reason")) }
                 }, null)

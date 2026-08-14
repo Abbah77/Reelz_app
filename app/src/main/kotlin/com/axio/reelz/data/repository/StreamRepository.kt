@@ -106,13 +106,26 @@ class StreamRepository @Inject constructor(
 
     // ── Download links ────────────────────────────────────────────────────────
 
+    /**
+     * Calls POST /api/v1/download and returns the raw link list plus the
+     * [maxResolution] cap the backend already applied (0 = no cap).
+     *
+     * The app NEVER enforces its own cap — it just shows a lock badge on
+     * qualities above [maxResolution] using the value the backend reported.
+     */
+    data class DownloadResult(
+        val tracks: List<QualityTrack>,
+        /** Resolution cap the backend applied. 0 = no cap. */
+        val maxResolution: Int,
+    )
+
     suspend fun getDownloadLinks(
         id: String,
         title: String,
         mediaType: MediaType,
         season: Int = 0,
         episode: Int = 0,
-    ): NetworkResult<List<QualityTrack>> = withContext(Dispatchers.IO) {
+    ): NetworkResult<DownloadResult> = withContext(Dispatchers.IO) {
         val body = StreamRequestBody(
             id      = id,
             type    = if (mediaType == MediaType.MOVIE) "movie" else "tv",
@@ -123,8 +136,11 @@ class StreamRepository @Inject constructor(
         val result = safeApiCall(tag) { api.getDownloadLinks(body) }
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val tracks = result.data.links.map { it.toTrack() }
-                NetworkResult.Success<List<QualityTrack>>(tracks)
+                val dto    = result.data
+                val tracks = dto.links.map { it.toTrack() }
+                NetworkResult.Success<DownloadResult>(
+                    DownloadResult(tracks = tracks, maxResolution = dto.maxResolution)
+                )
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,

@@ -142,7 +142,12 @@ class DetailViewModel @Inject constructor(
          * Drives the lock badge on any
          * QualityTrack whose parsed height exceeds this.
          */
-        val maxDownloadResolutionHeight: Int = Int.MAX_VALUE,
+        /**
+         * The resolution cap (px height) the BACKEND reported for this user.
+         * 0 = no cap. The app NEVER sets this itself — it comes directly from
+         * DownloadLinksResponseDto.maxResolution. Used only for the lock badge.
+         */
+        val maxDownloadResolutionHeight: Int = 0,
         /**
          * Labels we still plausibly expect to find. Drives skeleton
          * placeholder rows so the sheet shows the shape of the list that's
@@ -156,14 +161,11 @@ class DetailViewModel @Inject constructor(
          * — see [openDownloadSheetInternal] for how this shrinks as real
          * sources report their actual variant counts.
          */
-        val pendingQualityLabels: Set<String> = emptySet(),
         // For episode download context
         val pendingDownloadSeason: Int = 0,
         val pendingDownloadEpisode: Int = 0,
         val pendingDownloadTitle: String = "",
-        /** True when a free user hit their download cap and tapped Download anyway. */
-        val showDownloadCapSheet: Boolean = false,
-        /** True when a free user tapped a quality above their tier's resolution cap. */
+        /** True when the user tapped a quality that the backend has locked for their tier. */
         val showResolutionLockSheet: Boolean = false,
         /**
          * Set of keys ("tmdbId_season_episode" or "tmdbId_0_0" for movies)
@@ -309,7 +311,6 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    fun dismissDownloadCapSheet() { _ui.update { it.copy(showDownloadCapSheet = false) } }
     fun dismissResolutionLockSheet() { _ui.update { it.copy(showResolutionLockSheet = false) } }
     fun openResolutionLockSheet() { _ui.update { it.copy(showResolutionLockSheet = true) } }
 
@@ -326,13 +327,13 @@ class DetailViewModel @Inject constructor(
                 showDownloadSheet           = true,
                 downloadQualities           = emptyList(),
                 alreadyDownloadedQualities  = emptySet(),
-                isResolvingQualities        = false,
-                pendingQualityLabels        = emptySet(),
+                isResolvingQualities        = true,
                 downloadEnqueued            = false,
                 pendingDownloadSeason       = season,
                 pendingDownloadEpisode      = episode,
                 pendingDownloadTitle        = episodeTitle.ifBlank { detail.title },
-                maxDownloadResolutionHeight = if (sessionRepo.isPremium) Int.MAX_VALUE else 720,
+                // maxDownloadResolutionHeight is set once the backend responds
+                maxDownloadResolutionHeight = 0,
             )
         }
 
@@ -353,21 +354,37 @@ class DetailViewModel @Inject constructor(
             }
         }
 
-        // GET /download — resolve quality tracks from backend
+        // POST /api/v1/download — let the backend decide what links and caps to send.
+        // The app renders whatever comes back; it never infers labels or enforces caps itself.
         viewModelScope.launch {
             val dlResult = streamRepo.getDownloadLinks(
                 id = id, title = detail.title, mediaType = mediaType,
                 season = season, episode = episode,
             )
-            val tracks = (dlResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data ?: emptyList()
-            if (tracks.isNotEmpty()) {
-                val normalized = normalizeQualities(tracks, _ui.value.detail?.runtime)
-                preResolvedQualities[key] = normalized
-                _ui.update { it.copy(downloadQualities = normalized, pendingQualityLabels = emptySet()) }
+            val downloadResult = (dlResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data
+            if (downloadResult != null && downloadResult.tracks.isNotEmpty()) {
+                preResolvedQualities[key] = downloadResult.tracks
+                _ui.update {
+                    it.copy(
+                        downloadQualities           = downloadResult.tracks,
+                        // maxResolution comes from the backend — 0 means no cap
+                        maxDownloadResolutionHeight = downloadResult.maxResolution,
+                        isResolvingQualities        = false,
+                    )
+                }
             } else {
+                // No download links found — show nothing (or a single fallback if stream is known)
                 val fallbackUrl = preResolvedStream?.url ?: ""
-                val fallback = if (fallbackUrl.isNotBlank()) listOf(QualityTrack("Best available", fallbackUrl)) else emptyList()
-                _ui.update { it.copy(downloadQualities = fallback, pendingQualityLabels = emptySet()) }
+                val fallback = if (fallbackUrl.isNotBlank())
+                    listOf(QualityTrack("Best available", fallbackUrl))
+                else emptyList()
+                _ui.update {
+                    it.copy(
+                        downloadQualities           = fallback,
+                        maxDownloadResolutionHeight = 0,
+                        isResolvingQualities        = false,
+                    )
+                }
             }
         }
     }
@@ -381,10 +398,11 @@ class DetailViewModel @Inject constructor(
         val detail = _ui.value.detail ?: return
         val state  = _ui.value
 
-        // Resolution check: free users capped at 720p
-        val trackH = trackHeightPx(track.label)
+        // If the backend signalled a resolution cap and the user tapped a locked
+        // quality, show the upgrade sheet instead of enqueuing. The backend also
+        // enforces this server-side — this is purely a UX guard for instant feedback.
         val maxH   = _ui.value.maxDownloadResolutionHeight
-        if (trackH > maxH) {
+        if (maxH > 0 && trackHeightPx(track.label) > maxH) {
             _ui.update { it.copy(showResolutionLockSheet = true) }
             return
         }
@@ -408,138 +426,6 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Normalizes a pre-resolved quality list:
-     *  - Assigns bandwidth-tier labels when label is "Auto" or blank.
-     *  - Ensures estimatedSizeBytes is always computed.
-     *  - Deduplicates by label keeping highest bandwidth.
-     */
-    private fun normalizeQualities(
-        tracks: List<QualityTrack>,
-        runtimeMinutes: Int? = null,
-    ): List<QualityTrack> {
-        val runtimeSec = when {
-            runtimeMinutes != null && runtimeMinutes > 0 -> runtimeMinutes * 60L
-            else -> 7200L
-        }
-        // Resolution order for sorting — highest first.
-        // Tracks from /download already have plain labels like "1080p" or
-        // "1080p · Hindi". We sort by the numeric height extracted from the
-        // label prefix so that bandwidth=0 (download links) sort correctly.
-        val resOrder = listOf("2160p", "1080p", "720p", "480p", "360p", "240p")
-
-        fun resIndex(label: String): Int =
-            resOrder.indexOfFirst { label.startsWith(it) }.takeIf { it >= 0 } ?: 99
-
-        fun estimatedBitrateForLabel(label: String): Long = when {
-            label.startsWith("2160") -> 15_000_000L
-            label.startsWith("1080") -> 5_000_000L
-            label.startsWith("720")  -> 2_500_000L
-            label.startsWith("480")  -> 1_000_000L
-            label.startsWith("360")  ->   600_000L
-            label.startsWith("240")  ->   300_000L
-            else                     ->         0L
-        }
-
-        return tracks.map { track ->
-            val label = when {
-                // Already has a real label — keep it.
-                track.label.isNotBlank() && track.label != "Auto" -> track.label
-                // Bandwidth-based inference (HLS tracks from the stream ladder).
-                track.bandwidth >= 8_000_000 -> "1080p"
-                track.bandwidth >= 4_000_000 -> "1080p"
-                track.bandwidth >= 2_000_000 -> "720p"
-                track.bandwidth >= 1_000_000 -> "480p"
-                track.bandwidth >= 400_000   -> "360p"
-                track.bandwidth >  0         -> "240p"
-                // Download links have bandwidth=0 but may have a real file size.
-                // Rough thresholds for a 2-hour film (varies ±40% by codec/source):
-                //   4K  ≥ 20 GB,  1080p ≥ 4 GB,  720p ≥ 1.5 GB,
-                //   480p ≥ 700 MB, 360p ≥ 350 MB
-                track.estimatedSizeBytes >= 20_000_000_000L -> "2160p"
-                track.estimatedSizeBytes >=  4_000_000_000L -> "1080p"
-                track.estimatedSizeBytes >=  1_500_000_000L -> "720p"
-                track.estimatedSizeBytes >=    700_000_000L -> "480p"
-                track.estimatedSizeBytes >=    350_000_000L -> "360p"
-                track.estimatedSizeBytes >              0L  -> "240p"
-                // No signal at all — keep "Auto" as last resort.
-                else -> "Auto"
-            }
-            val effectiveBitrate = track.bandwidth.takeIf { it > 0 }
-                ?: estimatedBitrateForLabel(label)
-            val size = when {
-                track.estimatedSizeBytes > 0 -> track.estimatedSizeBytes
-                effectiveBitrate > 0 -> ((effectiveBitrate * runtimeSec) / 8L * 55L) / 100L
-                else -> 0L
-            }
-            track.copy(label = label, estimatedSizeBytes = size)
-        }
-        // Dedup: keep one entry per label (prefer the one with a real size)
-        .groupBy { it.label }
-        .map { (_, v) -> v.maxByOrNull { it.estimatedSizeBytes }!! }
-        // Sort highest resolution first; dubs after English at same resolution
-        .sortedWith(compareBy(
-            { resIndex(it.label) },
-            { if (it.label.contains("·")) 1 else 0 },
-        ))
-    }
-
-    // parseMasterPlaylist removed — quality ladder now comes from the backend
-    // in the resolve/download response. No HLS fetch needed client-side.
-}
-
-// ── Screen ────────────────────────────────────────────────────────────────────
-@Composable
-fun DetailScreen(
-    id: String,
-    mediaType: MediaType,
-    nav: NavController,
-    adEngine: AdEngine,
-    vm: DetailViewModel = hiltViewModel(),
-) {
-    val d = LocalDimensions.current
-    val ui  by vm.ui.collectAsState()
-    val ctx = LocalContext.current
-
-    LaunchedEffect(id) {
-        vm.load(id, mediaType)
-        vm.observeDownloads()
-    }
-
-    fun launchPlayer(season: Int = 0, episode: Int = 0, epName: String = "") {
-        val d = ui.detail ?: return
-
-        // Helper so both the ad-dismissed path and the direct path share one call-site
-        fun startPlayerActivity() {
-            // Use pre-resolved stream if background resolve finished; otherwise
-            // PlayerViewModel will call the backend on init (one POST, milliseconds).
-            val readyStream = vm.preResolvedStream
-            ctx.startActivity(Intent(ctx, PlayerActivity::class.java).apply {
-                putExtra("mediaId",    d.id)
-                putExtra("mediaType",  d.mediaType.name)
-                putExtra("season",     season)
-                putExtra("episode",    episode)
-                putExtra("title",      if (epName.isNotBlank()) epName else d.title)
-                putExtra("posterUrl", d.posterUrl)
-                readyStream?.let { stream ->
-                    putExtra("streamUrl",     stream.url)
-                    putExtra("streamIsHls",   stream.isHls)
-                    // referer/origin headers are included in stream.headers map
-                }
-            })
-        }
-
-        adEngine.incrementPlayTap()
-        if (adEngine.shouldShowInterstitial()) {
-            adEngine.showInterstitial(
-                activity    = ctx as android.app.Activity,
-                onDismissed = { startPlayerActivity() },
-                onFailed    = { startPlayerActivity() },
-            )
-        } else {
-            startPlayerActivity()
-        }
-    }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
         when {
@@ -577,7 +463,6 @@ fun DetailScreen(
             DownloadQualitySheet(
                 title              = ui.pendingDownloadTitle,
                 qualities          = ui.downloadQualities,
-                pendingLabels      = ui.pendingQualityLabels,
                 isLoading          = ui.isResolvingQualities,
                 enqueued           = ui.downloadEnqueued,
                 maxResolutionHeight = ui.maxDownloadResolutionHeight,
@@ -588,21 +473,9 @@ fun DetailScreen(
             )
         }
 
-        // ── Download cap reached sheet (free tier) ──────────────────────
-        if (ui.showDownloadCapSheet) {
-            DownloadCapSheet(
-                onDismiss  = { vm.dismissDownloadCapSheet() },
-                onUpgrade  = {
-                    vm.dismissDownloadCapSheet()
-                    nav.navigate(com.axio.reelz.app.Route.Premium.path)
-                },
-            )
-        }
-
         // ── Resolution locked sheet (free tier tapped an above-cap quality) ──
         if (ui.showResolutionLockSheet) {
             ResolutionLockSheet(
-                allowedLabel = qualityLabelFor(ui.maxDownloadResolutionHeight),
                 onDismiss    = { vm.dismissResolutionLockSheet() },
                 onUpgrade    = {
                     vm.dismissResolutionLockSheet()
@@ -622,20 +495,14 @@ fun DownloadQualitySheet(
     enqueued: Boolean,
     onDismiss: () -> Unit,
     onSelectQuality: (QualityTrack) -> Unit,
-    /** Tracks with a parsed height above this are shown locked (free tier: 720p cap). */
-    maxResolutionHeight: Int = Int.MAX_VALUE,
+    /**
+     * Resolution cap (px height) from the backend. 0 = no cap.
+     * Rows above this are shown with a Premium lock badge.
+     * The app never computes or hardcodes this value.
+     */
+    maxResolutionHeight: Int = 0,
     onLockedQualityTap: () -> Unit = {},
-    /**
-     * Labels still being searched for (e.g. "1080p" while only "720p" has
-     * been found so far). Rendered as skeleton placeholder rows so the sheet
-     * shows the shape of the full list instantly instead of a spinner —
-     * each one quietly disappears or turns into a real row as it's found.
-     */
-    pendingLabels: Set<String> = emptySet(),
-    /**
-     * Quality labels already downloaded for this content.
-     * These are shown with a "Downloaded" badge and cannot be re-downloaded.
-     */
+    /** Quality labels already downloaded; shown with a ✓ badge. */
     alreadyDownloadedQualities: Set<String> = emptySet(),
 ) {
     val d = LocalDimensions.current
@@ -690,7 +557,7 @@ fun DownloadQualitySheet(
             }
             Spacer(Modifier.height(d.spaceXl))
 
-            val showList = qualities.isNotEmpty() || pendingLabels.isNotEmpty()
+            val showList = qualities.isNotEmpty()
             when {
                 // ── Success state ──────────────────────────────────────────────
                 enqueued -> {
@@ -711,10 +578,7 @@ fun DownloadQualitySheet(
                     BrandButton("Done", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
                 }
 
-                // ── True empty state: nothing found AND nothing pending ─────────
-                // (isLoading kept only as a legacy/manual override hook; the normal
-                // path never blocks here since pendingLabels is set synchronously
-                // when the sheet opens.)
+                // ── Loading — waiting for backend response ─────────────────────
                 !showList && isLoading -> {
                     Spacer(Modifier.height(d.spaceSm + 1.dp))
                     CinematicSpinner(size = d.spinnerMd + 6.dp)
@@ -732,7 +596,7 @@ fun DownloadQualitySheet(
                     Spacer(Modifier.height(d.spaceLg))
                 }
 
-                // ── Quality list (real rows + skeleton placeholders) ─────────────
+                // ── Quality list — rendered exactly as the backend sent it ─────────
                 else -> {
                     Text(
                         "Choose quality",
@@ -743,9 +607,9 @@ fun DownloadQualitySheet(
                     Spacer(Modifier.height(d.spaceMd + d.spaceXs))
 
                     qualities.forEachIndexed { index, track ->
-                        // Resolution lock is driven ONLY by config.json via PremiumGate.
-                        // The app has zero authority here — it just reads maxResolutionHeight.
-                        val isLocked      = trackHeightPx(track.label) > maxResolutionHeight
+                        // Lock badge: only shown when backend reported a cap (maxResolutionHeight > 0)
+                        // and this track's height exceeds it. The app never decides the cap itself.
+                        val isLocked      = maxResolutionHeight > 0 && trackHeightPx(track.label) > maxResolutionHeight
                         val isDownloaded  = alreadyDownloadedQualities.contains(track.label)
 
                         Row(
@@ -851,22 +715,9 @@ fun DownloadQualitySheet(
                             )
                         }
 
-                        if (index < qualities.lastIndex || pendingLabels.isNotEmpty()) Spacer(Modifier.height(d.spaceMd))
+                        if (index < qualities.lastIndex) Spacer(Modifier.height(d.spaceMd))
                     }
 
-
-                    // ── Skeleton placeholder rows for labels still being searched ──
-                    // Sorted by resolution height so they slot into roughly the right
-                    // position (e.g. a pending "1080p" skeleton sits above a found
-                    // "720p" real row), and each one silently disappears — or morphs
-                    // into a real row — the moment its label is found or the search
-                    // gives up on it. No spinner, no blocking; this is what makes the
-                    // sheet feel instant even while sources are still resolving.
-                    val pendingSorted = pendingLabels.sortedByDescending { trackHeightPx(it) }
-                    pendingSorted.forEachIndexed { pIndex, label ->
-                        QualitySkeletonRow(label = label, d = d)
-                        if (pIndex < pendingSorted.lastIndex) Spacer(Modifier.height(d.spaceMd))
-                    }
                 }
             }
 
@@ -876,120 +727,11 @@ fun DownloadQualitySheet(
     }
 }
 
-// ── Skeleton placeholder row for a quality not yet found ─────────────────────
-// Same shape/spacing as a real quality row (badge + two text lines + trailing
-// icon slot) so there is no layout jump when it's replaced. Reuses the app's
-// existing ShimmerCard for the animated fill — no new shimmer logic here.
-@Composable
-private fun QualitySkeletonRow(label: String, d: com.axio.reelz.ui.theme.ReelzDimensions) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXs))
-            .background(BgRaised)
-            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXs))
-            .padding(horizontal = d.spaceLg, vertical = d.spaceLg - d.spaceXs),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(d.spaceLg - d.spaceXs),
-    ) {
-        // Resolution badge — shows the real target label immediately (e.g.
-        // "1080p") even before it's confirmed found, so the user sees the
-        // shape of the full ladder right away, not a mystery placeholder.
-        Box(
-            Modifier
-                .width(d.avatarMd + d.spaceMd - d.spaceXxs)
-                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                .background(GlassSm)
-                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                .padding(vertical = d.spaceSm + d.spaceXxs),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                label,
-                color = White40,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = (d.textMd.value + 1).sp,
-            )
-        }
 
-        Column(Modifier.weight(1f)) {
-            ShimmerCard(Modifier.fillMaxWidth(0.5f).height(d.textMd.value.dp + 2.dp))
-            Spacer(Modifier.height(d.spaceXxs + 2.dp))
-            ShimmerCard(Modifier.fillMaxWidth(0.3f).height(d.textSm.value.dp))
-        }
-
-        // Trailing icon slot kept empty (no icon) while pending — avoids
-        // implying the row is tappable before it's real.
-        Spacer(Modifier.size(d.iconMd + 2.dp))
-    }
-}
-
-// ── Download cap reached sheet (free tier) ──────────────────────────────────
-@Composable
-fun DownloadCapSheet(
-    onDismiss: () -> Unit,
-    onUpgrade: () -> Unit,
-) {
-    val d = LocalDimensions.current
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(.6f))
-            .clickable { onDismiss() },
-    )
-
-    Box(Modifier.fillMaxSize(), Alignment.BottomCenter) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = d.radiusLg + d.spaceXs, topEnd = d.radiusLg + d.spaceXs))
-                .background(BgCard)
-                .padding(horizontal = d.spaceXl - d.spaceXs, vertical = d.spaceXl - d.spaceXs)
-                .clickable(enabled = false) {},
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Box(Modifier.width(d.shimmerBarWidth + d.spaceXs).height(d.spaceXs).clip(RoundedCornerShape(d.spaceXxs)).background(White40))
-            Spacer(Modifier.height(d.spaceXl - d.spaceXxs))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
-            ) {
-                Icon(IconDownloadCloud, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Download limit reached", color = White, fontWeight = FontWeight.Bold, fontSize = d.textXl)
-                    Text("Free plan", color = White60, fontSize = d.textSm)
-                }
-                IconButton(onClick = onDismiss) {
-                    Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconMd))
-                }
-            }
-            Spacer(Modifier.height(d.spaceXl))
-
-            Text(
-                "You've reached your download limit for the free plan. Delete an existing download to free up space, or go Premium for unlimited downloads in up to 4K.",
-                color      = White60,
-                fontSize   = d.textMd,
-                textAlign  = TextAlign.Center,
-                lineHeight = (d.textMd.value * 1.45f).sp,
-            )
-            Spacer(Modifier.height(d.spaceXl))
-
-            BrandButton("Upgrade to Premium", onClick = onUpgrade, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(d.spaceMd))
-            TextButton(onClick = onDismiss) {
-                Text("Manage downloads instead", color = White60, fontSize = d.textMd)
-            }
-            Spacer(Modifier.navigationBarsPadding())
-        }
-    }
-}
 
 // ── Resolution locked sheet (free tier tapped an above-cap quality) ─────────
 @Composable
 fun ResolutionLockSheet(
-    allowedLabel: String,
     onDismiss: () -> Unit,
     onUpgrade: () -> Unit,
 ) {
@@ -1025,7 +767,7 @@ fun ResolutionLockSheet(
                 ) { Icon(IconLock, null, tint = Brand, modifier = Modifier.size(d.iconMd - 2.dp)) }
                 Column(Modifier.weight(1f)) {
                     Text("Higher quality is Premium", color = White, fontWeight = FontWeight.Bold, fontSize = d.textXl)
-                    Text("Free plan downloads up to $allowedLabel", color = White60, fontSize = d.textSm)
+                    Text("Upgrade to Premium for higher quality downloads", color = White60, fontSize = d.textSm)
                 }
                 IconButton(onClick = onDismiss) {
                     Icon(IconClose, null, tint = White60, modifier = Modifier.size(d.iconMd))
@@ -1045,7 +787,7 @@ fun ResolutionLockSheet(
             BrandButton("Upgrade to Premium", onClick = onUpgrade, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(d.spaceMd))
             TextButton(onClick = onDismiss) {
-                Text("Continue with $allowedLabel", color = White60, fontSize = d.textMd)
+                Text("Dismiss", color = White60, fontSize = d.textMd)
             }
             Spacer(Modifier.navigationBarsPadding())
         }
@@ -1457,15 +1199,6 @@ fun trackHeightPx(label: String): Int =
     label.takeWhile { it.isDigit() }.toIntOrNull() ?: Int.MAX_VALUE
 
 /** Human label for a tier's cap height, used in lock-sheet copy ("Free plan streams up to 480p"). */
-fun qualityLabelFor(heightPx: Int): String = when {
-    heightPx >= Int.MAX_VALUE -> "4K"
-    heightPx >= 2160          -> "4K"
-    heightPx >= 1080          -> "1080p"
-    heightPx >= 720           -> "720p"
-    heightPx >= 480           -> "480p"
-    heightPx >= 360           -> "360p"
-    else                       -> "${heightPx}p"
-}
 
 // ── Skeleton shimmer ──────────────────────────────────────────────────────────
 

@@ -186,10 +186,18 @@ private fun buildTransferPermissions(): Array<String> = when {
     )
 }
 
-private fun Context.allTransferPermsGranted(): Boolean =
-    buildTransferPermissions().all {
+private fun Context.allTransferPermsGranted(): Boolean {
+    // Only the Wi-Fi / Nearby-devices / Location permissions gate the feature.
+    // Bluetooth perms are optional discovery enhancements; don't block on them.
+    val criticalPerms = buildList {
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            add(Manifest.permission.NEARBY_WIFI_DEVICES)
+    }
+    return criticalPerms.all {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
     }
+}
 
 private fun Context.hasCameraPermission(): Boolean =
     ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -516,7 +524,17 @@ private fun SendTab(
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        hasPerms = results.values.all { it }
+        // Mirror the same critical-only logic used in ReceiveTab.
+        // Bluetooth perms are optional; Wi-Fi / location perms are required.
+        val criticalGranted = results.entries
+            .filter { (perm, _) ->
+                perm == Manifest.permission.ACCESS_FINE_LOCATION ||
+                perm == Manifest.permission.ACCESS_COARSE_LOCATION ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    perm == Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+            .all { (_, granted) -> granted }
+        hasPerms = criticalGranted
         if (hasPerms) vm.startAsSender()
     }
 
@@ -608,7 +626,18 @@ private fun ReceiveTab(
     val transferPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        hasTransferPerms = results.values.all { it }
+        // Only the Wi-Fi / Nearby-devices permissions are strictly required for
+        // the connection to work.  Bluetooth perms enhance discovery but are
+        // not fatal if denied — don't block the whole flow on them.
+        val criticalGranted = results.entries
+            .filter { (perm, _) ->
+                perm == Manifest.permission.ACCESS_FINE_LOCATION ||
+                perm == Manifest.permission.ACCESS_COARSE_LOCATION ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    perm == Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+            .all { (_, granted) -> granted }
+        hasTransferPerms = criticalGranted
         val qr = pendingQr
         pendingQr = null
         if (hasTransferPerms && qr != null) vm.connectFromQr(qr)

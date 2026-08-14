@@ -229,6 +229,14 @@ data class DownloadLinkDto(
 data class DownloadLinksResponseDto(
     val ok: Boolean = false,
     val links: List<DownloadLinkDto> = emptyList(),
+    val premium: Boolean = false,
+    /**
+     * The resolution cap (in pixel height) that the backend applied when
+     * building [links]. 0 means no cap was applied.
+     * The app uses this ONLY to show a lock badge on qualities the user
+     * can't access yet — it never enforces its own cap.
+     */
+    @SerializedName("max_resolution") val maxResolution: Int = 0,
 )
 
 // ── Config (replaces RemoteConfig — fetched from YOUR backend, not GitHub) ────
@@ -244,6 +252,16 @@ data class AppConfigDto(
     @SerializedName("latest_apk_url") val latestApkUrl: String = "",
     val premium: PremiumConfigDto = PremiumConfigDto(),
     val ads: AdsConfigDto = AdsConfigDto(),
+    /**
+     * Resolution cap (pixel height) for free users. 0 = no cap.
+     * Sent by the backend — the app never computes this itself.
+     */
+    @SerializedName("download_max_resolution_free") val downloadMaxResolutionFree: Int = 0,
+    /**
+     * Resolution cap (pixel height) for premium users. 0 = no cap.
+     * Sent by the backend — the app never computes this itself.
+     */
+    @SerializedName("download_max_resolution_premium") val downloadMaxResolutionPremium: Int = 0,
 )
 
 data class PremiumConfigDto(
