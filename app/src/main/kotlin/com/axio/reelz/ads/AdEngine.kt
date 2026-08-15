@@ -11,6 +11,10 @@ import com.applovin.mediation.MaxRewardedAdListener
 import com.applovin.mediation.ads.MaxAppOpenAd
 import com.applovin.mediation.ads.MaxInterstitialAd
 import com.applovin.mediation.ads.MaxRewardedAd
+import com.applovin.mediation.nativeAds.MaxNativeAd
+import com.applovin.mediation.nativeAds.MaxNativeAdLoader
+import com.applovin.mediation.nativeAds.MaxNativeAdView
+import com.applovin.mediation.nativeAds.MaxNativeAdViewBinder
 import com.applovin.sdk.AppLovinSdk
 import com.applovin.sdk.AppLovinSdkConfiguration
 import com.applovin.sdk.AppLovinSdkSettings
@@ -374,22 +378,88 @@ class AdEngine @Inject constructor(
     // Native ad loader (on-demand, not preloaded)
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Loads a single native ad via MaxNativeAdLoader and maps the result into
+     * [NativeAdState.Loaded] for the Compose UI layer.
+     *
+     * The loader is created fresh per call — native ads are not preloaded
+     * because they are on-demand placements (BrowseScreen feed injection,
+     * ShortsScreen page). A new loader instance is intentional per AppLovin
+     * guidance: reusing a single loader across multiple composable lifecycles
+     * causes double-impression events and memory leaks.
+     *
+     * Failures call [onFailed] so the card/page collapses gracefully — the
+     * caller is never left in a perpetual loading state.
+     */
     fun loadNativeAd(
         onLoaded: (NativeAdState.Loaded) -> Unit,
         onFailed: () -> Unit,
     ) {
         val unitId = nativeAdUnitIdOrNull()
         if (unitId == null) {
-            scope.launch { onFailed() }
+            scope.launch(Dispatchers.Main) { onFailed() }
             return
         }
-        // Mediation native ads are loaded via MaxNativeAdLoader using [unitId].
-        // Implementation stub — wire in your MaxNativeAdLoader here.
-        // The NativeAdState.Loaded data class carries everything the composable needs.
-        // For now, emit failure so the card collapses gracefully.
-        scope.launch {
-            delay(200) // simulate async
-            onFailed()
+
+        // MaxNativeAdLoader must be created on the main thread.
+        scope.launch(Dispatchers.Main) {
+            val loader = MaxNativeAdLoader(unitId, appContext)
+
+            loader.setNativeAdListener(object : com.applovin.mediation.nativeAds.MaxNativeAdListener() {
+                override fun onNativeAdLoaded(view: MaxNativeAdView?, ad: MaxAd) {
+                    val native: MaxNativeAd = ad.nativeAd ?: run {
+                        Log.w(TAG, "Native ad loaded but nativeAd payload is null — unit=$unitId")
+                        onFailed()
+                        return
+                    }
+
+                    val headline = native.title.orEmpty()
+                    val body     = native.body.orEmpty()
+                    val cta      = native.callToAction.orEmpty().ifBlank { "Learn More" }
+                    val icon     = native.icon?.uri?.toString().orEmpty()
+                    val image    = native.mainImage?.uri?.toString().orEmpty()
+                    val advertiser = native.advertiser.orEmpty()
+
+                    // Guard: require at minimum a headline and at least one visual asset.
+                    if (headline.isBlank() || (icon.isBlank() && image.isBlank())) {
+                        Log.w(TAG, "Native ad missing required fields — unit=$unitId, headline='$headline'")
+                        onFailed()
+                        return
+                    }
+
+                    Log.d(TAG, "Native ad loaded — unit=$unitId headline='$headline'")
+                    onLoaded(
+                        NativeAdState.Loaded(
+                            headline       = headline,
+                            body           = body,
+                            callToAction   = cta,
+                            advertiserName = advertiser,
+                            clickUrl       = ad.adReviewCreativeId.orEmpty(), // tracking only; click handled by loader
+                            imageUrl       = image,
+                            iconUrl        = icon,
+                        )
+                    )
+                }
+
+                override fun onNativeAdLoadFailed(adUnitId: String, error: MaxError) {
+                    Log.w(TAG, "Native ad load failed — unit=$adUnitId code=${error.code} msg=${error.message}")
+                    onFailed()
+                }
+
+                override fun onNativeAdClicked(ad: MaxAd) {
+                    Log.d(TAG, "Native ad clicked — unit=$unitId")
+                }
+
+                override fun onNativeAdExpired(ad: MaxAd) {
+                    Log.d(TAG, "Native ad expired — unit=$unitId")
+                    // Expired ads silently disappear from the UI because the composable
+                    // holds the Loaded state; the user simply sees the existing card
+                    // until they scroll away. We don't push a new Failed state here
+                    // because that would cause the card to collapse mid-scroll.
+                }
+            })
+
+            loader.loadAd()
         }
     }
 

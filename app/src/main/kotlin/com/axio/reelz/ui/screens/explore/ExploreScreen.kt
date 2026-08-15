@@ -522,9 +522,12 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
         // isLoading = true only when cache was empty AND TMDB hasn't returned yet.
         // isBackgroundRefreshing = true means cache is shown, TMDB is patching — no spinner.
         when {
-            ui.isLoading && !ui.isBackgroundRefreshing -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerLg, color = Brand) }
+            ui.isLoading && !ui.isBackgroundRefreshing -> Column(Modifier.fillMaxSize()) {
+                Spacer(Modifier.height(d.spaceSm))
+                SkeletonGridLoader(count = 9, columns = 3)
+            }
             ui.error != null && ui.results.isEmpty() -> ErrorState(ui.error!!, onRetry = { vm.applyMood(moodPresets[4]) })
-            ui.results.isEmpty() -> ExploreEmptyState(onClear = vm::clearFilters)
+            ui.results.isEmpty() -> EmptyExploreState(onClear = vm::clearFilters)
             else -> {
                 val gridState = rememberLazyGridState()
                 LaunchedEffect(gridState, ui.results.size) {
@@ -580,24 +583,7 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
     }
 }
 
-@Composable
-private fun ExploreEmptyState(onClear: () -> Unit) {
-    val d = LocalDimensions.current
-    Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs)) {
-            Box(contentAlignment = Alignment.Center) {
-                Box(Modifier.size(d.avatarLg + d.spaceXl - d.spaceXs).clip(CircleShape)
-                    .background(Brush.radialGradient(listOf(Brand.copy(.15f), Color.Transparent)))
-                    .border(1.dp, Brand.copy(.3f), CircleShape))
-                Icon(IconCompass, null, tint = Brand.copy(.8f), modifier = Modifier.size(d.buttonHeightSm - d.spaceMd))
-            }
-            Text("Nothing matches yet", color = White60, fontSize = (d.textXl.value - 1).sp, fontWeight = FontWeight.SemiBold)
-            Text("Try widening your filters", color = White40, fontSize = d.textMd)
-            Spacer(Modifier.height(d.spaceXs))
-            TextButton(onClick = onClear) { Text("Clear filters", color = Brand, fontWeight = FontWeight.SemiBold) }
-        }
-    }
-}
+// ExploreEmptyState moved to FeedComponents.kt as EmptyExploreState for shared reuse
 
 // ── Type switch (Movies / TV) — large pill, primary navigation axis ─────────
 @Composable

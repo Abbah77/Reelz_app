@@ -37,7 +37,15 @@ import com.axio.reelz.ui.theme.BgSurface
 import com.axio.reelz.ui.theme.White60
 
 // ─────────────────────────────────────────────────────────────────────────────
-// URL routing — call this from every ad click callback
+// URL routing — the single chokepoint for every ad click in the app.
+//
+// Routing rules (in priority order):
+//   1. Play Store URLs / market:// → open Play Store app directly
+//   2. intent:// deep-links        → parse and fire the target intent
+//   3. Everything else             → open in ReelzBrowserSheet (in-app WebView)
+//
+// All exceptions are caught; if the intended handler isn't available we fall
+// back gracefully to openBrowserSheet so the user always lands somewhere.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fun routeAdUrl(
@@ -46,34 +54,48 @@ fun routeAdUrl(
     openBrowserSheet: (String) -> Unit,
 ) {
     when {
-        // Play Store deep-links → open Play Store app directly
+        // Play Store deep-links — open the Play Store app, not a browser
         url.contains("play.google.com/store/apps") || url.startsWith("market://") -> {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                 setPackage("com.android.vending")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            try { context.startActivity(intent) }
-            catch (_: Exception) { openBrowserSheet(url) }
-        }
-
-        // Intent / deep-links → try to open the target app
-        url.startsWith("intent://") -> {
             try {
-                val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
             } catch (_: Exception) {
+                // Play Store not installed (e.g. Huawei device) — fall back to browser
                 openBrowserSheet(url)
             }
         }
 
-        // Everything else → in-app browser sheet
+        // Intent deep-links — try to open the target app; fall back to browser.
+        // NOTE: we intentionally do NOT call openBrowserSheet(url) here after
+        // startActivity succeeds; doing both would open the app AND show the
+        // browser sheet simultaneously.
+        url.startsWith("intent://") -> {
+            try {
+                val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                // Success — do nothing else; app is now in foreground
+            } catch (_: Exception) {
+                // Intent target not installed / malformed URI — show browser instead
+                openBrowserSheet(url)
+            }
+        }
+
+        // All other URLs → in-app browser sheet
         else -> openBrowserSheet(url)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ReelzBrowserSheet — ModalBottomSheet wrapping a clean WebView
+// ReelzBrowserSheet — clean ModalBottomSheet wrapping a sandboxed WebView.
+//
+// Design: minimal chrome (back/forward/reload/open-in-browser/close),
+// a 2 dp progress bar while loading, and the page title / domain as the
+// header — enough context to feel like a real browser without the clutter.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,7 +104,7 @@ fun ReelzBrowserSheet(
     url: String,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
+    val context      = LocalContext.current
     var currentUrl   by remember { mutableStateOf(url) }
     var pageTitle    by remember { mutableStateOf(extractDomain(url)) }
     var loadProgress by remember { mutableIntStateOf(0) }
@@ -90,6 +112,18 @@ fun ReelzBrowserSheet(
     var canGoBack    by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
     var webViewRef   by remember { mutableStateOf<WebView?>(null) }
+
+    // Destroy the WebView when the sheet is dismissed so it doesn't leak
+    // media resources (video, audio) or keep JS timers running.
+    DisposableEffect(url) {
+        onDispose {
+            webViewRef?.apply {
+                stopLoading()
+                destroy()
+            }
+            webViewRef = null
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -100,55 +134,60 @@ fun ReelzBrowserSheet(
     ) {
         Column(Modifier.fillMaxSize()) {
 
-            // ── Top bar ───────────────────────────────────────────────────────
+            // ── Top bar ────────────────────────────────────────────────────
             Row(
-                modifier            = Modifier
+                modifier = Modifier
                     .fillMaxWidth()
                     .background(Bg)
                     .statusBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment   = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                // Back
                 IconButton(
                     onClick  = { webViewRef?.goBack() },
                     enabled  = canGoBack,
                     modifier = Modifier.size(36.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        imageVector        = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
-                        tint   = if (canGoBack) Color.White else White60,
-                        modifier = Modifier.size(20.dp),
+                        tint               = if (canGoBack) Color.White else White60,
+                        modifier           = Modifier.size(20.dp),
                     )
                 }
 
-                // Forward
                 IconButton(
                     onClick  = { webViewRef?.goForward() },
                     enabled  = canGoForward,
                     modifier = Modifier.size(36.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        imageVector        = Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = "Forward",
-                        tint   = if (canGoForward) Color.White else White60,
-                        modifier = Modifier.size(20.dp),
+                        tint               = if (canGoForward) Color.White else White60,
+                        modifier           = Modifier.size(20.dp),
                     )
                 }
 
-                // Domain title
-                Text(
-                    text     = pageTitle,
-                    color    = Color.White,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-                )
+                // Domain/title pill — centered in remaining space
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color.White.copy(alpha = 0.06f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text     = pageTitle,
+                        color    = Color.White.copy(alpha = 0.85f),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
 
-                // Reload
                 IconButton(
                     onClick  = { webViewRef?.reload() },
                     modifier = Modifier.size(36.dp),
@@ -161,12 +200,15 @@ fun ReelzBrowserSheet(
                     )
                 }
 
-                // Open in external browser
                 IconButton(
-                    onClick  = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl))
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        try { context.startActivity(intent) } catch (_: Exception) {}
+                    onClick = {
+                        try {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            )
+                        } catch (_: Exception) { /* no browser installed — ignore */ }
                         onDismiss()
                     },
                     modifier = Modifier.size(36.dp),
@@ -179,7 +221,6 @@ fun ReelzBrowserSheet(
                     )
                 }
 
-                // Close
                 IconButton(
                     onClick  = onDismiss,
                     modifier = Modifier.size(36.dp),
@@ -193,7 +234,7 @@ fun ReelzBrowserSheet(
                 }
             }
 
-            // ── Progress bar ──────────────────────────────────────────────────
+            // ── Loading progress bar ───────────────────────────────────────
             AnimatedVisibility(
                 visible = isLoading,
                 enter   = fadeIn(),
@@ -206,16 +247,16 @@ fun ReelzBrowserSheet(
                 )
             }
 
-            // ── WebView ───────────────────────────────────────────────────────
+            // ── WebView ────────────────────────────────────────────────────
             AdWebView(
-                url     = url,
-                context = context,
-                onPageStarted = { u ->
+                url               = url,
+                context           = context,
+                onPageStarted     = { u ->
                     currentUrl = u
                     pageTitle  = extractDomain(u)
                     isLoading  = true
                 },
-                onPageFinished = { u, wv ->
+                onPageFinished    = { u, wv ->
                     currentUrl   = u
                     isLoading    = false
                     canGoBack    = wv.canGoBack()
@@ -223,19 +264,16 @@ fun ReelzBrowserSheet(
                 },
                 onProgressChanged = { p -> loadProgress = p },
                 onTitleReceived   = { t -> if (!t.isNullOrBlank()) pageTitle = t },
-                onUrlIntercept    = { interceptUrl ->
-                    // Re-route any navigation inside the WebView as well
-                    routeAdUrl(context, interceptUrl) { /* stay in WebView for http links */ }
-                    false // let WebView handle http(s) links
-                },
-                onWebViewCreated = { wv -> webViewRef = wv },
+                onWebViewCreated  = { wv -> webViewRef = wv },
             )
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Isolated WebView composable — NO injected scripts, NO ReelzBridge
+// Sandboxed AdWebView — no app bridge, no local file access.
+// URL interception is handled entirely inside shouldOverrideUrlLoading so
+// deep-links and Play Store links work from inside the WebView too.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -247,7 +285,6 @@ private fun AdWebView(
     onPageFinished: (String, WebView) -> Unit,
     onProgressChanged: (Int) -> Unit,
     onTitleReceived: (String?) -> Unit,
-    onUrlIntercept: (String) -> Boolean,
     onWebViewCreated: (WebView) -> Unit,
 ) {
     AndroidView(
@@ -255,11 +292,11 @@ private fun AdWebView(
         factory  = {
             WebView(context).apply {
                 settings.apply {
-                    javaScriptEnabled      = true
-                    domStorageEnabled      = true
+                    javaScriptEnabled     = true
+                    domStorageEnabled     = true
                     setSupportMultipleWindows(false)
-                    allowContentAccess     = true
-                    allowFileAccess        = false  // security: no local file access
+                    allowContentAccess    = true
+                    allowFileAccess       = false   // security: no local file access
                 }
 
                 webViewClient = object : WebViewClient() {
@@ -269,18 +306,47 @@ private fun AdWebView(
                     override fun onPageFinished(view: WebView, url: String) {
                         onPageFinished(url, view)
                     }
-                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView,
+                        request: WebResourceRequest,
+                    ): Boolean {
                         val urlStr = request.url.toString()
                         return when {
-                            urlStr.startsWith("market://") || urlStr.contains("play.google.com/store/apps") -> {
+                            // Play Store — open the app, consume the navigation
+                            urlStr.startsWith("market://") ||
+                            urlStr.contains("play.google.com/store/apps") -> {
                                 routeAdUrl(context, urlStr) {}
-                                true
+                                true   // consumed; WebView does NOT try to load it
                             }
+
+                            // intent:// deep-links — open target app, consume navigation.
+                            // If the app isn't installed, routeAdUrl falls back to
+                            // openBrowserSheet which is a no-op here (we're already in
+                            // the browser sheet), so we load the fallback URL instead.
                             urlStr.startsWith("intent://") -> {
-                                routeAdUrl(context, urlStr) { view.loadUrl(it) }
-                                true
+                                try {
+                                    val intent = Intent.parseUri(urlStr, Intent.URI_INTENT_SCHEME).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                    true   // consumed
+                                } catch (_: Exception) {
+                                    // App not installed — extract fallback URL from intent:// if present
+                                    val fallback = try {
+                                        Intent.parseUri(urlStr, Intent.URI_INTENT_SCHEME)
+                                            .getStringExtra("browser_fallback_url")
+                                    } catch (_: Exception) { null }
+                                    if (!fallback.isNullOrBlank()) {
+                                        view.loadUrl(fallback)
+                                        true
+                                    } else {
+                                        false  // let WebView try
+                                    }
+                                }
                             }
-                            else -> onUrlIntercept(urlStr)
+
+                            // Standard http(s) — let WebView handle it normally
+                            else -> false
                         }
                     }
                 }

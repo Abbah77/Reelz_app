@@ -803,11 +803,56 @@ fun PremiumGenrePill(text: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 // ── Load more skeleton ────────────────────────────────────────────────────────
+// Shows a full section header + row skeleton so incoming content feels coherent.
+// Replaces a bare spinner — user can see exactly what kind of content is coming.
 
 @Composable
-fun LoadMoreSkeleton() {
+fun LoadMoreSkeleton(label: String = "Discovering more…") {
     val d = LocalDimensions.current
-    Box(Modifier.fillMaxWidth().padding(vertical = d.spaceMd - d.spaceXxs)) { SkeletonRowLoader() }
+    val inf = rememberInfiniteTransition(label = "lmSkeleton")
+    val pulse by inf.animateFloat(
+        0.5f, 1f,
+        infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        "lmPulse",
+    )
+    Column(Modifier.fillMaxWidth().padding(top = d.spaceXxs)) {
+        // Section header skeleton
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = d.screenHorizPad, top = d.spaceXl, bottom = d.spaceMd, end = d.screenHorizPad),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+        ) {
+            // Accent bar
+            Box(
+                Modifier.width(d.sectionAccentWidth).height(d.sectionAccentHeight)
+                    .clip(RoundedCornerShape(d.spaceXxs))
+                    .background(Brush.verticalGradient(listOf(Brand2.copy(pulse), Brand.copy(pulse))))
+            )
+            // Title shimmer
+            Box(
+                Modifier.width(140.dp).height(d.textXl.value.dp)
+                    .clip(RoundedCornerShape(d.spaceXxs + 1.dp))
+                    .background(BgSurface.copy(pulse))
+            )
+            Spacer(Modifier.weight(1f))
+            // Tiny "loading" dot cluster
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                listOf(0f, 200, 400).forEachIndexed { idx, _ ->
+                    val dotInf = rememberInfiniteTransition(label = "dot$idx")
+                    val dotPulse by dotInf.animateFloat(
+                        0.3f, 1f,
+                        infiniteRepeatable(tween(500, delayMillis = idx * 150), RepeatMode.Reverse),
+                        "dp$idx"
+                    )
+                    Box(Modifier.size(5.dp).clip(CircleShape).background(Brand.copy(dotPulse)))
+                }
+            }
+        }
+        // Row skeleton cards
+        SkeletonRowLoader()
+    }
 }
 
 // ── Hero banner pager ─────────────────────────────────────────────────────────

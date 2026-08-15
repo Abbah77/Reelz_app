@@ -1,6 +1,7 @@
 package com.axio.reelz.ui.screens.search
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
@@ -327,41 +328,49 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
         }
 
         // ── Results ──────────────────────────────────────────────────────────
-        // Network loading indicator — only shown as a thin bar AFTER local results appear,
-        // so the user always sees something immediately rather than a blocking spinner.
+        // While network is loading AND we have local results already: show a subtle
+        // progress bar so the user knows more is coming without blocking the list.
         if (ui.isNetworkLoading && ui.results.isNotEmpty()) {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth().height(2.dp),
-                color = Brand,
-                trackColor = Color.Transparent,
+            val inf = rememberInfiniteTransition(label = "searchBarProgress")
+            val sweep by inf.animateFloat(
+                0f, 1f,
+                infiniteRepeatable(tween(1200, easing = LinearEasing)),
+                "searchSweep",
+            )
+            Box(
+                Modifier.fillMaxWidth().height(2.dp).background(
+                    Brush.horizontalGradient(
+                        colorStops = arrayOf(
+                            Pair((sweep - 0.3f).coerceIn(0f, 1f), Color.Transparent),
+                            Pair(sweep.coerceIn(0f, 1f),           Brand.copy(0.85f)),
+                            Pair((sweep + 0.3f).coerceIn(0f, 1f), Color.Transparent),
+                        )
+                    )
+                )
             )
         }
+        // If the user is typing (network flying) and results are empty — show typing indicator
+        // instead of an error. This replaces the old behavior of surfacing a transient error.
+        if (ui.isNetworkLoading && ui.results.isEmpty() && !ui.hasSearched) {
+            SearchingIndicator()
+        }
         when {
-            ui.isLocalLoading && ui.results.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CinematicSpinner(size = d.spinnerLg)
+            (ui.isLocalLoading || ui.isNetworkLoading) && ui.results.isEmpty() -> Column(Modifier.fillMaxSize()) {
+                Spacer(Modifier.height(d.spaceSm))
+                SkeletonSearchResults(count = 9)
             }
 
-            ui.error != null -> ErrorState(ui.error!!, onRetry = { vm.onQuery(ui.query) })
+            // Only show real error when we've genuinely failed — NOT while the user is still typing
+            // (network loading mid-keystroke used to surface a transient error here)
+            ui.error != null && !ui.isNetworkLoading && !ui.isLocalLoading ->
+                ErrorState(ui.error!!, onRetry = { vm.onQuery(ui.query) })
 
-            ui.results.isEmpty() && ui.hasSearched ->
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Box(Modifier.size(d.avatarLg + d.spaceXl).clip(CircleShape)
-                                .background(Brush.radialGradient(listOf(GlassMd, Color.Transparent))))
-                            Icon(IconMovieSlate, null, tint = White40, modifier = Modifier.size(d.iconXl - 2.dp))
-                        }
-                        Spacer(Modifier.height(d.spaceLg))
-                        Text("No results for", color = White40, fontSize = d.textMd)
-                        Text("\"${ui.query}\"", color = White60, fontSize = d.textXxl, fontWeight = FontWeight.Bold)
-                        if (hasActiveFilters) {
-                            Spacer(Modifier.height(d.spaceMd))
-                            TextButton(onClick = vm::clearFilters) {
-                                Text("Clear filters", color = Brand, fontSize = d.textMd)
-                            }
-                        }
-                    }
-                }
+            ui.results.isEmpty() && ui.hasSearched && !ui.isNetworkLoading && !ui.isLocalLoading ->
+                EmptySearchState(
+                    query            = ui.query,
+                    hasActiveFilters = hasActiveFilters,
+                    onClearFilters   = vm::clearFilters,
+                )
 
             ui.results.isNotEmpty() ->
                 Column {
