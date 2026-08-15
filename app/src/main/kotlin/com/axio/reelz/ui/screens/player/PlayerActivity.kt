@@ -783,7 +783,11 @@ fun PlayerScreen(
                         Icon(IconError, null, tint = Error, modifier = Modifier.size(d.iconXl - 2.dp))
                     }
                     Text(
-                        errorState?.msg ?: "",
+                        errorState?.msg?.takeIf { it.isNotBlank() }
+                            ?: if (errorState?.isNetworkError == true)
+                                "No internet connection."
+                               else
+                                "Couldn\'t load this content. Please try again.",
                         color = White80, fontSize = (d.textXl.value - 2).sp,
                         textAlign = TextAlign.Center, lineHeight = (d.textXl.value * 1.4f).sp,
                     )

@@ -18,6 +18,10 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.PathData
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -428,7 +432,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
         when (ui.activeTab) {
             // ── Watchlist ──────────────────────────────────────────────
             0 -> if (ui.watchlist.isEmpty()) {
-                item { EmptyTabHint("Nothing in your watchlist", "Tap + Watchlist on any movie or show\nIt auto-removes once you've watched it") }
+                item { EmptyTabHint("Nothing saved yet", "Tap \"+ Watchlist\" on any title to save it for later.\nIt auto-removes once you've finished watching.", icon = IconBookmarkSolid) }
             } else {
                 items(ui.watchlist, key = { it.mediaId }) { w ->
                     val type = if (w.mediaType == "TV") MediaType.TV else MediaType.MOVIE
@@ -448,7 +452,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
 
             // ── Saved ──────────────────────────────────────────────────
             1 -> if (ui.saved.isEmpty()) {
-                item { EmptyTabHint("No saved videos yet", "Tap Save on any movie or show") }
+                item { EmptyTabHint("No saved clips yet", "Tap Save on a Short to keep it here.", icon = IconVideoSolid) }
             } else {
                 items(ui.saved, key = { it.mediaId }) { s ->
                     val type = if (s.mediaType == "TV") MediaType.TV else MediaType.MOVIE
@@ -462,7 +466,7 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                     // Initial load — show skeletons
                     items(8) { HistoryRowSkeleton() }
                 } else if (ui.historyPage.isEmpty()) {
-                    item { EmptyTabHint("No watch history yet", "Start watching something!") }
+                    item { EmptyTabHint("No watch history yet", "Your recently watched movies and episodes will appear here.", icon = IconHistory) }
                 } else {
                     item {
                         Row(Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXs, vertical = d.spaceXs), horizontalArrangement = Arrangement.End) {
@@ -651,7 +655,26 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
         }
         if (errorMsg != null) {
             Spacer(Modifier.height(d.spaceSm))
-            Text(errorMsg!!, color = Error, fontSize = d.textSm, textAlign = TextAlign.Center)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(d.spaceXxs),
+            ) {
+                Text(
+                    errorMsg!!,
+                    color = Error,
+                    fontSize = d.textSm,
+                    textAlign = TextAlign.Center,
+                )
+                // Offer a retry nudge unless it's an unrecoverable "restart" error
+                if (!errorMsg!!.contains("restart", true)) {
+                    TextButton(
+                        onClick = { errorMsg = null },
+                        contentPadding = PaddingValues(horizontal = d.spaceSm, vertical = 0.dp),
+                    ) {
+                        Text("Dismiss", color = White40, fontSize = d.textXs)
+                    }
+                }
+            }
         }
     }
 }
@@ -729,12 +752,52 @@ fun LibraryRow(title: String, poster: String?, subtitle: String = "", progress: 
 }
 
 @Composable
-fun EmptyTabHint(title: String, subtitle: String) {
+fun EmptyTabHint(
+    title: String,
+    subtitle: String,
+    icon: ImageVector? = null,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
     val d = LocalDimensions.current
-    Box(Modifier.fillMaxWidth().height(d.spaceXxl * 6.25f), Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
-            Text(title,    color = White60, fontWeight = FontWeight.SemiBold, fontSize = d.textLg)
-            Text(subtitle, color = White40, fontSize = d.textMd, textAlign = TextAlign.Center, lineHeight = (d.textMd.value * 1.45f).sp)
+    Box(Modifier.fillMaxWidth().padding(top = d.spaceXxl + d.spaceLg, bottom = d.spaceXxl), Alignment.TopCenter) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(d.spaceSm),
+            modifier = Modifier.padding(horizontal = d.spaceXxl),
+        ) {
+            if (icon != null) {
+                Box(contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier.size(72.dp)
+                            .clip(CircleShape)
+                            .background(Brush.radialGradient(listOf(White.copy(.05f), Color.Transparent)))
+                            .border(1.dp, GlassBorderMd, CircleShape)
+                    )
+                    Icon(icon, contentDescription = null, tint = White20, modifier = Modifier.size(30.dp))
+                }
+                Spacer(Modifier.height(d.spaceXs))
+            }
+            Text(
+                title,
+                color = White60,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = d.textLg,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                subtitle,
+                color = White40,
+                fontSize = d.textSm,
+                textAlign = TextAlign.Center,
+                lineHeight = (d.textSm.value * 1.55f).sp,
+            )
+            if (actionLabel != null && onAction != null) {
+                Spacer(Modifier.height(d.spaceXxs))
+                TextButton(onClick = onAction) {
+                    Text(actionLabel, color = Brand, fontWeight = FontWeight.SemiBold, fontSize = d.textSm)
+                }
+            }
         }
     }
 }

@@ -81,6 +81,8 @@ class BrowseViewModel @Inject constructor(
         val isLoadingMore: Boolean = false,
         val isCacheLoaded: Boolean = false,
         val watchlistedIds: Set<String> = emptySet(),
+        /** Non-null when a background/pull-to-refresh fails but cached content is still shown. */
+        val refreshError: String? = null,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -102,6 +104,8 @@ class BrowseViewModel @Inject constructor(
             }
         }
     }
+
+    fun clearRefreshError() = _ui.update { it.copy(refreshError = null) }
 
     fun toggleHeroWatchlist(media: Media) {
         viewModelScope.launch { libraryRepo.toggleWatchlist(media) }
@@ -151,6 +155,12 @@ class BrowseViewModel @Inject constructor(
                                     } else {
                                         _ui.update { it.copy(isBackgroundRefreshing = false) }
                                     }
+                                }
+                                is NetworkResult.Error -> _ui.update {
+                                    it.copy(
+                                        isBackgroundRefreshing = false,
+                                        refreshError = "Couldn't refresh — showing cached content.",
+                                    )
                                 }
                                 else -> _ui.update { it.copy(isBackgroundRefreshing = false) }
                             }
@@ -220,7 +230,13 @@ class BrowseViewModel @Inject constructor(
                         feedRows      = buildFeedRows(result.data),
                     )
                 }
-                is NetworkResult.Error -> _ui.update { it.copy(isRefreshing = false, error = result.message) }
+                is NetworkResult.Error -> _ui.update { it.copy(
+                    isRefreshing = false,
+                    // If we have cached content, use refreshError (inline banner) rather than
+                    // replacing the whole screen with an error.
+                    refreshError = if (it.feedRows.isNotEmpty()) result.message else null,
+                    error        = if (it.feedRows.isEmpty()) result.message else null,
+                ) }
                 NetworkResult.Loading  -> _ui.update { it.copy(isRefreshing = false) }
             }
         }
@@ -665,6 +681,23 @@ fun BrowseScreen(
                     }
                 }
             }
+        }
+
+        // ── Refresh error banner — shown when pull-to-refresh/background-refresh fails
+        // but cached content is still displayed so we don't nuke the whole screen.
+        AnimatedVisibility(
+            visible = ui.refreshError != null,
+            enter   = slideInVertically { -it } + fadeIn(),
+            exit    = slideOutVertically { -it } + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = d.screenHorizPad, vertical = d.spaceLg),
+        ) {
+            InlineErrorBanner(
+                message = ui.refreshError ?: "",
+                onRetry = { viewModel.load(forceRefresh = true); viewModel.clearRefreshError() },
+            )
         }
     }
 }

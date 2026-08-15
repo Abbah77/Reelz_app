@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,6 +98,8 @@ class PremiumViewModel @Inject constructor(
         val isInitiatingPayment: Boolean = false,
         /** True if backend_url is set in config — enables server-side payment init. */
         val backendConfigured: Boolean = false,
+        /** Non-null when payment init failed — distinct from refreshMessage (which is success/info). */
+        val paymentError: String? = null,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -145,7 +149,7 @@ class PremiumViewModel @Inject constructor(
      */
     fun initCheckout(plan: String) {
         viewModelScope.launch {
-            _ui.update { it.copy(isInitiatingPayment = true, refreshMessage = null) }
+            _ui.update { it.copy(isInitiatingPayment = true, refreshMessage = null, paymentError = null) }
 
             val result = paymentRepository.initPayment(plan)
 
@@ -176,7 +180,7 @@ class PremiumViewModel @Inject constructor(
                         _ui.update {
                             it.copy(
                                 isInitiatingPayment = false,
-                                refreshMessage      = "Payment unavailable right now. Please try again later.",
+                                paymentError        = "Payment unavailable right now. Please try again later.",
                             )
                         }
                     }
@@ -185,7 +189,7 @@ class PremiumViewModel @Inject constructor(
                     _ui.update {
                         it.copy(
                             isInitiatingPayment = false,
-                            refreshMessage      = result.message,
+                            paymentError        = result.message ?: "Payment could not be started. Please try again.",
                         )
                     }
                 }
@@ -214,6 +218,7 @@ class PremiumViewModel @Inject constructor(
     }
 
     fun dismissMessage() { _ui.update { it.copy(refreshMessage = null) } }
+    fun dismissPaymentError() { _ui.update { it.copy(paymentError = null) } }
     fun openCheckout(url: String) { _ui.update { it.copy(checkoutUrl = url) } }
     fun dismissCheckout() { _ui.update { it.copy(checkoutUrl = null) } }
 }
@@ -339,7 +344,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                                     PaystackSubscribeButton(
                                         label      = "Yearly",
                                         enabled    = !ui.isInitiatingPayment,
-                                        isLoading  = false,
+                                        isLoading  = ui.isInitiatingPayment,
                                         modifier   = Modifier.weight(1f),
                                         onClick    = { vm.initCheckout("yearly") },
                                     )
@@ -368,6 +373,77 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                             }
                             Spacer(Modifier.height(d.spaceXl - d.spaceXs))
                         }
+                    }
+                }
+            }
+        }
+
+        // ── Payment error banner ─────────────────────────────────────────────────
+        // Distinct from refreshMessage (which carries success toasts).
+        // Shown as an overlay snackbar-style at the bottom so the user can retry.
+        androidx.compose.animation.AnimatedVisibility(
+            visible  = ui.paymentError != null,
+            enter    = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
+            exit     = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+        ) {
+            androidx.compose.material3.Card(
+                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = Color(0xFF2A1010)),
+                border = BorderStroke(1.dp, Color(0xFFFF3B30).copy(.4f)),
+                shape  = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("⚠", fontSize = 18.sp)
+                    Text(
+                        ui.paymentError ?: "",
+                        color    = Color.White.copy(.85f),
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                        lineHeight = 18.sp,
+                    )
+                    TextButton(
+                        onClick            = { vm.dismissPaymentError() },
+                        contentPadding     = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) {
+                        Text("OK", color = Color(0xFFFF453A), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+
+        // ── refreshMessage success toast ─────────────────────────────────────
+        androidx.compose.animation.AnimatedVisibility(
+            visible  = ui.refreshMessage != null,
+            enter    = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
+            exit     = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+        ) {
+            androidx.compose.material3.Card(
+                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = Color(0xFF0A2A1A)),
+                border = BorderStroke(1.dp, Color(0xFF30D158).copy(.4f)),
+                shape  = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("✓", fontSize = 16.sp, color = Color(0xFF30D158))
+                    Text(
+                        ui.refreshMessage ?: "",
+                        color    = Color.White.copy(.85f),
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick        = { vm.dismissMessage() },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) {
+                        Text("OK", color = Color(0xFF30D158), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                     }
                 }
             }

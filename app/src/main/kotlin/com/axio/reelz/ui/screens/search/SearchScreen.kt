@@ -57,6 +57,8 @@ class SearchViewModel @Inject constructor(
         val isNetworkLoading: Boolean = false,         // TMDB search in-flight
         val isOffline: Boolean = false,                // no network, local-only mode
         val error: String? = null,
+        /** Non-null when a network refresh fails but local/cached results are still shown. */
+        val refreshError: String? = null,
         val hasSearched: Boolean = false,
         val filters: SearchFilters = SearchFilters(),
         val genres: List<Genre> = emptyList(),
@@ -116,7 +118,7 @@ class SearchViewModel @Inject constructor(
         searchJob = viewModelScope.launch {
             // Debounce
             delay(250)
-            _ui.update { it.copy(isNetworkLoading = true, error = null) }
+            _ui.update { it.copy(isNetworkLoading = true, error = null, refreshError = null) }
 
             try {
                 val result = searchRepo.search(q, mediaType = _ui.value.filters.mediaType?.lowercase())
@@ -140,7 +142,11 @@ class SearchViewModel @Inject constructor(
                             isNetworkLoading = false,
                             isLocalLoading   = false,
                             isOffline        = result.isNetworkError,
+                            // Show inline banner when results exist but refresh failed;
+                            // set error (full-screen) only when there's nothing to show.
                             error            = if (st.results.isEmpty()) result.message else null,
+                            // refreshError surfaces a dismissible banner over existing results
+                            refreshError     = if (st.results.isNotEmpty()) result.message else null,
                             hasSearched      = true,
                         )}
                     }
@@ -364,6 +370,13 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
             // (network loading mid-keystroke used to surface a transient error here)
             ui.error != null && !ui.isNetworkLoading && !ui.isLocalLoading ->
                 ErrorState(ui.error!!, onRetry = { vm.onQuery(ui.query) })
+            // Inline refresh-error banner (results still visible beneath)
+            ui.refreshError != null ->
+                InlineErrorBanner(
+                    message = ui.refreshError!!,
+                    onRetry = { vm.onQuery(ui.query) },
+                    modifier = Modifier.padding(horizontal = d.screenHorizPad, vertical = d.spaceSm),
+                )
 
             ui.results.isEmpty() && ui.hasSearched && !ui.isNetworkLoading && !ui.isLocalLoading ->
                 EmptySearchState(
@@ -611,12 +624,9 @@ fun SmallFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-private fun friendlySearchError(e: Exception): String {
-    val msg = e.message?.lowercase() ?: ""
-    return when {
-        msg.contains("unable to resolve host") || msg.contains("network") ||
-        msg.contains("timeout") || msg.contains("connect") ->
-            "No internet connection. Check your connection and try again."
-        else -> "Search failed. Please try again."
-    }
-}
+/**
+ * Maps a search exception to a human-readable string.
+ * Delegates to the shared [friendlyError] so wording is consistent app-wide.
+ */
+private fun friendlySearchError(e: Exception): String =
+    com.axio.reelz.ui.components.friendlyError(e.message ?: "")

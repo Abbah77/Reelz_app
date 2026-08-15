@@ -493,7 +493,8 @@ fun InlineErrorBanner(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
     ) {
-        Icon(IconWifiOff, null, tint = Error.copy(.8f), modifier = Modifier.size(d.iconMd - 2.dp))
+        val isNetErr = message.contains("internet", true) || message.contains("network", true) || message.contains("connect", true)
+        Icon(if (isNetErr) IconWifiOff else IconMovieSlate, null, tint = Error.copy(.8f), modifier = Modifier.size(d.iconMd - 2.dp))
         Text(
             friendlyError(message),
             color    = White60,
@@ -646,17 +647,25 @@ fun EmptyExploreState(
 // Friendly error text mapping
 // ─────────────────────────────────────────────────────────────────────────────
 fun friendlyError(raw: String): String = when {
-    raw.contains("403")              -> "This content isn't available right now."
-    raw.contains("404")              -> "Content not found. It may have moved or been removed."
-    raw.contains("500")              -> "Server hiccup — please try again in a moment."
-    raw.contains("timeout", true)    -> "Taking too long. Check your connection and retry."
+    raw.contains("403")                                  -> "Access denied. This content may require a subscription."
+    raw.contains("404")                                  -> "Content not found. It may have been removed."
+    raw.contains("429")                                  -> "Too many requests — please wait a moment and try again."
+    raw.contains("500") || raw.contains("502") ||
+        raw.contains("503")                              -> "Server trouble. Please try again shortly."
+    raw.contains("timeout", true)                        -> "Request timed out. Check your connection and retry."
+    raw.contains("ssl", true) || raw.contains("tls", true) -> "Secure connection failed. Check your network."
     raw.contains("network", true) ||
-    raw.contains("connect", true) ||
-    raw.contains("internet", true)   -> "No internet. Please check your network."
+        raw.contains("connect", true) ||
+        raw.contains("internet", true) ||
+        raw.contains("unreachable", true)                -> "No internet connection. Check your network and try again."
     raw.contains("stream", true) ||
-    raw.contains("source", true)     -> "Couldn't find a working stream. Trying another source."
-    raw.contains("initialize", true) -> "Playback couldn't start. Please try again."
-    else                             -> "Something went wrong. Please try again."
+        raw.contains("source", true) ||
+        raw.contains("playback", true)                   -> "Couldn\'t load a stream. Try another quality or check back later."
+    raw.contains("initialize", true)                     -> "Playback couldn\'t start. Please try again."
+    raw.contains("parse", true) ||
+        raw.contains("json", true)                       -> "Received unexpected data. Please try again."
+    raw.contains("No videos", true)                      -> "No content available right now. Pull down to refresh."
+    else                                                 -> "Something went wrong. Please try again."
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

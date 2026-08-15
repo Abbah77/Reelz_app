@@ -1221,24 +1221,17 @@ fun formatRuntime(minutes: Int): String {
  * Translates raw exceptions into user-facing messages for the Detail screen.
  * Never exposes internal exception class names or raw stack details.
  */
+/**
+ * Maps a detail-load exception to a human-readable message.
+ * Delegates to the shared [friendlyError] in FeedComponents so wording
+ * stays consistent across the whole app; adds one detail-specific case.
+ */
 private fun friendlyDetailError(e: Exception): String {
-    val msg = e.message?.lowercase() ?: ""
-    return when {
-        msg.contains("unable to resolve host") ||
-        msg.contains("no route to host") ||
-        msg.contains("network") ||
-        msg.contains("timeout") ||
-        msg.contains("connect") -> "No internet connection. Check your connection and try again."
-        msg.contains("404") ||
-        msg.contains("not found") -> "This title couldn't be found. It may have been removed."
-        msg.contains("401") ||
-        msg.contains("403") ||
-        msg.contains("unauthorized") -> "Access denied. Please try again later."
-        msg.contains("500") ||
-        msg.contains("502") ||
-        msg.contains("503") -> "The server is temporarily unavailable. Try again in a moment."
-        else -> "Something went wrong loading this title. Pull down to retry."
-    }
+    val raw = e.message ?: ""
+    // Detail-specific: surface "not found" explicitly
+    if (raw.contains("not found", true) || raw.contains("404"))
+        return "This title couldn't be found. It may have been removed."
+    return com.axio.reelz.ui.components.friendlyError(raw)
 }
 
 /**

@@ -382,6 +382,9 @@ class ExploreViewModel @Inject constructor(
         runQuery()
     }
 
+    /** Retry the current query — used by the error state. */
+    fun retry() = runQuery(resetPage = true)
+
     fun clearFilters() {
         _ui.update { it.copy(filters = ExploreFilters(mediaType = it.filters.mediaType), activeMood = null) }
         runQuery()
@@ -526,7 +529,7 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
                 Spacer(Modifier.height(d.spaceSm))
                 SkeletonGridLoader(count = 9, columns = 3)
             }
-            ui.error != null && ui.results.isEmpty() -> ErrorState(ui.error!!, onRetry = { vm.applyMood(moodPresets[4]) })
+            ui.error != null && ui.results.isEmpty() -> ErrorState(ui.error!!, onRetry = { vm.retry() })
             ui.results.isEmpty() -> EmptyExploreState(onClear = vm::clearFilters)
             else -> {
                 val gridState = rememberLazyGridState()

@@ -555,7 +555,7 @@ private fun SendTab(
                     PermissionCard(
                         icon = IconWifi,
                         title = "Wireless access needed",
-                        subtitle = "Grant Wi-Fi & Bluetooth so nearby devices can discover you instantly.",
+                        subtitle = "Reelz needs Wi-Fi, Bluetooth and Location to find devices nearby. Your location data is never stored.",
                         buttonLabel = "Allow & Share",
                         buttonIcon = { Icon(IconQr, null, tint = Color(0xFF001428), modifier = Modifier.size(d.iconMd - 4.dp)) },
                         onRequest = { permLauncher.launch(transferPerms) },
@@ -594,7 +594,12 @@ private fun SendTab(
 
             // ── Error ─────────────────────────────────────────────────────────
             is TransferUiState.Error -> {
-                ErrorCard(msg = uiState.msg, retryable = uiState.retryable, onRetry = { vm.reset() })
+                ErrorCard(
+                    msg = uiState.msg,
+                    retryable = uiState.retryable,
+                    kind = uiState.kind,
+                    onRetry = { vm.reset() },
+                )
             }
 
             else -> {}
@@ -1130,14 +1135,41 @@ private fun FileRow(dl: DownloadItem, selected: Boolean, onSelect: () -> Unit) {
 }
 
 @Composable
-private fun ErrorCard(msg: String, retryable: Boolean, onRetry: () -> Unit) {
+private fun ErrorCard(
+    msg: String,
+    retryable: Boolean,
+    onRetry: () -> Unit,
+    kind: com.axio.reelz.transfer.TransferUiState.ErrorKind =
+        com.axio.reelz.transfer.TransferUiState.ErrorKind.GENERIC,
+) {
     val d = LocalDimensions.current
+
+    val (icon, accentColor, headline) = when (kind) {
+        com.axio.reelz.transfer.TransferUiState.ErrorKind.PERMISSION -> Triple(
+            IconShieldOff, Color(0xFFFF9F0A),
+            "Permission required"
+        )
+        com.axio.reelz.transfer.TransferUiState.ErrorKind.CONNECTION -> Triple(
+            IconWifiOff, Error,
+            "Couldn\'t connect"
+        )
+        com.axio.reelz.transfer.TransferUiState.ErrorKind.TIMEOUT -> Triple(
+            IconClock, Color(0xFFFF9F0A),
+            "Connection timed out"
+        )
+        com.axio.reelz.transfer.TransferUiState.ErrorKind.TRANSFER -> Triple(
+            IconMovieSlate, Error,
+            "Transfer failed"
+        )
+        else -> Triple(IconSearch, Error, "Something went wrong")
+    }
+
     Box(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusLg))
-            .background(BgCard)
-            .border(1.dp, Error.copy(.4f), RoundedCornerShape(d.radiusLg))
+            .background(Brush.verticalGradient(listOf(BgCard, BgRaised)))
+            .border(1.dp, accentColor.copy(.35f), RoundedCornerShape(d.radiusLg))
             .padding(d.spaceXl),
     ) {
         Column(
@@ -1145,9 +1177,52 @@ private fun ErrorCard(msg: String, retryable: Boolean, onRetry: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(d.spaceMd),
         ) {
-            Text("✕", color = Error, fontSize = d.textXxl, fontWeight = FontWeight.Bold)
-            Text(msg, color = White60, fontSize = d.textMd, textAlign = TextAlign.Center)
-            if (retryable) BrandButton("Try Again", onClick = onRetry, modifier = Modifier.fillMaxWidth())
+            // Icon ring
+            Box(contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.size(72.dp)
+                        .clip(CircleShape)
+                        .background(Brush.radialGradient(listOf(accentColor.copy(.12f), Color.Transparent)))
+                        .border(1.dp, accentColor.copy(.3f), CircleShape)
+                )
+                Icon(icon, contentDescription = null, tint = accentColor.copy(.85f), modifier = Modifier.size(30.dp))
+            }
+
+            Text(
+                headline,
+                color = Color.White,
+                fontSize = d.textLg,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                msg,
+                color = White60,
+                fontSize = d.textSm,
+                textAlign = TextAlign.Center,
+                lineHeight = (d.textSm.value * 1.6f).sp,
+            )
+
+            if (kind == com.axio.reelz.transfer.TransferUiState.ErrorKind.PERMISSION && !retryable) {
+                // Permanent permission denial — guide to Settings
+                Spacer(Modifier.height(d.spaceXxs))
+                Text(
+                    "Open Settings → Permissions to allow Wi-Fi and Bluetooth, then return here.",
+                    color = Color(0xFFFF9F0A).copy(.8f),
+                    fontSize = d.textXs,
+                    textAlign = TextAlign.Center,
+                    lineHeight = (d.textXs.value * 1.5f).sp,
+                )
+                BrandButton(
+                    text = "Open Settings",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onRetry,  // caller wires this to the settings Intent
+                )
+            } else if (retryable) {
+                BrandButton("Try Again", onClick = onRetry, modifier = Modifier.fillMaxWidth())
+            } else {
+                GhostButton("Go Back", onClick = onRetry, modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }

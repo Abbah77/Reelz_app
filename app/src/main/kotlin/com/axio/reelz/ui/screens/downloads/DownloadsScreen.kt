@@ -1606,24 +1606,57 @@ private fun EmptyDownloadsState() {
     Box(Modifier.fillMaxWidth().padding(top = d.spaceXxl * 2), Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
+            verticalArrangement = Arrangement.spacedBy(d.spaceMd),
+            modifier = Modifier.padding(horizontal = d.spaceXxl),
         ) {
+            // Layered rings + icon
             Box(contentAlignment = Alignment.Center) {
                 Box(
-                    Modifier.size(d.avatarLg + d.spaceXxl + d.spaceSm).clip(CircleShape).background(BlueGlass).border(1.dp, BlueBorder, CircleShape)
+                    Modifier.size(d.avatarLg + d.spaceXxl + d.spaceLg)
+                        .clip(CircleShape)
+                        .background(Brush.radialGradient(listOf(Brand.copy(.06f), Color.Transparent)))
                 )
                 Box(
-                    Modifier.size(d.avatarLg + d.spaceLg).clip(CircleShape).background(GlassSm).border(1.dp, GlassBorderMd, CircleShape)
+                    Modifier.size(d.avatarLg + d.spaceXxl)
+                        .clip(CircleShape)
+                        .background(BlueGlass)
+                        .border(1.dp, BlueBorder, CircleShape)
                 )
-                Icon(IconDownloadCloud, null, tint = Brand.copy(.75f), modifier = Modifier.size(d.avatarSm + d.spaceMd))
+                Box(
+                    Modifier.size(d.avatarLg + d.spaceLg)
+                        .clip(CircleShape)
+                        .background(GlassSm)
+                        .border(1.dp, GlassBorderMd, CircleShape)
+                )
+                Icon(
+                    IconDownloadCloud,
+                    contentDescription = null,
+                    tint = Brand.copy(.8f),
+                    modifier = Modifier.size(d.avatarSm + d.spaceMd),
+                )
             }
-            Spacer(Modifier.height(d.spaceXxs))
-            Text("Nothing here yet", color = White60, fontSize = d.textXl, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(d.spaceXs))
             Text(
-                "Save movies & shows to watch anywhere,\neven without internet.",
+                "Your offline library is empty",
+                color = White,
+                fontSize = d.textXl,
+                fontWeight = FontWeight.Bold,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Text(
+                "Download movies & shows to watch anywhere — even without Wi-Fi or mobile data.",
                 color = White40,
                 fontSize = d.textSm,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                lineHeight = (d.textSm.value * 1.6f).sp,
+            )
+            Spacer(Modifier.height(d.spaceXs))
+            Text(
+                "Look for the ↓ icon on any title to save it for offline viewing.",
+                color = Brand.copy(.7f),
+                fontSize = d.textXs,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                lineHeight = (d.textXs.value * 1.5f).sp,
             )
         }
     }

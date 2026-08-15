@@ -83,7 +83,7 @@ sealed class EngineState {
         val speedBps: Long,
     )                                                     : EngineState()
     object Done                                           : EngineState()
-    data class Error(val msg: String, val retryable: Boolean = true) : EngineState()
+    data class Error(val msg: String, val retryable: Boolean = true, val kind: String = "GENERIC") : EngineState()
 }
 
 // ─── QR payload ───────────────────────────────────────────────────────────────
@@ -236,7 +236,7 @@ class P2pEngine @Inject constructor(
 
     fun connectFromQr(rawQr: String, myDeviceName: String) {
         val remote = QrPayload.decode(rawQr) ?: run {
-            _state.value = EngineState.Error("Invalid QR code — not a Reelz Beam code.", retryable = true)
+            _state.value = EngineState.Error("Invalid QR code — not a Reelz Beam code.", retryable = true, kind = "CONNECTION")
             return
         }
         peerName = remote.deviceName
@@ -259,9 +259,9 @@ class P2pEngine @Inject constructor(
             }
             if (!connected) {
                 _state.value = EngineState.Error(
-                    "Could not connect via Wi-Fi Direct, local Wi-Fi, or hotspot.\n" +
-                    "Check permissions and try again.",
+                    "Could not connect via Wi-Fi Direct, local Wi-Fi, or hotspot. Check that permissions are granted and both devices are nearby.",
                     retryable = true,
+                    kind = "CONNECTION","
                 )
             }
         }
@@ -596,7 +596,7 @@ class P2pEngine @Inject constructor(
                 _state.value = EngineState.Done
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { onError(e.message ?: "Send failed") }
-                _state.value = EngineState.Error(e.message ?: "Send failed", retryable = false)
+                _state.value = EngineState.Error(e.message ?: "Send failed", retryable = false, kind = "TRANSFER")
             }
         }
     }
@@ -653,7 +653,7 @@ class P2pEngine @Inject constructor(
                 _state.value = EngineState.Done
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { onError(e.message ?: "Receive failed") }
-                _state.value = EngineState.Error(e.message ?: "Receive failed", retryable = false)
+                _state.value = EngineState.Error(e.message ?: "Receive failed", retryable = false, kind = "TRANSFER")
             }
         }
     }

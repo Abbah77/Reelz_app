@@ -76,7 +76,17 @@ class TransferManager @Inject constructor(
             tier             = es.tier,
         )
         is EngineState.Done  -> TransferUiState.Done
-        is EngineState.Error -> TransferUiState.Error(es.msg, es.retryable)
+        is EngineState.Error -> TransferUiState.Error(
+            es.msg,
+            es.retryable,
+            when (es.kind) {
+                "CONNECTION" -> TransferUiState.ErrorKind.CONNECTION
+                "TRANSFER"   -> TransferUiState.ErrorKind.TRANSFER
+                "PERMISSION" -> TransferUiState.ErrorKind.PERMISSION
+                "TIMEOUT"    -> TransferUiState.ErrorKind.TIMEOUT
+                else         -> TransferUiState.ErrorKind.GENERIC
+            },
+        )
     }
 
     // ── Sender ────────────────────────────────────────────────────────────────
@@ -129,7 +139,7 @@ class TransferManager @Inject constructor(
                     )
                 }
             },
-            onError = { msg -> _uiState.value = TransferUiState.Error(msg, retryable = false) },
+            onError = { msg -> _uiState.value = TransferUiState.Error(msg, retryable = false, kind = TransferUiState.ErrorKind.CONNECTION) },
         )
     }
 
@@ -206,7 +216,14 @@ sealed class TransferUiState {
         val tier: TransportTier?,
     ) : TransferUiState()
     object Done : TransferUiState()
-    data class Error(val msg: String, val retryable: Boolean) : TransferUiState()
+    data class Error(
+        val msg: String,
+        val retryable: Boolean,
+        /** Hint for the UI to pick a contextual icon and copy. */
+        val kind: ErrorKind = ErrorKind.GENERIC,
+    ) : TransferUiState()
+
+    enum class ErrorKind { PERMISSION, CONNECTION, TIMEOUT, TRANSFER, GENERIC }
 }
 
 // ─── QR generator (kept here, shared with screen) ─────────────────────────────

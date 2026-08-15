@@ -1030,15 +1030,20 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
         when {
             ui.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerLg) }
 
-            !ui.error.isNullOrEmpty() || ui.videos.isEmpty() -> {
+            !ui.error.isNullOrEmpty() -> {
+                // Error state: full-screen with icon, message and retry
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text(
-                        ui.error ?: "No videos",
-                        color     = White40,
-                        fontSize = d.textLg,
-                        textAlign = TextAlign.Center,
-                        modifier  = Modifier.padding(horizontal = d.spaceXxl),
+                    ShortsErrorState(
+                        message = ui.error!!,
+                        onRetry = { vm.refresh() },
                     )
+                }
+            }
+
+            ui.videos.isEmpty() -> {
+                // Empty state: no videos configured or available
+                Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    ShortsEmptyState(onRetry = { vm.refresh() })
                 }
             }
 
@@ -1375,3 +1380,102 @@ private fun TikTokAction(icon: ImageVector, tint: Color, locked: Boolean, onClic
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shorts — rich error state with icon, message, and retry
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun ShortsErrorState(
+    message: String,
+    onRetry: () -> Unit,
+) {
+    val d = LocalDimensions.current
+    val isNetworkError = message.contains("internet", true) ||
+        message.contains("network", true) ||
+        message.contains("connect", true)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = d.spaceXxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(d.spaceMd),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(88.dp)
+                    .clip(CircleShape)
+                    .background(Brush.radialGradient(listOf(Error.copy(.18f), Color.Transparent)))
+                    .border(1.dp, Error.copy(.4f), CircleShape)
+            )
+            Icon(
+                if (isNetworkError) IconVolumeOff else IconSearch,
+                contentDescription = null,
+                tint = Error.copy(.85f),
+                modifier = Modifier.size(36.dp),
+            )
+        }
+        Text(
+            if (isNetworkError) "No Connection" else "Couldn't load videos",
+            color = White,
+            fontSize = d.textXl,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            com.axio.reelz.ui.components.friendlyError(message),
+            color = White40,
+            fontSize = d.textMd,
+            textAlign = TextAlign.Center,
+            lineHeight = (d.textMd.value * 1.6f).sp,
+        )
+        Spacer(Modifier.height(d.spaceXs))
+        com.axio.reelz.ui.components.BrandButton("Try Again", onClick = onRetry)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shorts — empty state (no videos configured / all filtered out)
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun ShortsEmptyState(onRetry: () -> Unit) {
+    val d = LocalDimensions.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = d.spaceXxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(d.spaceMd),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(88.dp)
+                    .clip(CircleShape)
+                    .background(Brush.radialGradient(listOf(White.copy(.06f), Color.Transparent)))
+                    .border(1.dp, GlassBorderMd, CircleShape)
+            )
+            Icon(
+                com.axio.reelz.ui.components.IconReel,
+                contentDescription = null,
+                tint = White20,
+                modifier = Modifier.size(36.dp),
+            )
+        }
+        Text(
+            "No videos right now",
+            color = White60,
+            fontSize = d.textXl,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            "Pull down to refresh or check back later.",
+            color = White40,
+            fontSize = d.textMd,
+            textAlign = TextAlign.Center,
+            lineHeight = (d.textMd.value * 1.6f).sp,
+        )
+        Spacer(Modifier.height(d.spaceXs))
+        com.axio.reelz.ui.components.GhostButton("Refresh", onClick = onRetry)
+    }
+}
