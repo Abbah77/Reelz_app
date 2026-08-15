@@ -1120,7 +1120,7 @@ fun PlayerScreen(
             !ui.isLocked && !ui.isPipActive
 
         androidx.compose.animation.AnimatedVisibility(
-            visible  = nearEnd && ui.episode > 0,  // TV episodes only
+            visible  = nearEnd && episode > 0,  // TV episodes only — episode is PlayerScreen param
             enter    = fadeIn(tween(400)) + slideInVertically(tween(400, easing = FastOutSlowInEasing)) { it / 2 },
             exit     = fadeOut(tween(200)),
             modifier = Modifier.align(Alignment.BottomEnd)
@@ -1146,7 +1146,7 @@ fun PlayerScreen(
                         letterSpacing = 1.5.sp,
                     )
                     Text(
-                        "Episode ${ui.episode + 1}",
+                        "Episode ${episode + 1}",
                         color      = White,
                         fontSize   = d.textMd,
                         fontWeight = FontWeight.Bold,
@@ -1263,7 +1263,6 @@ fun PlayerScreen(
 // No thumb is shown by default; a barely-visible thumb appears only on drag.
 // ─────────────────────────────────────────────────────────────────────────────
 
-@Composable
 @Composable
 private fun MinimalSeekBar(
     positionMs: Long,

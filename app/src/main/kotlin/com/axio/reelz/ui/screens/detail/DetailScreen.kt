@@ -951,13 +951,7 @@ private fun DetailContent(
                         )
                     }
                 }
-                // Watchlist button with animated state transition
-                // Psychology: "Saved to Watchlist ✓" feels rewarding; builds habit loop
-                val watchlistScale by animateFloatAsState(
-                    targetValue   = if (ui.isInWatchlist) 1.06f else 1f,
-                    animationSpec = spring(dampingRatio = 0.4f, stiffness = 600f),
-                    label         = "wlScale",
-                )
+                // Watchlist button — simple, no animation state inside lambda
                 OutlinedButton(
                     onClick  = onWatchlist,
                     shape    = RoundedCornerShape(d.radiusPill),
@@ -965,10 +959,10 @@ private fun DetailContent(
                         d.borderThin,
                         if (ui.isInWatchlist) Brand.copy(.7f) else GlassBorderMd,
                     ),
-                    modifier = Modifier
-                        .height(d.buttonHeightMd)
-                        .scale(watchlistScale)
-                        .let { if (isMovie) it else it.weight(1f) },
+                    modifier = if (isMovie)
+                        Modifier.height(d.buttonHeightMd)
+                    else
+                        Modifier.height(d.buttonHeightMd).weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = if (ui.isInWatchlist) Brand.copy(.12f) else Color.Transparent,
                     ),
