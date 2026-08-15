@@ -480,7 +480,31 @@ fun BrowseScreen(
                     } else {
                         // ── Continue watching ─────────────────────────────────
                         if (ui.continueWatching.isNotEmpty()) {
-                            item(key = "cwHeader") { SectionHeader("Continue Watching", "See All") }
+                            item(key = "cwHeader") {
+                                // ── Psychology: Streak badge + personalized header ──
+                                // "Continue Watching" is the single highest-value retention surface.
+                                // We show the streak to reward consistency.
+                                Column {
+                                    val streakDays = ui.continueWatching.size.coerceAtMost(7)
+                                    PersonalizedSectionHeader(
+                                        title    = "Continue Watching",
+                                        subtitle = if (streakDays >= 2) "You're on a roll 🎯" else null,
+                                        icon     = "▶",
+                                        accentColor = Brand,
+                                        action   = "See All",
+                                        onAction = {},
+                                    )
+                                    if (streakDays >= 2) {
+                                        WatchStreakBadge(
+                                            streakDays = streakDays,
+                                            modifier = Modifier.padding(
+                                                start  = d.screenHorizPad,
+                                                bottom = d.spaceSm,
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
                             item(key = "cwRow") {
                                 LazyRow(
                                     contentPadding        = PaddingValues(horizontal = d.screenHorizPad),
@@ -488,7 +512,6 @@ fun BrowseScreen(
                                 ) {
                                     items(ui.continueWatching, key = { it.mediaId + it.season + it.episode }) { h ->
                                         ContinueCard(h) {
-                                            // Navigate to detail by mediaId; media type unknown from progress row alone
                                             nav.navigate(Route.Detail.go(h.mediaId, MediaType.MOVIE))
                                         }
                                     }
@@ -501,7 +524,34 @@ fun BrowseScreen(
                             when (row) {
                                 is FeedRow.Section -> {
                                     item(key = "hdr_${row.section.id}") {
-                                        SectionHeader(row.section.title, "See All")
+                                        // ── Psychology: Replace generic labels with emotional ones ──
+                                        // Section index determines which "personality" the header gets.
+                                        // This makes the feed feel curated, not algorithmic.
+                                        val personalizedTitle = when {
+                                            feedRowIdx == 1 && row.section.title.contains("popular", true) ->
+                                                "What Everyone's Watching"
+                                            feedRowIdx == 2 && row.section.title.contains("top", true) ->
+                                                "Critically Acclaimed"
+                                            feedRowIdx == 3 ->
+                                                "Hidden Gems You'll Love"
+                                            feedRowIdx == 5 ->
+                                                "Your Kind of Content"
+                                            else -> row.section.title
+                                        }
+                                        val usePersonalized = feedRowIdx in listOf(1, 2, 3, 5)
+                                        if (usePersonalized) {
+                                            PersonalizedSectionHeader(
+                                                title    = personalizedTitle,
+                                                icon     = when (feedRowIdx) {
+                                                    1 -> "🔥"; 2 -> "⭐"; 3 -> "💎"; else -> "✦"
+                                                },
+                                                accentColor = Brand,
+                                                action   = "See All",
+                                                onAction = {},
+                                            )
+                                        } else {
+                                            SectionHeader(row.section.title, "See All")
+                                        }
                                     }
                                     item(key = "row_${row.section.id}") {
                                         LazyRow(
@@ -518,7 +568,14 @@ fun BrowseScreen(
                                     item(key = "native_ad_$feedRowIdx") { NativeAdCard(adEngine = adEngine) }
                                 }
                                 is FeedRow.InfinitePage -> {
-                                    val label = if (row.page % 2 == 0) "More Movies" else "More Series"
+                                    // Psychology: Infinite scroll sections use discovery-framing
+                                    // "You might also like" → personal; "More Movies" → algorithmic
+                                    val label = when (row.page % 4) {
+                                        0 -> "You Might Also Like"
+                                        1 -> "More to Explore"
+                                        2 -> "Trending This Week"
+                                        else -> "Discover Something New"
+                                    }
                                     item(key = "inf_hdr_${row.page}") { SectionHeader(label, "") }
                                     item(key = "inf_row_${row.page}") {
                                         LazyRow(
@@ -864,7 +921,17 @@ fun HeroBannerPager(
                 Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color.Transparent, Brand.copy(0.04f)), radius = 900f)))
 
                 Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding)) {
-                    // "FEATURED" badge with pulsing dot
+                    // Psychology: Time-of-day badge makes the app feel alive and personal
+                    // "TONIGHT'S PICK" at 7pm feels curation, not algorithm
+                    val heroLabel = remember {
+                        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                        when {
+                            hour in 5..11  -> "MORNING PICK"
+                            hour in 12..17 -> "TODAY'S PICK"
+                            hour in 18..21 -> "TONIGHT'S PICK"
+                            else           -> "LATE NIGHT PICK"
+                        }
+                    }
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(d.radiusSm))
@@ -875,7 +942,7 @@ fun HeroBannerPager(
                         horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
                     ) {
                         PulsingDot(Modifier.size(d.spaceXs + 1.dp))
-                        Text("FEATURED", color = Brand, fontSize = d.textXxs, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                        Text(heroLabel, color = Brand, fontSize = d.textXxs, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
                     }
                     Spacer(Modifier.height(d.spaceMd))
                     Text(
@@ -984,10 +1051,20 @@ fun ContinueCard(
         }
         Spacer(Modifier.height(d.spaceSm))
         Text(
-            h.title.ifBlank { h.mediaId },  // fallback to mediaId only if title wasn't saved yet
+            h.title.ifBlank { h.mediaId },
             color = White80, fontSize = d.textSm, maxLines = 1,
             overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium,
         )
-        if (h.season > 0) Text("S${h.season} · E${h.episode}", color = Brand.copy(.8f), fontSize = d.textXxs, fontWeight = FontWeight.SemiBold)
+        if (h.season > 0) {
+            Text("S${h.season} · E${h.episode}", color = Brand.copy(.8f), fontSize = d.textXxs, fontWeight = FontWeight.SemiBold)
+        }
+        // Psychology: Show "finish tonight" pill when user is 60–90% through
+        // This triggers the Zeigarnik effect — the urge to complete unfinished things
+        val pct = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else 0f
+        if (pct in 0.6f..0.95f && h.durationMs > 0) {
+            val remainingMin = ((h.durationMs - h.positionMs) / 60_000L).toInt().coerceAtLeast(1)
+            Spacer(Modifier.height(d.spaceXxs))
+            FinishTonightPill(minutesLeft = remainingMin)
+        }
     }
 }

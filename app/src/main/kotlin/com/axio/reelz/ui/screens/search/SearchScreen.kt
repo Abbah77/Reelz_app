@@ -1,6 +1,7 @@
 package com.axio.reelz.ui.screens.search
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
@@ -14,11 +15,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -345,29 +348,65 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
 
             ui.results.isEmpty() && ui.hasSearched ->
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Box(Modifier.size(d.avatarLg + d.spaceXl).clip(CircleShape)
-                                .background(Brush.radialGradient(listOf(GlassMd, Color.Transparent))))
-                            Icon(IconMovieSlate, null, tint = White40, modifier = Modifier.size(d.iconXl - 2.dp))
-                        }
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(d.spaceXxl),
+                    ) {
+                        // Friendly, personality-driven "no results" — never a dead end
+                        val inf = rememberInfiniteTransition(label = "noRes")
+                        val float by inf.animateFloat(
+                            -5f, 5f,
+                            infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                            "noResY",
+                        )
+                        Text(
+                            "🎬",
+                            fontSize = (d.textHero.value + 12f).sp,
+                            modifier = Modifier.graphicsLayer { translationY = float },
+                        )
                         Spacer(Modifier.height(d.spaceLg))
-                        Text("No results for", color = White40, fontSize = d.textMd)
-                        Text("\"${ui.query}\"", color = White60, fontSize = d.textXxl, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Hmm, nothing for",
+                            color = White40,
+                            fontSize = d.textMd,
+                        )
+                        Text(
+                            "\"${ui.query}\"",
+                            color      = White,
+                            fontSize   = d.textXxl,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(d.spaceMd))
+                        Text(
+                            "Try a different spelling,\nor browse by genre below.",
+                            color     = White40,
+                            fontSize  = d.textSm,
+                            textAlign = TextAlign.Center,
+                            lineHeight = (d.textSm.value * 1.55f).sp,
+                        )
                         if (hasActiveFilters) {
-                            Spacer(Modifier.height(d.spaceMd))
-                            TextButton(onClick = vm::clearFilters) {
-                                Text("Clear filters", color = Brand, fontSize = d.textMd)
-                            }
+                            Spacer(Modifier.height(d.spaceLg))
+                            BrandButton(
+                                text    = "Clear filters",
+                                onClick = vm::clearFilters,
+                                small   = true,
+                            )
                         }
                     }
                 }
 
             ui.results.isNotEmpty() ->
                 Column {
+                    // Human-friendly count with personality
+                    val countLabel = when {
+                        ui.results.size == 1  -> "1 result found"
+                        ui.results.size < 10  -> "${ui.results.size} results — nice find!"
+                        ui.results.size < 50  -> "${ui.results.size} results"
+                        else                  -> "${ui.results.size} results — quite a few!"
+                    }
                     Text(
-                        "${ui.results.size} results",
-                        color = White40,
+                        countLabel,
+                        color    = White40,
                         fontSize = d.textSm,
                         modifier = Modifier.padding(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
                     )
@@ -426,15 +465,50 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                         }
                     }
                     Spacer(Modifier.height(d.spaceXxl + d.spaceXl))
-                    Box(contentAlignment = Alignment.Center) {
-                        Box(Modifier.size(d.avatarLg + d.spaceXxl).clip(CircleShape)
-                            .background(Brush.radialGradient(listOf(BlueGlass, Color.Transparent)))
-                            .border(d.borderThin, BlueBorder, CircleShape))
-                        Icon(IconSearch, null, tint = Brand.copy(.7f), modifier = Modifier.size(d.iconXl))
+
+                    // Psychology: Rotating witty prompts make the empty state feel alive.
+                    // Each time user opens search they see something slightly different —
+                    // "What's your mood tonight?" → "Looking for something epic?" → etc.
+                    val searchPrompts = remember {
+                        listOf(
+                            "🌙" to "What's your mood tonight?",
+                            "🎬" to "Name a movie. Any movie.",
+                            "⭐" to "Find your next favourite.",
+                            "🍿" to "Something epic? Or cozy?",
+                            "🔍" to "Type a title or genre.",
+                        )
+                    }
+                    val promptIndex = remember { (System.currentTimeMillis() / 30_000).toInt() % searchPrompts.size }
+                    val (promptEmoji, promptText) = searchPrompts[promptIndex]
+
+                    // Pulsing search orb
+                    val inf = rememberInfiniteTransition(label = "searchOrb")
+                    val orbScale by inf.animateFloat(
+                        0.92f, 1.08f,
+                        infiniteRepeatable(tween(2000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                        "orbSc",
+                    )
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.scale(orbScale)) {
+                        Box(
+                            Modifier.size(d.avatarLg + d.spaceXxl).clip(CircleShape)
+                                .background(Brush.radialGradient(listOf(BlueGlass, Color.Transparent)))
+                                .border(d.borderThin, BlueBorder, CircleShape)
+                        )
+                        Text(promptEmoji, fontSize = (d.textHero.value + 4f).sp)
                     }
                     Spacer(Modifier.height(d.spaceLg))
-                    Text("Discover anything", color = White60, fontSize = d.textXl, fontWeight = FontWeight.Medium)
-                    Text("Movies, TV shows, actors…", color = White40, fontSize = d.textMd)
+                    Text(
+                        promptText,
+                        color      = White,
+                        fontSize   = d.textXl,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(d.spaceXs))
+                    Text(
+                        "Movies, TV shows, actors, genres…",
+                        color    = White40,
+                        fontSize = d.textMd,
+                    )
                 }
         }
     }
