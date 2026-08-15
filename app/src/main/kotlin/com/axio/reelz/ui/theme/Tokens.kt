@@ -19,7 +19,7 @@ val Surface800 = BgCard
 val Surface700 = BgRaised
 val Surface600 = BgSurface
 
-// ── Brand — Electric Blue ─────────────────────────────────────────────────────
+// ── Brand — Electric Blue (was gold/amber) ─────────────────────────────────
 val Brand      = Color(0xFF0A84FF)   // electric blue primary
 val Brand2     = Color(0xFF40A8FF)   // bright blue highlight
 val BrandDeep  = Color(0xFF003780)   // deep blue shadow
@@ -33,14 +33,6 @@ val Violet     = Color(0xFF9B5CF6)   // deep violet
 val Gold       = Color(0xFFFFCC44)   // pure gold for ratings
 val Iris       = Color(0xFF5B7FFF)   // indigo iris
 
-// ── Psychology / Engagement tokens ───────────────────────────────────────────
-// These map directly to user emotions and drive retention
-val StreakOrange   = Color(0xFFFF6B2B)   // watch streak fire — urgency & pride
-val StreakGold     = Color(0xFFFFB830)   // gold milestone for streaks
-val NewBadge       = Color(0xFF00E5CC)   // "NEW" label — teal stands out from blue
-val FinishNight    = Color(0xFFB06EFF)   // "finish tonight" purple — cozy/late-night mood
-val RecommendGlow  = Color(0xFF0A84FF)   // personalized glow — same as brand for trust
-
 // ── Glass system ──────────────────────────────────────────────────────────────
 val Glass         = Color(0x0DFFFFFF)
 val GlassSm       = Color(0x08FFFFFF)
@@ -51,19 +43,16 @@ val GlassBorderMd = Color(0x1AFFFFFF)
 val GlassBorderHv = Color(0x33FFFFFF)
 
 // ── Blue glass (brand-tinted glass) ──────────────────────────────────────────
-val AmberGlass    = Color(0x1A0A84FF)
-val AmberBorder   = Color(0x330A84FF)
+val AmberGlass    = Color(0x1A0A84FF)   // was amber — now electric blue tint
+val AmberBorder   = Color(0x330A84FF)   // was amber border — now blue
 
+// Blue-specific glass
 val BlueGlass     = Color(0x1A0A84FF)
 val BlueBorder    = Color(0x330A84FF)
 val BlueGlow      = Color(0x4D0A84FF)
 
-// ── Streak glass ──────────────────────────────────────────────────────────────
-val StreakGlass    = Color(0x1AFF6B2B)
-val StreakBorder   = Color(0x33FF6B2B)
-
 // ── Text ──────────────────────────────────────────────────────────────────────
-val White    = Color(0xFFF4F6FF)
+val White    = Color(0xFFF4F6FF)   // cool white (fits blue theme)
 val White90  = Color(0xE6F4F6FF)
 val White80  = Color(0xCCF4F6FF)
 val White60  = Color(0x99F4F6FF)
@@ -81,9 +70,6 @@ val Warning   = Color(0xFFFF9A00)
 val Error     = Color(0xFFFF3B30)
 
 // ── Typography ────────────────────────────────────────────────────────────────
-// Note: To use a custom font (e.g. Outfit, Inter), add the .ttf files to
-// res/font/ and replace FontFamily.Default with a custom FontFamily() below.
-// The scale, weights and letter-spacings here are already cinema-optimised.
 val ReelzTypography = androidx.compose.material3.Typography(
     displayLarge  = TextStyle(fontFamily = FontFamily.Default, fontWeight = FontWeight.Black,   fontSize = 48.sp, letterSpacing = (-2).sp,   color = White),
     displayMedium = TextStyle(fontFamily = FontFamily.Default, fontWeight = FontWeight.Black,   fontSize = 36.sp, letterSpacing = (-1.5).sp, color = White),

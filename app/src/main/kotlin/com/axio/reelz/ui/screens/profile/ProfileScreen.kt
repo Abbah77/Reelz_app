@@ -259,17 +259,6 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
     val ui  by vm.ui.collectAsState()
     val ctx = LocalContext.current
 
-    // Psychology: Time-of-day greeting = app feels alive and personal
-    val greeting = remember {
-        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        when {
-            hour in 5..11  -> "Good morning"
-            hour in 12..17 -> "Good afternoon"
-            hour in 18..21 -> "Good evening"
-            else           -> "Up late?"
-        }
-    }
-
     LazyColumn(
         Modifier.fillMaxSize().background(Bg).statusBarsPadding(),
         contentPadding = PaddingValues(bottom = d.spaceXxl * 3.1f),
@@ -281,23 +270,13 @@ fun ProfileScreen(nav: NavController, vm: ProfileViewModel = hiltViewModel()) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column {
-                    // Psychology: "Good evening, Alex" >> "Profile"
-                    // Makes the app feel like it knows you — even before personalisation
-                    val firstName = ui.profile.name.split(" ").firstOrNull()?.takeIf { it.isNotBlank() }
-                    Text(
-                        if (firstName != null && ui.profile.isSignedIn) "$greeting, $firstName" else "Your Profile",
-                        style = MaterialTheme.typography.headlineMedium.copy(
-                            color = White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp,
-                        ),
-                    )
-                    Text(
-                        if (ui.profile.isSignedIn) "Your personal cinema" else "Sign in to unlock everything",
-                        color      = Brand,
-                        fontSize   = d.textSm,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    Text("Profile", style = MaterialTheme.typography.headlineMedium.copy(
+                        color = White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp
+                    ))
+                    Text("Your personal cinema", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
                 }
                 Spacer(Modifier.weight(1f))
+                // Settings gear icon — navigates to Settings screen
                 Box(
                     Modifier
                         .size(d.avatarSm + d.spaceMd)

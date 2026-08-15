@@ -951,21 +951,12 @@ private fun DetailContent(
                         )
                     }
                 }
-                // Watchlist button — simple, no animation state inside lambda
+                // Watchlist button
                 OutlinedButton(
                     onClick  = onWatchlist,
                     shape    = RoundedCornerShape(d.radiusPill),
-                    border   = BorderStroke(
-                        d.borderThin,
-                        if (ui.isInWatchlist) Brand.copy(.7f) else GlassBorderMd,
-                    ),
-                    modifier = if (isMovie)
-                        Modifier.height(d.buttonHeightMd)
-                    else
-                        Modifier.height(d.buttonHeightMd).weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = if (ui.isInWatchlist) Brand.copy(.12f) else Color.Transparent,
-                    ),
+                    border   = BorderStroke(d.borderThin, if (ui.isInWatchlist) Brand else GlassBorderMd),
+                    modifier = Modifier.height(d.buttonHeightMd).let { if (isMovie) it else it.weight(1f) },
                 ) {
                     Icon(
                         if (ui.isInWatchlist) IconBookmarkFill else IconBookmarkOutline,
@@ -974,11 +965,7 @@ private fun DetailContent(
                         modifier = Modifier.size(d.iconMd - 2.dp),
                     )
                     Spacer(Modifier.width(d.spaceXs + 1.dp))
-                    Text(
-                        if (ui.isInWatchlist) "Saved ✓" else "Save",
-                        color      = if (ui.isInWatchlist) Brand else White60,
-                        fontWeight = if (ui.isInWatchlist) FontWeight.Bold else FontWeight.Normal,
-                    )
+                    Text(if (ui.isInWatchlist) "Saved" else "Save", color = if (ui.isInWatchlist) Brand else White60)
                 }
             }
         }
@@ -1089,17 +1076,7 @@ private fun DetailContent(
             item { SectionHeader("More Like This") }
             item { MediaRowSkeleton() }
         } else if (detail.similar.isNotEmpty()) {
-            // Psychology: "More Like This" + genre context = personal curation feel
-            item {
-                PersonalizedSectionHeader(
-                    title       = "More Like This",
-                    subtitle    = detail.genres.firstOrNull()?.let { "Based on your interest in $it" },
-                    icon        = "✦",
-                    accentColor = Brand,
-                    action      = "See All",
-                    onAction    = {},
-                )
-            }
+            item { SectionHeader("More Like This") }
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = d.screenHorizPad + d.spaceXs),
@@ -1109,42 +1086,6 @@ private fun DetailContent(
                         com.axio.reelz.ui.components.MediaRowCard(m, onClick = { onSimilarClick(m.id, m.mediaType) })
                     }
                 }
-            }
-        }
-
-        // ── End-of-Detail emotional connection ────────────────────────────
-        // Psychology: Every detail screen ends with a warm invitation, not a dead end.
-        // This small touch makes Reelz feel like it *wants* you to find something great.
-        // "Reelz will find something for you" = the killer experience.
-        item {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = d.screenHorizPad + d.spaceXs)
-                    .padding(top = d.spaceXxl, bottom = d.spaceLg),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                HorizontalDivider(
-                    thickness = 0.5.dp,
-                    color = GlassBorderMd,
-                    modifier = Modifier.padding(bottom = d.spaceXl),
-                )
-                Text(
-                    "🎬",
-                    fontSize = (d.textXxl.value + 4f).sp,
-                )
-                Spacer(Modifier.height(d.spaceMd))
-                Text(
-                    "Not sure what to watch next?",
-                    color      = White60,
-                    fontSize   = d.textMd,
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(
-                    "Reelz will find something for you.",
-                    color      = Brand.copy(.85f),
-                    fontSize   = d.textSm,
-                )
             }
         }
     }
@@ -1235,11 +1176,7 @@ fun EpisodeRow(
         }
         Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconMd))
     }
-    HorizontalDivider(
-        thickness = 0.5.dp,
-        color     = GlassBorder,
-        modifier  = Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs),
-    )
+    Divider(color = GlassBorder, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = d.screenHorizPad + d.spaceXs))
 }
 
 // ── Cast card ─────────────────────────────────────────────────────────────────

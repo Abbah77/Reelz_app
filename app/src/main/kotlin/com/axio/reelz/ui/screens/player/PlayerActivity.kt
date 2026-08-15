@@ -665,53 +665,22 @@ fun PlayerScreen(
         )
     }
 
-    // ── Double-tap seek state ─────────────────────────────────────────────────
-    // Double-tap left = seek −10s, right = seek +10s (Netflix / YouTube standard)
-    // The ripple animation provides immediate tactile feedback.
-    var doubleTapSide by remember { mutableStateOf<String?>(null) } // "left" | "right" | null
-    var doubleTapCount by remember { mutableStateOf(0) }
-    val doubleTapAlpha by animateFloatAsState(
-        targetValue   = if (doubleTapSide != null) 1f else 0f,
-        animationSpec = tween(if (doubleTapSide != null) 80 else 350),
-        label         = "dtAlpha",
-    )
-    LaunchedEffect(doubleTapSide) {
-        if (doubleTapSide != null) {
-            delay(600)
-            doubleTapSide = null
-            doubleTapCount = 0
-        }
-    }
-
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
             .then(gestureModifier)
-            .pointerInput(ui.isLocked, ui.isPipActive) {
-                if (ui.isLocked || ui.isPipActive) return@pointerInput
-                detectTapGestures(
-                    onDoubleTap = { offset ->
-                        val isLeft = offset.x < size.width / 2f
-                        val side = if (isLeft) "left" else "right"
-                        doubleTapSide = side
-                        doubleTapCount++
-                        val seekDeltaMs = if (isLeft) -10_000L else 10_000L
-                        val newPos = (vm.exoPlayer?.currentPosition ?: 0L) + seekDeltaMs
-                        vm.seekTo(newPos.coerceAtLeast(0L))
-                    },
-                    onTap = { _ ->
-                        if (ui.isPipActive) {
-                            vm.onPipModeChanged(false)
-                            vm.openSettingsDrawer()
-                            return@detectTapGestures
-                        }
-                        if (!ui.isLocked && !ui.showSubtitleDrawer &&
-                            !ui.isSpeedDrawerOpen && !ui.isQualityDrawerOpen && !ui.isSettingsDrawerOpen
-                        ) vm.toggleControls()
-                        else if (ui.showSubtitleDrawer) vm.closeSubtitleDrawer()
-                    },
-                )
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                // Taps inside PiP mode should exit PiP and open settings (Bug 2)
+                if (ui.isPipActive) {
+                    vm.onPipModeChanged(false)
+                    vm.openSettingsDrawer()
+                    return@clickable
+                }
+                if (!ui.isLocked && !ui.showSubtitleDrawer &&
+                    !ui.isSpeedDrawerOpen && !ui.isQualityDrawerOpen && !ui.isSettingsDrawerOpen
+                ) vm.toggleControls()
+                else if (ui.showSubtitleDrawer) vm.closeSubtitleDrawer()
             }
     ) {
         // ── Video surface ─────────────────────────────────────────────────
@@ -728,47 +697,6 @@ fun PlayerScreen(
                 update  = { pv -> pv.player = vm.exoPlayer },
                 modifier = Modifier.fillMaxSize(),
             )
-        }
-
-        // ── Double-tap seek ripple overlay ───────────────────────────────
-        // Semi-transparent half-screen ripple with seek label.
-        // Appears instantly on double-tap, fades after 600ms.
-        // Left side = backward arc + "−10s", right = forward + "+10s"
-        if (doubleTapSide != null) {
-            val isLeft = doubleTapSide == "left"
-            val seekLabel = if (isLeft) "−${doubleTapCount * 10}s" else "+${doubleTapCount * 10}s"
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(0.5f)
-                    .align(if (isLeft) Alignment.CenterStart else Alignment.CenterEnd)
-                    .graphicsLayer { alpha = doubleTapAlpha * 0.35f }
-                    .clip(if (isLeft)
-                        RoundedCornerShape(topEnd = 200.dp, bottomEnd = 200.dp)
-                    else
-                        RoundedCornerShape(topStart = 200.dp, bottomStart = 200.dp))
-                    .background(Color.White.copy(0.18f)),
-            )
-            Box(
-                modifier = Modifier
-                    .align(if (isLeft) Alignment.CenterStart else Alignment.CenterEnd)
-                    .padding(horizontal = d.spaceXxl)
-                    .graphicsLayer { alpha = doubleTapAlpha },
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        if (isLeft) "⏪" else "⏩",
-                        fontSize = (d.textHero.value + 4f).sp,
-                    )
-                    Spacer(Modifier.height(d.spaceXs))
-                    Text(
-                        seekLabel,
-                        color      = White,
-                        fontSize   = d.textLg,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
         }
 
         // ── PiP clean mode: show nothing but the video ────────────────────
@@ -1106,66 +1034,6 @@ fun PlayerScreen(
             }
         }
 
-        // ── End-of-Content "What's Next" card ────────────────────────────
-        // Psychology: The moment after finishing content is the #1 drop-off point.
-        // Netflix's "Play Next Episode in 5s" cut churn by ~~70% on series.
-        // We show this when:
-        //   • The user is within the last 90 seconds of content
-        //   • Content is a TV episode (season > 0)
-        //   • Player is not locked or in PiP
-        // The card slides in from the bottom-right — non-intrusive but unmissable.
-        val nearEnd = ui.durationMs > 0 &&
-            (ui.durationMs - ui.positionMs) < 90_000L &&
-            ui.state is PlayerState.Playing &&
-            !ui.isLocked && !ui.isPipActive
-
-        androidx.compose.animation.AnimatedVisibility(
-            visible  = nearEnd && episode > 0,  // TV episodes only — episode is PlayerScreen param
-            enter    = fadeIn(tween(400)) + slideInVertically(tween(400, easing = FastOutSlowInEasing)) { it / 2 },
-            exit     = fadeOut(tween(200)),
-            modifier = Modifier.align(Alignment.BottomEnd)
-                .padding(end = d.spaceLg, bottom = d.spaceXxl * 3.5f),
-        ) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(d.radiusLg))
-                    .background(
-                        Brush.linearGradient(listOf(Color(0xE6050510), Color(0xF0050510)))
-                    )
-                    .border(1.dp, BlueBorder, RoundedCornerShape(d.radiusLg))
-                    .padding(horizontal = d.spaceLg, vertical = d.spaceMd),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
-            ) {
-                Column(Modifier.widthIn(max = 160.dp)) {
-                    Text(
-                        "Up Next",
-                        color      = Brand,
-                        fontSize   = d.textXxs,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.5.sp,
-                    )
-                    Text(
-                        "Episode ${episode + 1}",
-                        color      = White,
-                        fontSize   = d.textMd,
-                        fontWeight = FontWeight.Bold,
-                        maxLines   = 1,
-                    )
-                }
-                Box(
-                    Modifier
-                        .size(d.buttonHeightMd + d.spaceSm)
-                        .clip(CircleShape)
-                        .background(Brand)
-                        .clickable { /* onNextEpisode callback — ViewModel wires this */ },
-                    Alignment.Center,
-                ) {
-                    Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconMd - 4.dp))
-                }
-            }
-        }
-
         // ── Lock overlay ──────────────────────────────────────────────────
         if (ui.isLocked) {
             Box(
@@ -1275,78 +1143,66 @@ private fun MinimalSeekBar(
     val progress = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
     val buffered = (bufferedMs.toFloat() / durationMs).coerceIn(0f, 1f)
 
-    // Track expands on drag for easier precision scrubbing (Netflix/YouTube pattern)
+    // Animate thumb visibility: only reveal it while the user is dragging
     var isDragging by remember { mutableStateOf(false) }
     val thumbAlpha by animateFloatAsState(
         targetValue   = if (isDragging) 1f else 0f,
         animationSpec = tween(150),
-        label         = "thumbAlpha",
+        label         = "thumbAlpha"
     )
-    val trackHeight by animateDpAsState(
-        targetValue   = if (isDragging) d.progressBarHeight * 3f else d.progressBarHeight,
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 500f),
-        label         = "trackH",
-    )
-    val thumbSize by animateDpAsState(
-        targetValue   = if (isDragging) d.spaceMd + d.spaceXs else d.spaceMd,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = 500f),
-        label         = "thumbSize",
-    )
-    val touchTargetPx = with(density) { 32.dp.toPx() }
-    val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
+    val trackHeightPx = with(density) { d.progressBarHeight.toPx() }
+    val touchTargetPx = with(density) { 28.dp.toPx() } // invisible touch target taller than the line
 
     Column(
         Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        // ── Time labels: position left, remaining right ───────────────────
-        // Showing "−4:30" remaining instead of total is more actionable —
-        // it tells the user "how much longer" not "total length they already know"
+        // ── Time labels ───────────────────────────────────────────────────
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
                 formatMs(positionMs),
-                color      = if (isDragging) White else White60,
+                color      = White60,
                 fontSize   = d.textXs,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Medium,
             )
-            // Show "−X:XX" remaining — more useful than total duration
             Text(
-                "−${formatMs(remainingMs)}",
-                color      = if (isDragging) Brand.copy(.9f) else White40,
+                formatMs(durationMs),
+                color      = White40,
                 fontSize   = d.textXs,
-                fontWeight = if (isDragging) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = FontWeight.Normal,
             )
         }
 
         Spacer(Modifier.height(d.spaceXs))
 
-        // ── Progress track + invisible drag target ────────────────────────
+        // ── Progress track + invisible drag target ─────────────────────────
         Box(
             Modifier
                 .fillMaxWidth()
+                // tall invisible touch area so swipes register easily
                 .height(with(density) { touchTargetPx.toDp() })
                 .pointerInput(durationMs) {
                     detectHorizontalDragGestures(
-                        onDragStart  = { isDragging = true },
-                        onDragEnd    = { isDragging = false },
+                        onDragStart = { isDragging = true },
+                        onDragEnd   = { isDragging = false },
                         onDragCancel = { isDragging = false },
                         onHorizontalDrag = { change, _ ->
                             change.consume()
                             val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
                             onSeek((fraction * durationMs).toLong())
-                        },
+                        }
                     )
                 },
             contentAlignment = Alignment.CenterStart,
         ) {
-            // Track — expands on drag
+            // Track background
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(trackHeight)
+                    .height(d.progressBarHeight)
                     .align(Alignment.Center)
                     .clip(RoundedCornerShape(d.spaceXxs))
                     .background(White.copy(alpha = 0.12f))
@@ -1358,44 +1214,25 @@ private fun MinimalSeekBar(
                         .fillMaxHeight()
                         .background(White.copy(alpha = 0.22f))
                 )
-                // Played layer — brand gradient with glow when dragging
+                // Played layer — brand gradient
                 Box(
                     Modifier
                         .fillMaxWidth(progress)
                         .fillMaxHeight()
-                        .background(
-                            if (isDragging)
-                                Brush.horizontalGradient(listOf(Brand, Brand2, Color(0xFF80D0FF)))
-                            else
-                                Brush.horizontalGradient(listOf(Brand, Brand2))
-                        )
+                        .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
                 )
             }
 
-            // Thumb — glowing on drag, subtle at rest
+            // Thumb dot — appears on drag
             Box(
                 Modifier
                     .fillMaxWidth(progress)
-                    .wrapContentWidth(Alignment.End),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (isDragging) {
-                    // Outer glow ring
-                    Box(
-                        Modifier
-                            .size(thumbSize + 8.dp)
-                            .clip(CircleShape)
-                            .background(Brand.copy(alpha = 0.25f))
-                    )
-                }
-                Box(
-                    Modifier
-                        .size(thumbSize)
-                        .graphicsLayer { alpha = if (isDragging) 1f else thumbAlpha }
-                        .clip(CircleShape)
-                        .background(Brand2)
-                )
-            }
+                    .wrapContentWidth(Alignment.End)
+                    .size(d.spaceMd + d.spaceXxs)
+                    .graphicsLayer { alpha = thumbAlpha }
+                    .clip(CircleShape)
+                    .background(Brand2)
+            )
         }
     }
 }
