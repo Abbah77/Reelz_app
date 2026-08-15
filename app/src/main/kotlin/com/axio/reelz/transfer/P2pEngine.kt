@@ -261,7 +261,7 @@ class P2pEngine @Inject constructor(
                 _state.value = EngineState.Error(
                     "Could not connect via Wi-Fi Direct, local Wi-Fi, or hotspot. Check that permissions are granted and both devices are nearby.",
                     retryable = true,
-                    kind = "CONNECTION","
+                    kind = "CONNECTION",
                 )
             }
         }
