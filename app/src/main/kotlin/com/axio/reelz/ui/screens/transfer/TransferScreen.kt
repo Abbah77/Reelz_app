@@ -1146,7 +1146,7 @@ private fun ErrorCard(
 
     val (icon, accentColor, headline) = when (kind) {
         com.axio.reelz.transfer.TransferUiState.ErrorKind.PERMISSION -> Triple(
-            IconShieldOff, Color(0xFFFF9F0A),
+            IconLock, Color(0xFFFF9F0A),
             "Permission required"
         )
         com.axio.reelz.transfer.TransferUiState.ErrorKind.CONNECTION -> Triple(
@@ -1154,7 +1154,7 @@ private fun ErrorCard(
             "Couldn\'t connect"
         )
         com.axio.reelz.transfer.TransferUiState.ErrorKind.TIMEOUT -> Triple(
-            IconClock, Color(0xFFFF9F0A),
+            IconWifiOff, Color(0xFFFF9F0A),
             "Connection timed out"
         )
         com.axio.reelz.transfer.TransferUiState.ErrorKind.TRANSFER -> Triple(
