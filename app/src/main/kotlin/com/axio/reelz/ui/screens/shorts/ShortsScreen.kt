@@ -609,16 +609,6 @@ class ShortsViewModel @Inject constructor(
                     source    = "original",
                     url       = videoUrl,
                     thumbnail = thumbUrl,
-                ),
-                    hlsUrl      = videoUrl,
-                    audioUrl    = null,
-                    fallbackUrl = videoUrl,
-                    thumbnail   = thumbUrl,
-                    ups         = 0,
-                    duration    = 0,
-                    hasAudio    = true,
-                    width       = 0,
-                    height      = 0,
                 )
             }
             dbg("✓ [$identifier] resolved ${result.size} playable video(s)")
@@ -835,10 +825,7 @@ private fun rememberShortsPlayerPool(
         } else {
             ProgressiveMediaSource.Factory(cacheDataSourceFactory).createMediaSource(MediaItem.fromUri(primaryUrl))
         }
-        return if (video.audioUrl != null) {
-            val audioSrc = ProgressiveMediaSource.Factory(cacheDataSourceFactory).createMediaSource(MediaItem.fromUri(video.audioUrl))
-            MergingMediaSource(videoSrc, audioSrc)
-        } else videoSrc
+        return videoSrc
     }
 
     return remember(players) { ShortsPlayerPool(players, ::buildMediaSource, onError) }
