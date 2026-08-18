@@ -231,15 +231,17 @@ class PlayerManager(
 
     fun playStream(result: StreamResult) {
         val p = _player.value ?: return
-        val isLocalFile = result.url.startsWith("file://")
-        val item = MediaItem.Builder().setUri(result.url)
+        val primary = result.primaryStream ?: return
+        val url = primary.url
+        val isLocalFile = url.startsWith("file://")
+        val item = MediaItem.Builder().setUri(url)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build()).build()
 
         val mediaDsf = if (isLocalFile) {
             DefaultDataSource.Factory(appContext)
         } else {
             val upstreamDsf = DefaultHttpDataSource.Factory()
-                .setDefaultRequestProperties(result.headers)
+                .setDefaultRequestProperties(primary.headers)
                 .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
                 .setAllowCrossProtocolRedirects(true)
             CacheDataSource.Factory()
@@ -277,7 +279,10 @@ class PlayerManager(
             if (match != null) {
                 val url = match.filePath.takeIf { it.isNotBlank() } ?: return
                 val savedPos = _player.value?.currentPosition ?: 0L
-                val result = StreamResult(url = url, isHls = url.contains(".m3u8", ignoreCase = true))
+                val track  = com.axio.reelz.data.model.StreamTrack(
+                    name = "Offline", url = url,
+                    type = if (url.contains(".m3u8", ignoreCase = true)) "hls" else "mp4")
+                val result = StreamResult(streams = listOf(track), expiresAtMs = Long.MAX_VALUE)
                 scope.launch {
                     playStream(result)
                     if (savedPos > 0) _player.value?.seekTo(savedPos)

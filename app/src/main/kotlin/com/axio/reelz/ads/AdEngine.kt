@@ -112,7 +112,7 @@ class AdEngine @Inject constructor(
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun adsConfig() = configRepo.adsConfig()
-    private fun network(): AdNetwork? = configRepo.activeAdNetwork()
+    private fun ads() = configRepo.adsConfig()
 
     /**
      * True only when the remote config master switch, the feature flag, AND the
@@ -132,11 +132,11 @@ class AdEngine @Inject constructor(
      */
     fun shouldShowRemoveAdsBanner(): Boolean = adsEnabled()
 
-    private fun interstitialAdUnitId(): String = network()?.interstitialId.orEmpty()
-    private fun rewardedAdUnitId(): String     = network()?.rewardedId.orEmpty()
-    private fun appOpenAdUnitId(): String      = network()?.appOpenId.orEmpty()
-    private fun bannerAdUnitId(): String       = network()?.bannerId.orEmpty()
-    private fun nativeAdUnitId(): String       = network()?.nativeId.orEmpty()
+    private fun interstitialAdUnitId(): String = ads().interstitialId.orEmpty()
+    private fun rewardedAdUnitId(): String     = ads().rewardedId.orEmpty()
+    private fun appOpenAdUnitId(): String      = ads().let { "" }.orEmpty()
+    private fun bannerAdUnitId(): String       = ads().bannerId.orEmpty()
+    private fun nativeAdUnitId(): String       = ads().nativeId.orEmpty()
 
     // ─────────────────────────────────────────────────────────────────────────
     // Init
@@ -470,11 +470,13 @@ class AdEngine @Inject constructor(
     /** Returns the configured VAST tag URL, or null if pre-roll ads are disabled/unset. */
     fun vastTagUrlOrNull(): String? {
         if (!adsEnabled() || !adsConfig().placements.prerollEnabled) return null
-        return network()?.vastTagUrl?.takeIf { it.isNotBlank() }
+        return ads().let { "" }?.takeIf { it.isNotBlank() }
     }
 
     /** Pre-roll timing/skip rules from remote config. */
-    fun prerollConfig() = adsConfig().preroll
+    fun prerollConfig() = com.axio.reelz.data.dto.AdPrerollConfig(
+        skipOnResume = true, skipOnQualitySwitch = true,
+        showOnMoviesOnly = false, minMinutesBetween = 30L)
 
     // ─────────────────────────────────────────────────────────────────────────
     // Counters

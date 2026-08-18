@@ -40,16 +40,33 @@ class LibraryRepository @Inject constructor(
         id: String, season: Int, episode: Int,
         positionMs: Long, durationMs: Long,
         title: String = "",
+        posterUrl: String? = null,
     ) = withContext(Dispatchers.IO) {
-        watchProgressDao.upsert(
-            WatchProgressRow(
-                mediaId    = id,
-                season     = season,
-                episode    = episode,
-                positionMs = positionMs,
-                durationMs = durationMs,
-                title      = title,
-            )
+        val now = System.currentTimeMillis()
+        val row = WatchProgressRow(
+            mediaId    = id,
+            season     = season,
+            episode    = episode,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            title      = title,
+            posterUrl  = posterUrl,
+            watchedAt  = now,
+        )
+        // Try to insert as a new row first. If the row already exists (same
+        // mediaId+season+episode primary key), IGNORE leaves it untouched.
+        watchProgressDao.insertIfNew(row)
+        // Then update position/duration/metadata — but bump watchedAt to now so
+        // the most recently *started* episode always floats to the top.
+        watchProgressDao.updateProgress(
+            mediaId    = id,
+            season     = season,
+            episode    = episode,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            title      = title,
+            posterUrl  = posterUrl,
+            watchedAt  = now,
         )
         watchProgressDao.trimToLimit()
     }

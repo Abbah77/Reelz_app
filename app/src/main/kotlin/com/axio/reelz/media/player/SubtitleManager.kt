@@ -66,7 +66,7 @@ class SubtitleManager(
     // ── Load subtitles from stream result ─────────────────────────────────────
 
     fun loadStreamSubtitles(subtitles: List<Subtitle>) {
-        val options = subtitles.map { SubtitleOption(it.language, it.label, it.url) }
+        val options = subtitles.map { SubtitleOption(it.language, it.language, it.url, isEnabled = it.enabled) }
         _state.update { it.copy(subtitleOptions = options, subtitles = subtitles,
             activeSubtitleLanguage = "off", subtitlesEnabled = false) }
     }
@@ -104,7 +104,7 @@ class SubtitleManager(
             val result = streamRepo.getSubtitles(currentId, currentType, currentSeason, currentEpisode, langs)
             val subs = (result as? NetworkResult.Success)?.data ?: emptyList()
             if (subs.isNotEmpty()) {
-                val options = subs.map { s -> SubtitleOption(s.language, s.label, s.url) }
+                val options = subs.map { s -> SubtitleOption(s.language, s.language, s.url, isEnabled = s.enabled) }
                 val currentLang = _state.value.activeSubtitleLanguage
                 _state.update { it.copy(
                     subtitleOptions     = options,

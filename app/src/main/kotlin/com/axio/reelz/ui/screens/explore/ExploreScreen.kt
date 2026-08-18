@@ -312,7 +312,7 @@ class ExploreViewModel @Inject constructor(
         val result = repo.discover(
             mediaType = mediaType,
             genre     = genre,
-            language  = f.language,
+            
             sortBy    = sortBy,
             yearFrom  = f.yearFrom,
             yearTo    = f.yearTo,

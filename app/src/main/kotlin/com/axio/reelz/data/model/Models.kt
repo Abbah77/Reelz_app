@@ -1,68 +1,55 @@
 package com.axio.reelz.data.model
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Domain Models — Reelz v3
+//  Domain Models — Reelz Schema v3
 //
 //  Rules:
-//   • The app only knows the BACKEND. No TMDB shapes here.
+//   • App only knows the BACKEND. All business logic lives on the server.
 //   • Image URLs are full absolute URLs supplied by the backend.
-//   • All cache TTLs live on the server; the app honours Cache-Control /
-//     X-Cache-TTL headers or the cacheTtlMs field in the response body.
-//   • "Smart" = only cache what the UI actually needs; nothing bulky.
+//   • Guest == Free user. Login is opt-in.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Enums ─────────────────────────────────────────────────────────────────────
 enum class MediaType   { MOVIE, TV }
 enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
 enum class TransferStatus { IDLE, CONNECTING, TRANSFERRING, DONE, ERROR }
 enum class TransferDirection { SEND, RECEIVE }
 
-// ── Core card model (what every list/grid item needs) ─────────────────────────
+// ── Media card — schema v3: id, title, poster_url, rating, media_type ─────────
 data class Media(
-    val id: String,              // backend-assigned stable ID
+    val id: String,
     val title: String,
-    val posterUrl: String?,      // absolute URL, backend-signed if needed
-    val backdropUrl: String?,
-    val releaseYear: String?,
+    val posterUrl: String?,
     val rating: Double,
     val mediaType: MediaType,
-    val genres: List<String> = emptyList(),
-    val language: String = "en",
-    val sectionTag: String = "",   // which feed section this came from
 )
 
-// ── Detail model (everything for the detail screen) ───────────────────────────
+// ── Detail screen ─────────────────────────────────────────────────────────────
 data class MediaDetail(
     val id: String,
     val title: String,
+    val tagline: String?,
     val overview: String,
     val posterUrl: String?,
     val backdropUrl: String?,
     val releaseYear: String?,
     val rating: Double,
-    val runtime: Int?,            // minutes for movies
+    val runtime: Int?,
     val mediaType: MediaType,
+    val maturityRating: String?,
     val genres: List<String>,
     val status: String?,
-    val tagline: String?,
-    val seasons: List<Season> = emptyList(),
+    val trailerUrl: String?,
     val cast: List<CastMember> = emptyList(),
-    val trailerUrl: String? = null,
+    val seasons: List<Season> = emptyList(),
     val similar: List<Media> = emptyList(),
-    val imdbId: String? = null,
-    val spokenLanguages: List<String> = emptyList(),
 )
 
+// Season — only season_number per schema v3
 data class Season(
-    val id: String,
     val seasonNumber: Int,
-    val name: String,
-    val episodeCount: Int,
-    val posterUrl: String?,
-    val overview: String?,
-    val airDate: String?,
 )
 
+// Episode — schema v3: id, episode_number, season_number, name, overview, still_url, runtime
 data class Episode(
     val id: String,
     val episodeNumber: Int,
@@ -70,69 +57,71 @@ data class Episode(
     val name: String,
     val overview: String,
     val stillUrl: String?,
-    val airDate: String?,
     val runtime: Int?,
-    val rating: Double,
 )
 
+// Cast member
 data class CastMember(
-    val id: String,
     val name: String,
     val character: String,
     val photoUrl: String?,
-    val order: Int,
 )
 
-// ── Feed — what the home screen receives ──────────────────────────────────────
+// ── Feed ──────────────────────────────────────────────────────────────────────
 data class FeedSection(
-    val id: String,           // stable section key e.g. "trending"
-    val title: String,        // display label e.g. "🔥 Trending Now"
+    val id: String,
+    val title: String,
+    val layout: String = "row",
     val items: List<Media>,
     val hasMore: Boolean = false,
     val nextCursor: String? = null,
 )
 
-// ── Explore filter options from backend ───────────────────────────────────────
+// ── Explore ───────────────────────────────────────────────────────────────────
 data class Genre(val id: String, val name: String)
 
-// ── Stream result ─────────────────────────────────────────────────────────────
-data class StreamResult(
+// ── Stream — schema v3: streams[], expires_at_ms ──────────────────────────────
+data class Subtitle(
     val url: String,
-    val isHls: Boolean,
-    val quality: String = "Auto",
-    val headers: Map<String, String> = emptyMap(),
-    val sourceName: String = "",
-    val subtitles: List<Subtitle> = emptyList(),
-    val qualities: List<QualityTrack> = emptyList(),
+    val language: String,
+    val enabled: Boolean,
 )
 
-data class Subtitle(val url: String, val language: String, val label: String)
+data class StreamTrack(
+    val name: String,
+    val url: String,
+    val type: String,     // "hls" | "mp4"
+    val headers: Map<String, String> = emptyMap(),
+    val subtitles: List<Subtitle> = emptyList(),
+)
 
-data class QualityTrack(
+data class StreamResult(
+    val streams: List<StreamTrack>,
+    val expiresAtMs: Long,
+) {
+    val primaryStream: StreamTrack? get() = streams.firstOrNull()
+    val isHls: Boolean get() = primaryStream?.type == "hls"
+}
+
+// ── Downloads — schema v3: label, url, language, size_bytes, premium ─────────
+data class DownloadLink(
     val label: String,
     val url: String,
-    val bandwidth: Long = 0,
-    val estimatedSizeBytes: Long = 0,
+    val language: String,
+    val sizeBytes: Long,
+    val premium: Boolean,  // shows lock badge; backend enforces server-side
 )
 
-// ── Shorts ────────────────────────────────────────────────────────────────────
+// ── Shorts — schema v3: id, title, source, url, thumbnail ────────────────────
 data class ShortVideo(
     val id: String,
     val title: String,
-    val author: String,
-    val hlsUrl: String,
-    val fallbackUrl: String,
-    val thumbnail: String,
-    val duration: Int,
-    val width: Int,
-    val height: Int,
-    val audioUrl: String? = null,
-    val community: String = "",
-    val ups: Int = 0,
-    val hasAudio: Boolean = true,
+    val source: String?,
+    val url: String,
+    val thumbnail: String?,
 )
 
-// ── Download ──────────────────────────────────────────────────────────────────
+// ── Download item (local tracking) ───────────────────────────────────────────
 data class DownloadItem(
     val id: String,
     val mediaId: String,
@@ -161,17 +150,19 @@ data class DownloadItem(
 // ── User session ──────────────────────────────────────────────────────────────
 data class UserSession(
     val uid: String,
+    val isPremium: Boolean = false,
+    val premiumExpiresAtMs: Long = 0L,
+    val expiresAtMs: Long = 0L,
+    val cachedAtMs: Long = System.currentTimeMillis(),
+    val accessToken: String = "",
+    val refreshToken: String = "",
+    // Profile info from Google SDK (not from backend)
     val name: String = "",
     val email: String = "",
     val photoUrl: String? = null,
-    val isPremium: Boolean = false,
-    val plan: String = "",
-    val expiresAtMs: Long = 0L,
-    val cachedAtMs: Long = System.currentTimeMillis(),
-    val accessToken: String = "",   // JWT issued by the backend after Google sign-in
 )
 
-// ── Watched progress (local-only, not synced) ─────────────────────────────────
+// ── Watch progress (local-only) ───────────────────────────────────────────────
 data class WatchProgress(
     val mediaId: String,
     val season: Int,
@@ -184,4 +175,20 @@ data class WatchProgress(
         get() = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
     val isFinished: Boolean
         get() = percentWatched >= 0.90f
+}
+
+// ── Quality track — for player resolution picker and download sheet ────────────
+// Represents one selectable quality option in the player or download sheet UI.
+// Built from StreamTrack.name/url (player) or DownloadLink.label/url (downloads).
+data class QualityTrack(
+    val label: String,
+    val url: String,
+    val bitrate: Long = 0L,
+    val estimatedSizeBytes: Long = 0L,
+) {
+    /** Parses the numeric height from labels like "1080p", "720p". Returns 0 if not parseable. */
+    fun resolutionHeight(): Int {
+        val m = Regex("""(\d{3,4})p""").find(label.lowercase())
+        return m?.groupValues?.get(1)?.toIntOrNull() ?: 0
+    }
 }

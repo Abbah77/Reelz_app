@@ -228,7 +228,7 @@ class SearchViewModel @Inject constructor(
         if (f.minRating != null) list = list.filter { it.rating >= f.minRating }
         list = when (f.sortBy) {
             "rating" -> list.sortedByDescending { it.rating }
-            "newest" -> list.sortedByDescending { it.releaseYear ?: "" }
+            "newest" -> list.sortedByDescending { it.rating }
             "title"  -> list.sortedBy { it.title }
             else     -> list // popularity — already sorted by TMDB/FTS
         }

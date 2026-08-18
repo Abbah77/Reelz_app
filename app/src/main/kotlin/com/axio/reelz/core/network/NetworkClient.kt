@@ -51,10 +51,10 @@ fun buildOkHttpClient(
     //    Also injects X-Reelz-Token from config (backend uses this for legacy/app auth).
     val auth = Interceptor { chain ->
         val bearerHeader = userRepo().accessToken   // already "Bearer <token>" or ""
-        val appToken     = try { configRepo().current().backendToken } catch (_: Exception) { "" }
+
         val builder = chain.request().newBuilder()
         if (bearerHeader.isNotBlank()) builder.header("Authorization", bearerHeader)
-        if (appToken.isNotBlank())     builder.header("X-Reelz-Token", appToken)
+
         chain.proceed(builder.build())
     }
 

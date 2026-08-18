@@ -1,10 +1,7 @@
 package com.axio.reelz.data.repository
 
 import android.util.Log
-import com.axio.reelz.data.model.MediaType
-import com.axio.reelz.data.model.QualityTrack
-import com.axio.reelz.data.model.StreamResult
-import com.axio.reelz.data.model.Subtitle
+import com.axio.reelz.data.model.*
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.remote.api.StreamRequestBody
 import com.axio.reelz.data.remote.api.SubtitleRequestBody
@@ -16,9 +13,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * FIX: Removed all result.map {} calls — they cause ClassCastException at runtime
- *      when Kotlin type erasure cannot safely coerce between generic types inside
- *      a coroutine suspend function. Replaced with explicit when() branches.
+ * StreamRepository — schema v3
+ *
+ * Stream: returns StreamResult with streams[], expires_at_ms.
+ * Download: returns list of DownloadLink (label, url, language, size_bytes, premium).
+ * Subtitles: returns list of Subtitle (url, language, enabled).
+ *
+ * Auth is optional for all three — guests get identical service.
+ * Token is sent when available to enable server-side history logging.
  */
 @Singleton
 class StreamRepository @Inject constructor(
@@ -29,9 +31,8 @@ class StreamRepository @Inject constructor(
     private data class StreamEntry(
         val result: StreamResult,
         val storedAt: Long = System.currentTimeMillis(),
-        val ttlMs: Long = 240_000L,
     ) {
-        fun isAlive() = System.currentTimeMillis() - storedAt < ttlMs
+        fun isAlive() = System.currentTimeMillis() < result.expiresAtMs
     }
 
     private val streamCache = mutableMapOf<String, StreamEntry>()
@@ -43,28 +44,23 @@ class StreamRepository @Inject constructor(
 
     suspend fun resolveStream(
         id: String,
-        title: String,
         mediaType: MediaType,
         season: Int = 0,
         episode: Int = 0,
     ): NetworkResult<StreamResult> = withContext(Dispatchers.IO) {
 
         val key = cacheKey(id, mediaType, season, episode)
-
         streamCache[key]?.let { entry ->
             if (entry.isAlive()) {
                 Log.d(tag, "Stream cache HIT for $key")
                 return@withContext NetworkResult.Success(entry.result, fromCache = true)
-            } else {
-                streamCache.remove(key)
-                Log.d(tag, "Stream cache EXPIRED for $key")
             }
+            streamCache.remove(key)
         }
 
         val body = StreamRequestBody(
             id      = id,
             type    = if (mediaType == MediaType.MOVIE) "movie" else "tv",
-            title   = title,
             season  = season,
             episode = episode,
         )
@@ -73,18 +69,15 @@ class StreamRepository @Inject constructor(
         return@withContext when (result) {
             is NetworkResult.Success -> {
                 val dto = result.data
-                if (!dto.ok || dto.streamUrl.isBlank()) {
+                if (!dto.ok || dto.streams.isEmpty()) {
                     return@withContext NetworkResult.Error(
-                        message    = "Content not available yet",
+                        message    = "No streams available for this title",
                         isNotFound = true,
                     )
                 }
                 val model = dto.toModel()
-                streamCache[key] = StreamEntry(
-                    result = model,
-                    ttlMs  = dto.cacheTtlMs.coerceAtLeast(60_000L),
-                )
-                Log.d(tag, "Stream resolved for $key (ttl=${dto.cacheTtlMs}ms)")
+                streamCache[key] = StreamEntry(result = model)
+                Log.d(tag, "Stream resolved: ${model.streams.size} track(s) for $key")
                 NetworkResult.Success<StreamResult>(model)
             }
             is NetworkResult.Error -> NetworkResult.Error(
@@ -98,49 +91,28 @@ class StreamRepository @Inject constructor(
     }
 
     fun invalidate(id: String, mediaType: MediaType, season: Int, episode: Int) {
-        val key = cacheKey(id, mediaType, season, episode)
-        if (streamCache.remove(key) != null) {
-            Log.d(tag, "Stream cache invalidated for $key")
-        }
+        streamCache.remove(cacheKey(id, mediaType, season, episode))
     }
 
     // ── Download links ────────────────────────────────────────────────────────
 
-    /**
-     * Calls POST /api/v1/download and returns the raw link list plus the
-     * [maxResolution] cap the backend already applied (0 = no cap).
-     *
-     * The app NEVER enforces its own cap — it just shows a lock badge on
-     * qualities above [maxResolution] using the value the backend reported.
-     */
-    data class DownloadResult(
-        val tracks: List<QualityTrack>,
-        /** Resolution cap the backend applied. 0 = no cap. */
-        val maxResolution: Int,
-    )
-
     suspend fun getDownloadLinks(
         id: String,
-        title: String,
         mediaType: MediaType,
         season: Int = 0,
         episode: Int = 0,
-    ): NetworkResult<DownloadResult> = withContext(Dispatchers.IO) {
+    ): NetworkResult<List<DownloadLink>> = withContext(Dispatchers.IO) {
         val body = StreamRequestBody(
             id      = id,
             type    = if (mediaType == MediaType.MOVIE) "movie" else "tv",
-            title   = title,
             season  = season,
             episode = episode,
         )
         val result = safeApiCall(tag) { api.getDownloadLinks(body) }
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val dto    = result.data
-                val tracks = dto.links.map { it.toTrack() }
-                NetworkResult.Success<DownloadResult>(
-                    DownloadResult(tracks = tracks, maxResolution = dto.maxResolution)
-                )
+                val links = result.data.links.map { it.toModel() }
+                NetworkResult.Success<List<DownloadLink>>(links)
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,

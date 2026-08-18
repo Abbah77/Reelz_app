@@ -6,10 +6,6 @@ import com.axio.reelz.core.database.AppConfigCacheDao
 import com.axio.reelz.core.database.AppConfigCacheRow
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.dto.AppConfigDto
-import com.axio.reelz.data.dto.PremiumConfig
-import com.axio.reelz.data.dto.ShortsConfig
-import com.axio.reelz.data.dto.TierConfig
-import com.axio.reelz.data.dto.TiersConfig
 import com.axio.reelz.core.network.NetworkResult
 import com.axio.reelz.core.network.safeApiCall
 import com.google.gson.Gson
@@ -32,7 +28,7 @@ class ConfigRepository @Inject constructor(
     private val cacheDao: AppConfigCacheDao,
     private val gson: Gson,
 ) {
-    private val tag = "ConfigRepository"
+    private val tag   = "ConfigRepository"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _config = MutableStateFlow<AppConfigDto?>(null)
@@ -41,9 +37,6 @@ class ConfigRepository @Inject constructor(
     private val _state = MutableStateFlow(ConfigState.LOADING)
     val state: StateFlow<ConfigState> = _state.asStateFlow()
 
-    // ── The live backend URL — bootstrapped from BuildConfig, updatable via config ──
-    // On first install: uses BuildConfig.BACKEND_URL.
-    // After first config fetch: may be overridden by the backend itself.
     @Volatile
     private var liveBackendUrl: String = BuildConfig.BACKEND_URL.trimEnd('/')
 
@@ -53,36 +46,29 @@ class ConfigRepository @Inject constructor(
 
     fun current(): AppConfigDto = _config.value ?: AppConfigDto()
     fun isMaintenanceMode(): Boolean = current().forceMaintenance
-
-    fun tiersConfig(): TiersConfig = TiersConfig()  // extend when backend provides tier data
-
-    fun premiumConfig(): PremiumConfig {
-        val p = current().premium
-        return PremiumConfig(
-            monthlyPriceNgn   = p.monthlyPrice,
-            yearlyPriceNgn    = p.monthlyPrice * 10,
-            paystackMonthlyUrl = p.paystackMonthlyUrl,
-            paystackYearlyUrl  = p.paystackYearlyUrl,
-            paymentNote        = "",
-        )
-    }
-
     fun isUnderMaintenance(): Boolean = isMaintenanceMode()
 
-    fun shortsConfig(): ShortsConfig = ShortsConfig()
-    fun areAdsEnabled(isPremiumUser: Boolean = false): Boolean =
-        current().ads.enabled && !isPremiumUser
-    fun adsConfig() = current().ads
-    fun activeAdNetwork() = current().ads.network
     fun areDownloadsEnabled(): Boolean = current().downloadsEnabled
     fun areShortsEnabled(): Boolean = current().shortsEnabled
+    fun isGuestStreamingEnabled(): Boolean = current().guestStreamingEnabled
+    fun searchMinChars(): Int = current().searchMinChars
+
     fun minAppVersion(): Int = current().minAppVersion
     fun latestAppVersion(): Int = current().latestAppVersion
     fun latestApkUrl(): String = current().latestApkUrl
     fun latestVersionCode(): Int = current().latestAppVersion
     fun latestVersionName(): String? = current().latestAppVersion.takeIf { it > 0 }?.toString()
 
-    // ── Init — called from Application.onCreate() ─────────────────────────────
+    fun areAdsEnabled(isPremiumUser: Boolean = false): Boolean =
+        current().ads.enabled && !isPremiumUser
+    fun adsConfig() = current().ads
+
+    fun isPremiumEnabled(): Boolean = current().premium.enabled
+    fun premiumMonthlyPrice(): Long = current().premium.monthlyPrice
+    fun paystackMonthlyUrl(): String = current().premium.paystackMonthlyUrl
+    fun paystackYearlyUrl(): String = current().premium.paystackYearlyUrl
+
+    // ── Init ──────────────────────────────────────────────────────────────────
 
     suspend fun init() = withContext(Dispatchers.IO) {
         val cached = cacheDao.get()
@@ -90,12 +76,10 @@ class ConfigRepository @Inject constructor(
             applyConfig(gson.fromJson(cached.configJson, AppConfigDto::class.java))
             _state.value = ConfigState.READY
             Log.d(tag, "Config loaded from Room v${_config.value?.version}")
-            // Refresh if stale
             if (cached.isStale()) {
                 scope.launch { fetchFromBackend() }
             }
         } else {
-            // First install — block until we have a config
             fetchFromBackend()
         }
     }
@@ -109,12 +93,7 @@ class ConfigRepository @Inject constructor(
                 val dto = result.data
                 applyConfig(dto)
                 _state.value = ConfigState.READY
-                cacheDao.upsert(
-                    AppConfigCacheRow(
-                        configJson = gson.toJson(dto),
-                        version    = dto.version,
-                    )
-                )
+                cacheDao.upsert(AppConfigCacheRow(configJson = gson.toJson(dto), version = dto.version))
                 Log.d(tag, "Config fetched from backend v${dto.version}")
             }
             is NetworkResult.Error -> {
@@ -127,7 +106,5 @@ class ConfigRepository @Inject constructor(
 
     private fun applyConfig(dto: AppConfigDto) {
         _config.value = dto
-        // Update live URL if backend provides an override
-        // (AppConfigDto can carry a backend_url field for URL migration)
     }
 }

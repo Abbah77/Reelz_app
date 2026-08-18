@@ -374,7 +374,7 @@ class PlayerActivity : ComponentActivity() {
         val season        = intent.getIntExtra("season", 0)
         val episode       = intent.getIntExtra("episode", 0)
         val title         = intent.getStringExtra("title") ?: ""
-        val poster        = intent.getStringExtra("posterPath")
+        val poster        = intent.getStringExtra("posterUrl")
         val mediaType     = if (typeStr == "TV") MediaType.TV else MediaType.MOVIE
         val streamUrl     = intent.getStringExtra("streamUrl")
         val streamIsHls   = intent.getBooleanExtra("streamIsHls", false)

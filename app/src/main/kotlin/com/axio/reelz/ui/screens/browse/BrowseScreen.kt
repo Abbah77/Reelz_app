@@ -39,6 +39,7 @@ import com.axio.reelz.core.network.NetworkResult
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.CatalogRepository
 import com.axio.reelz.data.repository.LibraryRepository
+import com.axio.reelz.data.repository.UserRepository
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
 import com.axio.reelz.ui.theme.LocalDimensions
@@ -62,6 +63,7 @@ sealed class FeedRow {
 class BrowseViewModel @Inject constructor(
     private val repo: CatalogRepository,
     private val libraryRepo: LibraryRepository,
+    private val userRepo: UserRepository,
 ) : androidx.lifecycle.ViewModel() {
 
     data class UiState(
@@ -83,6 +85,7 @@ class BrowseViewModel @Inject constructor(
         val watchlistedIds: Set<String> = emptySet(),
         /** Non-null when a background/pull-to-refresh fails but cached content is still shown. */
         val refreshError: String? = null,
+        val isPremium: Boolean = false,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -101,6 +104,11 @@ class BrowseViewModel @Inject constructor(
         viewModelScope.launch {
             libraryRepo.observeRecentProgress(10).collect { recent ->
                 _ui.update { it.copy(continueWatching = recent) }
+            }
+        }
+        viewModelScope.launch {
+            userRepo.session.collect { session ->
+                _ui.update { it.copy(isPremium = session?.isPremium == true) }
             }
         }
     }
@@ -452,19 +460,18 @@ fun BrowseScreen(
                         }
                     }
 
-                    // ── Genre bar ─────────────────────────────────────────────
-                    if (ui.genres.isNotEmpty()) {
-                        item(key = "genreBar") {
-                            PremiumGenreBar(
-                                genres     = ui.genres,
-                                selectedId = ui.selectedGenreId,
-                                onSelect   = { viewModel.selectGenre(it) },
-                            )
-                        }
-                    }
-
                     // ── Genre grid mode ───────────────────────────────────────
                     if (ui.selectedGenreId != null) {
+                        // Keep the bar visible in genre mode too
+                        if (ui.genres.isNotEmpty()) {
+                            item(key = "genreBar") {
+                                StickyGlassGenreBar(
+                                    genres     = ui.genres,
+                                    selectedId = ui.selectedGenreId,
+                                    onSelect   = { viewModel.selectGenre(it) },
+                                )
+                            }
+                        }
                         if (ui.genreItems.isEmpty() && ui.isGenreLoading) {
                             item(key = "genreSkeletonRow") { SkeletonRowLoader() }
                         } else {
@@ -509,6 +516,17 @@ fun BrowseScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        // ── Genre bar ─────────────────────────────────────────
+                        if (ui.genres.isNotEmpty()) {
+                            item(key = "genreBar") {
+                                StickyGlassGenreBar(
+                                    genres     = ui.genres,
+                                    selectedId = ui.selectedGenreId,
+                                    onSelect   = { viewModel.selectGenre(it) },
+                                )
                             }
                         }
 
@@ -785,6 +803,83 @@ fun CollapsingGlassAppBar(
 // ── Premium genre bar ─────────────────────────────────────────────────────────
 
 @Composable
+fun StickyGlassGenreBar(
+    genres     : List<Genre>,
+    selectedId : String?,
+    onSelect   : (String?) -> Unit,
+) {
+    val d = LocalDimensions.current
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xCC050510), Color(0xAA05050E))
+                )
+            )
+            .drawBehind {
+                drawLine(
+                    brush       = Brush.horizontalGradient(
+                        listOf(Color.Transparent, Color(0x33FFFFFF), Color.Transparent)
+                    ),
+                    start       = Offset(0f, size.height),
+                    end         = Offset(size.width, size.height),
+                    strokeWidth = 0.8f,
+                )
+            }
+    ) {
+        LazyRow(
+            contentPadding        = PaddingValues(horizontal = d.screenHorizPad, vertical = d.chipVertPad + d.spaceXs),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm + 1.dp),
+            modifier              = Modifier.fillMaxWidth(),
+        ) {
+            item {
+                StickyGenreChip(label = "✦ All", selected = selectedId == null) { onSelect(null) }
+            }
+            items(genres, key = { it.id }) { g ->
+                StickyGenreChip(label = g.name, selected = selectedId == g.id) { onSelect(g.id) }
+            }
+        }
+    }
+}
+
+@Composable
+fun StickyGenreChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val d = LocalDimensions.current
+    val borderColor by animateColorAsState(
+        if (selected) Brand else Color(0x28FFFFFF),
+        tween(180), label = "chipBorder",
+    )
+    val scale by animateFloatAsState(
+        if (selected) 1.05f else 1f,
+        spring(dampingRatio = 0.5f, stiffness = 420f), label = "chipScale",
+    )
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier         = Modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(d.radiusPill))
+            .background(
+                if (selected)
+                    Brush.linearGradient(listOf(BrandDeep, Brand.copy(.82f)))
+                else
+                    SolidColor(Color(0x14FFFFFF))
+            )
+            .border(1.dp, borderColor, RoundedCornerShape(d.radiusPill))
+            .clickable(onClick = onClick)
+            .padding(horizontal = d.chipHorizPad, vertical = d.chipVertPad),
+    ) {
+        Text(
+            text       = label,
+            color      = if (selected) Color.White else White60,
+            fontSize   = d.textXs,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            maxLines   = 1,
+        )
+    }
+}
+
+@Composable
 fun PremiumGenreBar(
     genres: List<Genre>,
     selectedId: String?,
@@ -931,7 +1026,7 @@ fun HeroBannerPager(
                     }
             ) {
                 AsyncImage(
-                    model              = media.backdropUrl ?: media.posterUrl,
+                    model              = media.posterUrl,
                     contentDescription = null,
                     contentScale       = ContentScale.Crop,
                     modifier           = Modifier.fillMaxSize(),
@@ -973,7 +1068,7 @@ fun HeroBannerPager(
                         horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                     ) {
                         if (media.rating > 0) RatingChip(media.rating)
-                        media.releaseYear?.let {
+                        null?.let {
                             Box(Modifier.size(d.spaceXxs + 1.dp).clip(androidx.compose.foundation.shape.CircleShape).background(White40))
                             Text(it.take(4), color = White60, fontSize = d.textMd)
                         }
@@ -1043,6 +1138,14 @@ fun ContinueCard(
                 .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
                 .background(BgRaised)
         ) {
+            if (!h.posterUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model              = h.posterUrl,
+                    contentDescription = h.title,
+                    contentScale       = ContentScale.Crop,
+                    modifier           = Modifier.fillMaxSize(),
+                )
+            }
             Box(Modifier.fillMaxSize().background(Color(0x55000000)), Alignment.Center) {
                 Box(
                     Modifier.size(d.buttonHeightMd - d.spaceXs).clip(androidx.compose.foundation.shape.CircleShape)

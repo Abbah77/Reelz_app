@@ -317,7 +317,10 @@ class PlayerViewModel @Inject constructor(
                     match?.filePath?.takeIf { it.isNotBlank() } ?: streamUrl
                 } else streamUrl
 
-                val result = StreamResult(url = resolvedUrl, isHls = streamIsHls, sourceName = "prefetched")
+                val track = StreamTrack(name = "Offline", url = resolvedUrl,
+                    type = if (streamIsHls) "hls" else "mp4")
+                val result = StreamResult(streams = listOf(track),
+                    expiresAtMs = Long.MAX_VALUE)
                 lastResult = result
                 playStream(result)
             } else {
@@ -352,16 +355,19 @@ class PlayerViewModel @Inject constructor(
         isFirstPlayThisSession = false
         fallbackIndex = 0
 
-        val result = streamRepo.resolveStream(id, title, type, season, episode)
+        val result = streamRepo.resolveStream(id, type, season, episode)
         when (result) {
             is NetworkResult.Success -> {
                 val stream = result.data
                 lastResult = stream
-                val qualities = stream.qualities.ifEmpty {
-                    listOf(QualityTrack(stream.quality.ifBlank { "Auto" }, stream.url))
-                }
+                // Build quality tracks from streams (one per language track)
+                val qualities = stream.streams.map { t ->
+                    QualityTrack(label = t.name, url = t.url)
+                }.ifEmpty { listOf(QualityTrack("Auto", "")) }
                 _ui.update { it.copy(availableQualities = qualities) }
-                if (stream.subtitles.isNotEmpty()) loadStreamSubtitles(stream.subtitles)
+                // Subtitles from primary stream track
+                val subs = stream.primaryStream?.subtitles ?: emptyList()
+                if (subs.isNotEmpty()) loadStreamSubtitles(subs)
                 playStream(stream)
                 silentRetryCount = 0
             }
@@ -392,7 +398,7 @@ class PlayerViewModel @Inject constructor(
     // ── Subtitle handling ─────────────────────────────────────────────────────
 
     private fun loadStreamSubtitles(subtitles: List<Subtitle>) {
-        val options = subtitles.map { SubtitleOption(it.language, it.label, it.url) }
+        val options = subtitles.map { SubtitleOption(it.language, it.language, it.url, isEnabled = it.enabled) }
         _ui.update { it.copy(subtitleOptions = options, subtitles = subtitles,
             activeSubtitleLanguage = "off", subtitlesEnabled = false) }
     }
@@ -424,7 +430,7 @@ class PlayerViewModel @Inject constructor(
             val result = streamRepo.getSubtitles(currentId, currentType, currentSeason, currentEpisode, langs)
             val subs = (result as? NetworkResult.Success)?.data ?: emptyList()
             if (subs.isNotEmpty()) {
-                val options = subs.map { s -> SubtitleOption(s.language, s.label, s.url) }
+                val options = subs.map { s -> SubtitleOption(s.language, s.language, s.url, isEnabled = s.enabled) }
                 val currentLang = _ui.value.activeSubtitleLanguage
                 _ui.update { it.copy(
                     subtitleOptions     = options,
@@ -616,15 +622,17 @@ class PlayerViewModel @Inject constructor(
     @OptIn(UnstableApi::class)
     fun playStream(result: StreamResult) {
         val p = exoPlayer ?: return
-        val isLocalFile = result.url.startsWith("file://")
-        val item = MediaItem.Builder().setUri(result.url)
+        val primary = result.primaryStream ?: return
+        val url = primary.url
+        val isLocalFile = url.startsWith("file://")
+        val item = MediaItem.Builder().setUri(url)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build()).build()
 
         val mediaDsf = if (isLocalFile) {
             DefaultDataSource.Factory(appContext)
         } else {
             val upstreamDsf = DefaultHttpDataSource.Factory()
-                .setDefaultRequestProperties(result.headers)
+                .setDefaultRequestProperties(primary.headers)
                 .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
                 .setAllowCrossProtocolRedirects(true)
             CacheDataSource.Factory()
@@ -669,7 +677,9 @@ class PlayerViewModel @Inject constructor(
             if (match != null) {
                 val url = match.filePath.takeIf { it.isNotBlank() } ?: return
                 val savedPos = exoPlayer?.currentPosition ?: 0L
-                val result = StreamResult(url = url, isHls = url.contains(".m3u8", ignoreCase = true))
+                val track = StreamTrack(name = label, url = url,
+                    type = if (url.contains(".m3u8", ignoreCase = true)) "hls" else "mp4")
+                val result = StreamResult(streams = listOf(track), expiresAtMs = Long.MAX_VALUE)
                 lastResult = result
                 viewModelScope.launch {
                     playStream(result)
@@ -699,7 +709,7 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(positionMs = pos, bufferedMs = p.bufferedPosition.coerceAtLeast(0), durationMs = dur) }
         if (dur > 0) {
             viewModelScope.launch {
-                libraryRepo.saveProgress(currentId, currentSeason, currentEpisode, pos, dur, currentTitle)
+                libraryRepo.saveProgress(currentId, currentSeason, currentEpisode, pos, dur, currentTitle, currentPoster)
             }
         }
     }
@@ -720,12 +730,13 @@ class PlayerViewModel @Inject constructor(
                 isNetworkError = true)) }
             return
         }
-        val ladder = lastResult?.qualities ?: emptyList()
+        val ladder = lastResult?.streams ?: emptyList()
         val nextIndex = fallbackIndex + 1
         if (nextIndex < ladder.size && ladder[nextIndex].url.isNotBlank()) {
             fallbackIndex = nextIndex
             val next = ladder[nextIndex]
-            val fallback = lastResult!!.copy(url = next.url, quality = next.label)
+            val fallback = StreamResult(streams = listOf(next),
+                expiresAtMs = lastResult?.expiresAtMs ?: Long.MAX_VALUE)
             lastResult = fallback
             _ui.update { it.copy(state = PlayerState.Buffering) }
             playStream(fallback)

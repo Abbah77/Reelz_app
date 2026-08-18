@@ -14,16 +14,6 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * CatalogRepository — owns feed, detail, discover, genres.
- *
- * FIX: ClassCastException was caused by result.map { } being called on
- *      NetworkResult<FeedResponseDto> and trying to coerce it to a different type.
- *      All map() calls replaced with explicit when() branches.
- *
- * FIX: Double-fetch on init — cache check and network refresh now done in one
- *      pass instead of calling getFeed() twice with different parameters.
- */
 @Singleton
 class CatalogRepository @Inject constructor(
     private val api: ReelzApi,
@@ -35,29 +25,21 @@ class CatalogRepository @Inject constructor(
 
     // ── Feed ──────────────────────────────────────────────────────────────────
 
-    /**
-     * Cache-first feed load.
-     *
-     * Returns cached data if fresh, fetches from network if stale/empty.
-     * On network failure, returns stale cache rather than an error screen.
-     */
     suspend fun getFeed(forceRefresh: Boolean = false): NetworkResult<List<FeedSection>> =
         withContext(Dispatchers.IO) {
-            val cached = feedDao.getAll()
+            val cached  = feedDao.getAll()
             val hasCache = cached.isNotEmpty()
             val isStale  = forceRefresh || cached.any { it.isStale() }
 
-            // Serve cache if fresh
             if (hasCache && !isStale) {
                 Log.d(tag, "Feed: serving ${cached.size} sections from cache")
                 return@withContext NetworkResult.Success(
-                    data       = cached.map { it.toFeedSection() },
-                    fromCache  = true,
+                    data      = cached.map { it.toFeedSection() },
+                    fromCache = true,
                     cacheAgeMs = System.currentTimeMillis() - (cached.minOfOrNull { it.cachedAtMs } ?: 0L),
                 )
             }
 
-            // Fetch from backend
             val result = safeApiCall(tag) { api.getFeed(refresh = if (forceRefresh) 1 else 0) }
 
             return@withContext when (result) {
@@ -79,11 +61,10 @@ class CatalogRepository @Inject constructor(
                         Log.d(tag, "Feed: cached ${rows.size} sections")
                     }
                     NetworkResult.Success<List<FeedSection>>(
-                        data = dto.sections.map { it.toModel() },
+                        data = dto.sections.map { it.toModel() }
                     )
                 }
                 is NetworkResult.Error -> {
-                    // Network failed — serve stale cache rather than an error screen
                     if (hasCache) {
                         Log.w(tag, "Feed: network failed, serving stale cache")
                         NetworkResult.Success<List<FeedSection>>(
@@ -92,22 +73,17 @@ class CatalogRepository @Inject constructor(
                         )
                     } else {
                         NetworkResult.Error(
-                            message       = result.message,
-                            code          = result.code,
+                            message        = result.message,
+                            code           = result.code,
                             isNetworkError = result.isNetworkError,
-                            isNotFound    = result.isNotFound,
+                            isNotFound     = result.isNotFound,
                         )
                     }
                 }
                 NetworkResult.Loading -> {
-                    if (hasCache) {
-                        NetworkResult.Success<List<FeedSection>>(
-                            data      = cached.map { it.toFeedSection() },
-                            fromCache = true,
-                        )
-                    } else {
-                        NetworkResult.Loading
-                    }
+                    if (hasCache) NetworkResult.Success<List<FeedSection>>(
+                        data = cached.map { it.toFeedSection() }, fromCache = true
+                    ) else NetworkResult.Loading
                 }
             }
         }
@@ -126,30 +102,26 @@ class CatalogRepository @Inject constructor(
                 NetworkResult.Success<Pair<List<Media>, String?>>(items to result.data.nextCursor)
             }
             is NetworkResult.Error -> NetworkResult.Error(
-                message       = result.message,
-                code          = result.code,
+                message        = result.message,
+                code           = result.code,
                 isNetworkError = result.isNetworkError,
-                isNotFound    = result.isNotFound,
+                isNotFound     = result.isNotFound,
             )
             NetworkResult.Loading -> NetworkResult.Loading
         }
     }
 
-    // ── Discover (Explore screen) ─────────────────────────────────────────────
+    // ── Discover ──────────────────────────────────────────────────────────────
 
     suspend fun discover(
         mediaType: String = "movie",
         genre: String? = null,
-        language: String? = null,
         sortBy: String = "popularity",
-        yearFrom: Int? = null,
-        yearTo: Int? = null,
-        ratingMin: Float? = null,
         cursor: String? = null,
         limit: Int = 20,
     ): NetworkResult<Pair<List<Media>, String?>> = withContext(Dispatchers.IO) {
         val result = safeApiCall(tag) {
-            api.discover(mediaType, genre, language, sortBy, yearFrom, yearTo, ratingMin, cursor, limit)
+            api.discover(mediaType, genre, sortBy, cursor, limit)
         }
         return@withContext when (result) {
             is NetworkResult.Success -> {
@@ -157,10 +129,10 @@ class CatalogRepository @Inject constructor(
                 NetworkResult.Success<Pair<List<Media>, String?>>(items to result.data.nextCursor)
             }
             is NetworkResult.Error -> NetworkResult.Error(
-                message       = result.message,
-                code          = result.code,
+                message        = result.message,
+                code           = result.code,
                 isNetworkError = result.isNetworkError,
-                isNotFound    = result.isNotFound,
+                isNotFound     = result.isNotFound,
             )
             NetworkResult.Loading -> NetworkResult.Loading
         }
@@ -181,15 +153,15 @@ class CatalogRepository @Inject constructor(
             val result = safeApiCall(tag) { api.getGenres(mediaType) }
             return@withContext when (result) {
                 is NetworkResult.Success -> {
-                    val genres = result.data.map { it.toModel() }
+                    val genres = result.data.genres.map { it.toModel() }
                     genreCache[mediaType] = genres to System.currentTimeMillis()
                     NetworkResult.Success<List<Genre>>(genres)
                 }
                 is NetworkResult.Error -> NetworkResult.Error(
-                    message       = result.message,
-                    code          = result.code,
+                    message        = result.message,
+                    code           = result.code,
                     isNetworkError = result.isNetworkError,
-                    isNotFound    = result.isNotFound,
+                    isNotFound     = result.isNotFound,
                 )
                 NetworkResult.Loading -> NetworkResult.Loading
             }
@@ -197,20 +169,18 @@ class CatalogRepository @Inject constructor(
 
     // ── Detail ────────────────────────────────────────────────────────────────
 
-    private val detailMemCache  = object : LinkedHashMap<String, Pair<MediaDetail, Long>>(16, 0.75f, true) {
+    private val detailMemCache = object : LinkedHashMap<String, Pair<MediaDetail, Long>>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: Map.Entry<String, Pair<MediaDetail, Long>>) = size > 12
     }
     private val detailMemTtlMs = 30 * 60_000L
 
     suspend fun getDetail(id: String): NetworkResult<MediaDetail> = withContext(Dispatchers.IO) {
-        // 1. Memory cache
         detailMemCache[id]?.let { (detail, ts) ->
             if (System.currentTimeMillis() - ts < detailMemTtlMs) {
                 return@withContext NetworkResult.Success(detail, fromCache = true)
             }
         }
 
-        // 2. Room cache
         val roomRow = detailDao.get(id)
         if (roomRow != null && !roomRow.isStale()) {
             detailDao.touch(id)
@@ -225,51 +195,32 @@ class CatalogRepository @Inject constructor(
             }
         }
 
-        // 3. Network
         return@withContext fetchDetailFromNetwork(id, roomRow)
     }
 
-    private suspend fun fetchDetailFromNetwork(
-        id: String,
-        staleRow: CachedDetailRow?,
-    ): NetworkResult<MediaDetail> {
+    private suspend fun fetchDetailFromNetwork(id: String, staleRow: CachedDetailRow?): NetworkResult<MediaDetail> {
         val result = safeApiCall(tag) { api.getDetail(id) }
         return when (result) {
             is NetworkResult.Success -> {
                 val dto   = result.data
                 val model = dto.toModel()
-                detailDao.upsert(
-                    CachedDetailRow(
-                        mediaId    = id,
-                        detailJson = gson.toJson(dto),
-                        cacheTtlMs = dto.cacheTtlMs,
-                    )
-                )
+                detailDao.upsert(CachedDetailRow(mediaId = id, detailJson = gson.toJson(dto), cacheTtlMs = dto.cacheTtlMs))
                 detailDao.evictToLimit(500)
                 detailMemCache[id] = model to System.currentTimeMillis()
                 NetworkResult.Success<MediaDetail>(model)
             }
             is NetworkResult.Error -> {
-                // Return stale cache rather than error if available
                 if (staleRow != null) {
                     try {
                         val dto = gson.fromJson(staleRow.detailJson, MediaDetailDto::class.java)
                         NetworkResult.Success<MediaDetail>(dto.toModel(), fromCache = true)
                     } catch (_: Exception) {
-                        NetworkResult.Error(
-                            message       = result.message,
-                            code          = result.code,
-                            isNetworkError = result.isNetworkError,
-                            isNotFound    = result.isNotFound,
-                        )
+                        NetworkResult.Error(message = result.message, code = result.code,
+                            isNetworkError = result.isNetworkError, isNotFound = result.isNotFound)
                     }
                 } else {
-                    NetworkResult.Error(
-                        message       = result.message,
-                        code          = result.code,
-                        isNetworkError = result.isNetworkError,
-                        isNotFound    = result.isNotFound,
-                    )
+                    NetworkResult.Error(message = result.message, code = result.code,
+                        isNetworkError = result.isNetworkError, isNotFound = result.isNotFound)
                 }
             }
             NetworkResult.Loading -> NetworkResult.Loading
@@ -278,8 +229,8 @@ class CatalogRepository @Inject constructor(
 
     // ── Season episodes ───────────────────────────────────────────────────────
 
-    private val seasonMemCache  = mutableMapOf<String, Pair<List<Episode>, Long>>()
-    private val seasonMemTtlMs  = 60 * 60_000L
+    private val seasonMemCache = mutableMapOf<String, Pair<List<Episode>, Long>>()
+    private val seasonMemTtlMs = 60 * 60_000L
 
     suspend fun getSeasonEpisodes(id: String, season: Int): NetworkResult<List<Episode>> =
         withContext(Dispatchers.IO) {
@@ -297,10 +248,10 @@ class CatalogRepository @Inject constructor(
                     NetworkResult.Success<List<Episode>>(eps)
                 }
                 is NetworkResult.Error -> NetworkResult.Error(
-                    message       = result.message,
-                    code          = result.code,
+                    message        = result.message,
+                    code           = result.code,
                     isNetworkError = result.isNetworkError,
-                    isNotFound    = result.isNotFound,
+                    isNotFound     = result.isNotFound,
                 )
                 NetworkResult.Loading -> NetworkResult.Loading
             }

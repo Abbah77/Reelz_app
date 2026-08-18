@@ -249,9 +249,9 @@ class ShortsViewModel @Inject constructor(
     private val configRepo: com.axio.reelz.data.repository.ConfigRepository,
 ) : ViewModel() {
 
-    val shortsConfig       get() = configRepo.shortsConfig()
-    private val categories get() = shortsConfig.categories
-    private val archiveCfg get() = shortsConfig.archiveOrg
+    val shortsConfig       get() = null
+    
+    
 
     private val okHttp by lazy {
         OkHttpClient.Builder()
@@ -456,7 +456,7 @@ class ShortsViewModel @Inject constructor(
 
         viewModelScope.launch {
             val videos = withContext(Dispatchers.IO) {
-                resolveNextPage(feedKey = "for_you", pool = shortsConfig.forYouItems)
+                resolveNextPage(feedKey = "for_you", pool = emptyList())
             }
             dbg("forYou total=${videos.size}")
             if (append) {
@@ -517,7 +517,7 @@ class ShortsViewModel @Inject constructor(
             return emptyList()
         }
 
-        val pageSize = shortsConfig.itemsPerPage.coerceAtLeast(1)
+        val pageSize = 10
         val cursor   = cursorFor(feedKey, expandedPool)
         val slice    = cursor.shuffledItems.drop(cursor.resolvedCount).take(pageSize)
         cursors[feedKey] = cursor.copy(resolvedCount = cursor.resolvedCount + slice.size)
@@ -576,8 +576,8 @@ class ShortsViewModel @Inject constructor(
                 return emptyList()
             }
 
-            val exts     = shortsConfig.videoExtensions.map { it.lowercase().removePrefix(".") }
-            val excludes = shortsConfig.excludedNameContains.map { it.lowercase() }
+            val exts     = listOf("mp4", "m3u8")
+            val excludes = emptyList<String>()
             val itemMeta = root.optJSONObject("metadata")
             val itemTitle = itemMeta?.optString("title").orEmpty()
             val itemDesc  = itemMeta?.optString("description").orEmpty()
@@ -604,10 +604,12 @@ class ShortsViewModel @Inject constructor(
                 val caption = name.substringBeforeLast('.').ifBlank { itemTitle.ifBlank { identifier } }
 
                 result += ShortVideo(
-                    id          = "$identifier/$name",
-                    title       = caption,
-                    author      = itemTitle.ifBlank { identifier },
-                    community   = itemDesc.take(40),
+                    id        = "$identifier/$videoFile",
+                    title     = videoTitle.ifBlank { itemTitle },
+                    source    = "original",
+                    url       = videoUrl,
+                    thumbnail = thumbUrl,
+                ),
                     hlsUrl      = videoUrl,
                     audioUrl    = null,
                     fallbackUrl = videoUrl,
@@ -823,7 +825,7 @@ private fun rememberShortsPlayerPool(
     }
 
     fun buildMediaSource(video: ShortVideo): androidx.media3.exoplayer.source.MediaSource {
-        val primaryUrl = video.hlsUrl.ifBlank { video.fallbackUrl }
+        val primaryUrl = video.url
         val isRealHls  = primaryUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
         val videoSrc = if (isRealHls) {
             // HLS segments are already chunked/cached by the HLS stack itself;
@@ -897,8 +899,8 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     val maxPullPx          = with(androidx.compose.ui.platform.LocalDensity.current) { 80.dp.toPx() }
     val pullIndicatorScale = (pullOverscrollPx / maxPullPx).coerceIn(0f, 1f)
 
-    val shortsConfig = vm.shortsConfig
-    val httpFactory = remember(shortsConfig) {
+    
+    val httpFactory = remember {
         // archive.org direct downloads need no special Referer/Origin spoofing
         // (that was an ifunny.club anti-hotlinking workaround) — just a
         // reasonable UA and generous timeouts/redirect handling.

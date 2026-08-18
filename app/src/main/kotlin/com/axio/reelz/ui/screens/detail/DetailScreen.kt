@@ -133,6 +133,7 @@ class DetailViewModel @Inject constructor(
         // Download sheet state
         val showDownloadSheet: Boolean = false,
         val downloadQualities: List<QualityTrack> = emptyList(),
+        val downloadLinks: List<com.axio.reelz.data.model.DownloadLink> = emptyList(),
         val alreadyDownloadedQualities: Set<String> = emptySet(),
         val isResolvingQualities: Boolean = false,
         val downloadEnqueued: Boolean = false,
@@ -239,9 +240,10 @@ class DetailViewModel @Inject constructor(
                         return@launch
                     }
                 currentMedia = com.axio.reelz.data.model.Media(
-                    id = detail.id, title = detail.title,
-                    posterUrl = detail.posterUrl, backdropUrl = detail.backdropUrl,
-                    releaseYear = detail.releaseYear, rating = detail.rating,
+                    id        = detail.id,
+                    title     = detail.title,
+                    posterUrl = detail.posterUrl,
+                    rating    = detail.rating,
                     mediaType = mediaType,
                 )
                 _ui.update { it.copy(isLoading = false, detail = detail, isInWatchlist = inWatchlist) }
@@ -255,14 +257,14 @@ class DetailViewModel @Inject constructor(
                     try {
                         val key = qualityKey(id)
                         val streamResult = streamRepo.resolveStream(
-                            id = id, title = detail.title, mediaType = mediaType
+                            id = id, mediaType = mediaType
                         )
                         if (streamResult is com.axio.reelz.core.network.NetworkResult.Success) {
                             preResolvedStream = streamResult.data
                             if (preResolvedQualities[key].isNullOrEmpty()) {
-                                preResolvedQualities[key] = streamResult.data.qualities.ifEmpty {
-                                    listOf(QualityTrack(streamResult.data.quality.ifBlank { "Auto" }, streamResult.data.url))
-                                }
+                                preResolvedQualities[key] = streamResult.data.streams.map { t ->
+                                    QualityTrack(label = t.name, url = t.url)
+                                }.ifEmpty { listOf(QualityTrack("Auto", "")) }
                             }
                         }
                     } catch (_: Exception) {}
@@ -358,23 +360,25 @@ class DetailViewModel @Inject constructor(
         // The app renders whatever comes back; it never infers labels or enforces caps itself.
         viewModelScope.launch {
             val dlResult = streamRepo.getDownloadLinks(
-                id = id, title = detail.title, mediaType = mediaType,
+                id = id, mediaType = mediaType,
                 season = season, episode = episode,
             )
-            val downloadResult = (dlResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data
-            if (downloadResult != null && downloadResult.tracks.isNotEmpty()) {
-                preResolvedQualities[key] = downloadResult.tracks
+            val links = (dlResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data
+            if (!links.isNullOrEmpty()) {
+                // Convert DownloadLink → QualityTrack for the download picker UI
+                val tracks = links.map { l -> QualityTrack(label = l.label, url = l.url,
+                    estimatedSizeBytes = l.sizeBytes) }
+                preResolvedQualities[key] = tracks
                 _ui.update {
                     it.copy(
-                        downloadQualities           = downloadResult.tracks,
-                        // maxResolution comes from the backend — 0 means no cap
-                        maxDownloadResolutionHeight = downloadResult.maxResolution,
+                        downloadQualities           = tracks,
+                        downloadLinks               = links,
                         isResolvingQualities        = false,
                     )
                 }
             } else {
-                // No download links found — show nothing (or a single fallback if stream is known)
-                val fallbackUrl = preResolvedStream?.url ?: ""
+                // No download links found
+                val fallbackUrl = preResolvedStream?.primaryStream?.url ?: ""
                 val fallback = if (fallbackUrl.isNotBlank())
                     listOf(QualityTrack("Best available", fallbackUrl))
                 else emptyList()
@@ -460,10 +464,10 @@ fun DetailScreen(
                 putExtra("episode",    episode)
                 putExtra("title",      if (epName.isNotBlank()) epName else d.title)
                 putExtra("posterUrl", d.posterUrl)
-                readyStream?.let { stream ->
-                    putExtra("streamUrl",     stream.url)
-                    putExtra("streamIsHls",   stream.isHls)
-                    // referer/origin headers are included in stream.headers map
+                readyStream?.primaryStream?.let { track ->
+                    putExtra("streamUrl",   track.url)
+                    putExtra("streamIsHls", track.type == "hls")
+                    // referer/origin headers are passed via track.headers map
                 }
             })
         }

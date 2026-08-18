@@ -39,9 +39,6 @@ import androidx.navigation.NavController
 import com.axio.reelz.ads.ReelzBrowserSheet
 import com.axio.reelz.data.repository.PaymentRepository
 import com.axio.reelz.data.repository.UserRepository
-import com.axio.reelz.data.dto.TiersConfig
-import com.axio.reelz.data.dto.PremiumConfig
-import com.axio.reelz.data.dto.TierConfig
 import com.axio.reelz.data.dto.UserState
 import com.axio.reelz.data.repository.ConfigRepository
 import com.axio.reelz.ui.components.BrandButton
@@ -87,8 +84,6 @@ class PremiumViewModel @Inject constructor(
     data class UiState(
         val userState: UserState = UserState.GUEST,
         val daysUntilExpiry: Int = 0,
-        val freeTier: TierConfig = TierConfig(),
-        val premiumTier: TierConfig = TierConfig(),
         val premiumConfig: PremiumConfig = PremiumConfig(),
         val isRefreshing: Boolean = false,
         val refreshMessage: String? = null,
@@ -106,12 +101,18 @@ class PremiumViewModel @Inject constructor(
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     init {
-        val tiers = configRepo.tiersConfig()
+        
         _ui.update {
             it.copy(
-                freeTier          = tiers.free,
-                premiumTier       = tiers.premium,
-                premiumConfig     = configRepo.premiumConfig(),
+                
+                
+                premiumConfig     = com.axio.reelz.data.dto.PremiumConfig(
+                    monthlyPriceNgn    = configRepo.premiumMonthlyPrice(),
+                    yearlyPriceNgn     = configRepo.premiumMonthlyPrice() * 10,
+                    paystackMonthlyUrl = configRepo.paystackMonthlyUrl(),
+                    paystackYearlyUrl  = configRepo.paystackYearlyUrl(),
+                    paymentNote        = "",
+                ),
                 backendConfigured = configRepo.backendUrl().isNotBlank(),
             )
         }
@@ -166,8 +167,8 @@ class PremiumViewModel @Inject constructor(
                     // Backend unreachable — use the static link from config so the
                     // user is never blocked from paying.
                     val staticUrl = when (plan) {
-                        "yearly"  -> configRepo.premiumConfig().paystackYearlyUrl
-                        else      -> configRepo.premiumConfig().paystackMonthlyUrl
+                        "yearly"  -> configRepo.paystackYearlyUrl()
+                        else      -> configRepo.paystackMonthlyUrl()
                     }
                     if (staticUrl.isNotBlank()) {
                         _ui.update {
@@ -205,7 +206,7 @@ class PremiumViewModel @Inject constructor(
     fun refreshStatus() {
         viewModelScope.launch {
             _ui.update { it.copy(isRefreshing = true, refreshMessage = null) }
-            userSessionRepository.refreshSession()
+            userSessionRepository.refreshAccessToken()
             val became = sessionRepo.isPremium
             _ui.update {
                 it.copy(

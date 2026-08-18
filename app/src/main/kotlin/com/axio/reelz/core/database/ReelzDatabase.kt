@@ -6,25 +6,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ReelzDatabase v1 — Smart-cache edition
+//  ReelzDatabase v5 — Schema v3 edition
 //
-//  Philosophy:
-//   • Cache ONLY what the UI needs to render without a network call.
-//   • No TMDB IDs, no section engines, no bulk discover dumps.
-//   • Smart TTL: each row stores cachedAtMs; fresh check is one comparison.
-//   • Small footprint: target ~500 detail rows, ~2000 feed card rows.
-//
-//  Tables:
-//   cached_feed      — feed sections served offline (home screen)
-//   cached_detail    — detail pages served offline
-//   cached_search    — recent search results (capped at 100)
-//   watch_progress   — playback resume positions (purely local, never bulk)
-//   watchlist        — user's saved titles (synced on auth)
-//   recent_searches  — search query history (local only, max 15)
-//   user_session     — auth token + premium status
-//   app_config_cache — app config (feature flags, ads, etc.)
-//   downloads        — offline download queue + state
-//   download_subtitles — per-download subtitle files
+//  Changes in v5:
+//   • UserSessionRow: added refreshToken, premiumExpiresAtMs columns
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Feed cache ────────────────────────────────────────────────────────────────
@@ -32,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
 data class CachedFeedRow(
     @PrimaryKey val sectionId: String,
     val title: String,
-    val itemsJson: String,        // JSON array of MediaDto (Gson serialised)
+    val itemsJson: String,
     val hasMore: Boolean = false,
     val nextCursor: String? = null,
     val cacheTtlMs: Long = 3_600_000L,
@@ -64,7 +49,6 @@ interface FeedCacheDao {
     @Query("SELECT COUNT(*) FROM cached_feed")
     suspend fun count(): Int
 
-    // Evict all stale rows (called on pull-to-refresh or daily worker)
     @Query("DELETE FROM cached_feed WHERE (cachedAtMs + cacheTtlMs) < :now")
     suspend fun evictStale(now: Long = System.currentTimeMillis())
 }
@@ -73,7 +57,7 @@ interface FeedCacheDao {
 @Entity(tableName = "cached_detail", indices = [Index("cachedAtMs")])
 data class CachedDetailRow(
     @PrimaryKey val mediaId: String,
-    val detailJson: String,       // JSON of MediaDetailDto
+    val detailJson: String,
     val cacheTtlMs: Long = 3_600_000L,
     val cachedAtMs: Long = System.currentTimeMillis(),
     val lastAccessedMs: Long = System.currentTimeMillis(),
@@ -95,7 +79,6 @@ interface DetailCacheDao {
     @Query("SELECT COUNT(*) FROM cached_detail")
     suspend fun count(): Int
 
-    // Keep only the N most recently accessed rows
     @Query("""
         DELETE FROM cached_detail WHERE mediaId NOT IN (
             SELECT mediaId FROM cached_detail ORDER BY lastAccessedMs DESC LIMIT :keepCount
@@ -114,7 +97,7 @@ data class CachedSearchRow(
     val resultsJson: String,
     val hasMore: Boolean = false,
     val nextCursor: String? = null,
-    val cacheTtlMs: Long = 300_000L,  // 5 min — search results change often
+    val cacheTtlMs: Long = 300_000L,
     val cachedAtMs: Long = System.currentTimeMillis(),
 ) {
     fun isStale(): Boolean = System.currentTimeMillis() - cachedAtMs > cacheTtlMs
@@ -131,7 +114,6 @@ interface SearchCacheDao {
     @Query("SELECT COUNT(*) FROM cached_search")
     suspend fun count(): Int
 
-    // Keep only the 100 most recent search caches
     @Query("""
         DELETE FROM cached_search WHERE query NOT IN (
             SELECT query FROM cached_search ORDER BY cachedAtMs DESC LIMIT 100
@@ -141,8 +123,7 @@ interface SearchCacheDao {
 }
 
 // ── Watch progress ────────────────────────────────────────────────────────────
-@Entity(tableName = "watch_progress",
-    primaryKeys = ["mediaId", "season", "episode"])
+@Entity(tableName = "watch_progress", primaryKeys = ["mediaId", "season", "episode"])
 data class WatchProgressRow(
     val mediaId: String,
     val season: Int,
@@ -150,10 +131,8 @@ data class WatchProgressRow(
     val positionMs: Long,
     val durationMs: Long,
     val watchedAt: Long = System.currentTimeMillis(),
-    // Added in DB v3: human-readable title for "Continue Watching" UI.
-    // Stored here so ContinueCard never has to join another table.
-    // Default empty string keeps Migration 2→3 safe (existing rows get "").
     @androidx.room.ColumnInfo(defaultValue = "") val title: String = "",
+    @androidx.room.ColumnInfo(name = "posterUrl", defaultValue = "") val posterUrl: String? = null,
 ) {
     val percentWatched: Float
         get() = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
@@ -163,10 +142,7 @@ data class WatchProgressRow(
 
 @Dao
 interface WatchProgressDao {
-    @Query("""
-        SELECT * FROM watch_progress
-        WHERE mediaId = :id AND season = :s AND episode = :ep LIMIT 1
-    """)
+    @Query("SELECT * FROM watch_progress WHERE mediaId = :id AND season = :s AND episode = :ep LIMIT 1")
     suspend fun get(id: String, s: Int, ep: Int): WatchProgressRow?
 
     @Query("SELECT * FROM watch_progress ORDER BY watchedAt DESC LIMIT :limit")
@@ -175,8 +151,24 @@ interface WatchProgressDao {
     @Query("SELECT * FROM watch_progress ORDER BY watchedAt DESC LIMIT :limit")
     fun observeRecent(limit: Int = 20): Flow<List<WatchProgressRow>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(row: WatchProgressRow)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfNew(row: WatchProgressRow)
+
+    @Query("""
+        UPDATE watch_progress
+        SET positionMs = :positionMs,
+            durationMs = :durationMs,
+            title      = CASE WHEN :title != '' THEN :title ELSE title END,
+            posterUrl  = CASE WHEN :posterUrl IS NOT NULL THEN :posterUrl ELSE posterUrl END,
+            watchedAt  = :watchedAt
+        WHERE mediaId = :mediaId AND season = :season AND episode = :episode
+    """)
+    suspend fun updateProgress(
+        mediaId: String, season: Int, episode: Int,
+        positionMs: Long, durationMs: Long,
+        title: String, posterUrl: String?,
+        watchedAt: Long,
+    )
 
     @Query("DELETE FROM watch_progress WHERE mediaId = :id")
     suspend fun deleteForMedia(id: String)
@@ -184,7 +176,6 @@ interface WatchProgressDao {
     @Query("DELETE FROM watch_progress")
     suspend fun clear()
 
-    // Trim to keep only the last 500 entries
     @Query("""
         DELETE FROM watch_progress WHERE rowid NOT IN (
             SELECT rowid FROM watch_progress ORDER BY watchedAt DESC LIMIT 500
@@ -256,7 +247,7 @@ interface RecentSearchDao {
     suspend fun trimToLimit()
 }
 
-// ── User session ──────────────────────────────────────────────────────────────
+// ── User session — schema v3: adds refreshToken, premiumExpiresAtMs ───────────
 @Entity(tableName = "user_session")
 data class UserSessionRow(
     @PrimaryKey val uid: String,
@@ -264,14 +255,12 @@ data class UserSessionRow(
     val email: String = "",
     val photoUrl: String? = null,
     val accessToken: String = "",
+    val refreshToken: String = "",
     val isPremium: Boolean = false,
-    val plan: String = "",
+    val premiumExpiresAtMs: Long = 0L,
     val expiresAtMs: Long = 0L,
     val cachedAtMs: Long = System.currentTimeMillis(),
-) {
-    fun isTokenStale(): Boolean =
-        System.currentTimeMillis() - cachedAtMs > 24 * 3_600_000L // 24 h
-}
+)
 
 @Dao
 interface UserSessionDao {
@@ -293,8 +282,7 @@ data class AppConfigCacheRow(
     val version: Int = 1,
     val cachedAtMs: Long = System.currentTimeMillis(),
 ) {
-    fun isStale(): Boolean =
-        System.currentTimeMillis() - cachedAtMs > 6 * 3_600_000L  // 6 h
+    fun isStale(): Boolean = System.currentTimeMillis() - cachedAtMs > 6 * 3_600_000L
 }
 
 @Dao
@@ -418,15 +406,130 @@ interface DownloadSubtitleDao {
     suspend fun deleteForDownload(id: String)
 }
 
-// ── Database ──────────────────────────────────────────────────────────────────
-// ── Migration 2 → 3 ──────────────────────────────────────────────────────────
-// Adds `title` column to watch_progress. Existing rows default to empty string;
-// the title will be populated correctly on the next save from the player.
+// ── Transfer types ─────────────────────────────────────────────────────────────
+@Entity(tableName = "transfer_history")
+data class TransferRecord(
+    @PrimaryKey val id: String,
+    val fileName: String,
+    val sizeBytes: Long,
+    val direction: String,
+    val peerName: String,
+    val status: String,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Dao
+interface TransferDao {
+    @Query("SELECT * FROM transfer_history ORDER BY createdAt DESC")
+    fun getAll(): Flow<List<TransferRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(record: TransferRecord)
+
+    @Query("DELETE FROM transfer_history WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM transfer_history")
+    suspend fun clear()
+}
+
+// ── Supplemental view types ───────────────────────────────────────────────────
+data class WatchlistItem(
+    val mediaId: String,
+    val title: String,
+    val posterUrl: String?,
+    val mediaType: String,
+    val addedAt: Long,
+)
+
+data class WatchHistory(
+    val mediaId: String,
+    val title: String?,
+    @androidx.room.ColumnInfo(name = "posterUrl") val posterPath: String?,
+    val mediaType: String?,
+    val positionMs: Long,
+    val durationMs: Long,
+    val watchedAt: Long,
+)
+
+data class SavedVideoItem(
+    val mediaId: String,
+    val title: String,
+    val posterUrl: String?,
+    val mediaType: String,
+    val addedAt: Long,
+)
+
+@Dao
+interface WatchHistoryDao {
+    @Query("""
+        SELECT wp.mediaId,
+               COALESCE(wl.title, NULLIF(wp.title, ''), wp.mediaId) AS title,
+               COALESCE(wp.posterUrl, wl.posterUrl)                  AS posterUrl,
+               COALESCE(wl.mediaType, 'movie')                       AS mediaType,
+               wp.positionMs, wp.durationMs, wp.watchedAt
+        FROM watch_progress wp
+        LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId
+        INNER JOIN (
+            SELECT mediaId, MAX(watchedAt) AS latestAt
+            FROM watch_progress
+            GROUP BY mediaId
+        ) latest ON latest.mediaId = wp.mediaId AND latest.latestAt = wp.watchedAt
+        ORDER BY wp.watchedAt DESC
+    """)
+    fun observeAll(): Flow<List<WatchHistory>>
+
+    @Query("""
+        SELECT wp.mediaId,
+               COALESCE(wl.title, NULLIF(wp.title, ''), wp.mediaId) AS title,
+               COALESCE(wp.posterUrl, wl.posterUrl)                  AS posterUrl,
+               COALESCE(wl.mediaType, 'movie')                       AS mediaType,
+               wp.positionMs, wp.durationMs, wp.watchedAt
+        FROM watch_progress wp
+        LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId
+        INNER JOIN (
+            SELECT mediaId, MAX(watchedAt) AS latestAt
+            FROM watch_progress
+            GROUP BY mediaId
+        ) latest ON latest.mediaId = wp.mediaId AND latest.latestAt = wp.watchedAt
+        ORDER BY wp.watchedAt DESC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getPage(limit: Int = 20, offset: Int = 0): List<WatchHistory>
+
+    @Query("SELECT COUNT(*) FROM (SELECT mediaId FROM watch_progress GROUP BY mediaId)")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM watch_progress")
+    suspend fun clear()
+}
+
+@Dao
+interface SavedVideoDao {
+    @Query("SELECT mediaId, title, posterUrl, mediaType, addedAt FROM watchlist ORDER BY addedAt DESC")
+    fun getAll(): Flow<List<SavedVideoItem>>
+}
+
+// ── Migrations ────────────────────────────────────────────────────────────────
 val MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL(
-            "ALTER TABLE watch_progress ADD COLUMN title TEXT NOT NULL DEFAULT ''"
-        )
+        db.execSQL("ALTER TABLE watch_progress ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE watch_progress ADD COLUMN posterUrl TEXT")
+    }
+}
+
+// Migration 4→5: add refreshToken and premiumExpiresAtMs to user_session
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE user_session ADD COLUMN refreshToken TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE user_session ADD COLUMN premiumExpiresAtMs INTEGER NOT NULL DEFAULT 0")
+        // plan column no longer needed — status is computed; remove would need table rebuild
+        // Just leave it; it will be ignored by the new UserSessionRow mapping
     }
 }
 
@@ -444,7 +547,7 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         DownloadSubtitleRow::class,
         TransferRecord::class,
     ],
-    version = 3,
+    version = 5,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {
@@ -461,121 +564,4 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun watchHistoryDao(): WatchHistoryDao
     abstract fun savedVideoDao(): SavedVideoDao
     abstract fun transferDao(): TransferDao
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Supplemental types needed by ProfileScreen & TransferScreen
-//  Added here to keep them co-located with the DB schema they depend on.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ── View models returned by profile DAOs ──────────────────────────────────────
-// These are NOT @Entity — they are plain data classes produced by DAO queries.
-
-data class WatchlistItem(
-    val mediaId: String,
-    val title: String,
-    val posterUrl: String?,
-    val mediaType: String,
-    val addedAt: Long,
-)
-
-data class WatchHistory(
-    val mediaId: String,
-    // Nullable: LEFT JOIN wl may return NULL when the item was watched but
-    // never added to the watchlist table (e.g. user watched without saving).
-    // Room calls getString() on the cursor column — if the column is NULL and
-    // the Kotlin field is non-nullable, Room throws NullPointerException at
-    // runtime (obfuscated in release builds as "getString(...) must not be null").
-    val title: String?,
-    @androidx.room.ColumnInfo(name = "posterUrl") val posterPath: String?,
-    val mediaType: String?,
-    val positionMs: Long,
-    val durationMs: Long,
-    val watchedAt: Long,
-)
-
-data class SavedVideoItem(
-    val mediaId: String,
-    val title: String,
-    val posterUrl: String?,
-    val mediaType: String,
-    val addedAt: Long,
-)
-
-// ── WatchHistoryDao — backed by WatchProgressRow joined with WatchlistRow ─────
-// Returns paginated history ordered by most-recently-watched.
-// Profile screen uses watch_progress for "Continue Watching" history, and
-// watchlist for the saved title metadata (title, poster, mediaType).
-@Dao
-interface WatchHistoryDao {
-    @Query("""
-        SELECT wp.mediaId,
-               COALESCE(wl.title, wp.mediaId) AS title,
-               wl.posterUrl,
-               COALESCE(wl.mediaType, 'movie') AS mediaType,
-               wp.positionMs, wp.durationMs, wp.watchedAt
-        FROM watch_progress wp
-        LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId
-        WHERE wp.season = 0 AND wp.episode = 0
-        ORDER BY wp.watchedAt DESC
-    """)
-    fun observeAll(): kotlinx.coroutines.flow.Flow<List<WatchHistory>>
-    @Query("""
-        SELECT wp.mediaId,
-               COALESCE(wl.title, wp.mediaId) AS title,
-               wl.posterUrl,
-               COALESCE(wl.mediaType, 'movie') AS mediaType,
-               wp.positionMs, wp.durationMs, wp.watchedAt
-        FROM watch_progress wp
-        LEFT JOIN watchlist wl ON wl.mediaId = wp.mediaId
-        WHERE wp.season = 0 AND wp.episode = 0
-        ORDER BY wp.watchedAt DESC
-        LIMIT :limit OFFSET :offset
-    """)
-    suspend fun getPage(limit: Int = 20, offset: Int = 0): List<WatchHistory>
-
-    @Query("SELECT COUNT(*) FROM watch_progress WHERE season = 0 AND episode = 0")
-    suspend fun count(): Int
-
-    @Query("DELETE FROM watch_progress")
-    suspend fun clear()
-}
-
-// ── SavedVideoDao — alias for watchlist with a SavedVideoItem projection ──────
-// "Saved" tab on Profile is the same as Watchlist — different UI label, same data.
-@Dao
-interface SavedVideoDao {
-    @Query("""
-        SELECT mediaId, title, posterUrl, mediaType, addedAt
-        FROM watchlist ORDER BY addedAt DESC
-    """)
-    fun getAll(): Flow<List<SavedVideoItem>>
-}
-
-// ── Transfer types ─────────────────────────────────────────────────────────────
-
-@Entity(tableName = "transfer_history")
-data class TransferRecord(
-    @PrimaryKey val id: String,
-    val fileName: String,
-    val sizeBytes: Long,
-    val direction: String,   // "SEND" | "RECEIVE"
-    val peerName: String,
-    val status: String,      // "DONE" | "ERROR" | "CANCELLED"
-    val createdAt: Long = System.currentTimeMillis(),
-)
-
-@Dao
-interface TransferDao {
-    @Query("SELECT * FROM transfer_history ORDER BY createdAt DESC")
-    fun getAll(): Flow<List<TransferRecord>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(record: TransferRecord)
-
-    @Query("DELETE FROM transfer_history WHERE id = :id")
-    suspend fun delete(id: String)
-
-    @Query("DELETE FROM transfer_history")
-    suspend fun clear()
 }
