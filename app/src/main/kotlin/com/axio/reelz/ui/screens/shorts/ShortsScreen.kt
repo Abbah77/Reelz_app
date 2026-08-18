@@ -51,7 +51,6 @@ import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ads.ShortsNativeAdPage
-import com.axio.reelz.data.dto.ShortCategory
 import com.axio.reelz.data.model.ShortVideo
 // StreamHeaders removed — using inline UA constant below
 import com.axio.reelz.ui.components.CinematicSpinner
@@ -68,16 +67,9 @@ import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.json.JSONObject
-import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
@@ -242,6 +234,11 @@ private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = bu
 //     filters, and exclusion rules all come from ShortsConfig.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Simple category type for Shorts discovery tabs ────────────────────────────
+// Schema v3: shorts are fully backend-driven. Categories are derived from
+// the "source" field on ShortVideo items returned by GET /api/v1/shorts.
+data class ShortCategory(val label: String, val source: String?)
+
 @HiltViewModel
 class ShortsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -249,112 +246,9 @@ class ShortsViewModel @Inject constructor(
     private val configRepo: com.axio.reelz.data.repository.ConfigRepository,
 ) : ViewModel() {
 
-    val shortsConfig       get() = null
-    
-    
-
-    private val okHttp by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(archiveCfg.requestTimeoutMs, TimeUnit.MILLISECONDS)
-            .readTimeout(archiveCfg.requestTimeoutMs, TimeUnit.MILLISECONDS)
-            .build()
-    }
-
-    // Per-feed pagination cursor state: the shuffled identifier order and
-    // how far into it we've resolved. Keyed by a feed key ("for_you" or
-    // "cat_<index>") so switching tabs/categories doesn't clobber cursors.
-    private data class FeedCursor(val shuffledItems: List<String>, val resolvedCount: Int)
-    private val cursors = mutableMapOf<String, FeedCursor>()
-
-    private fun cursorFor(key: String, pool: List<String>): FeedCursor {
-        val existing = cursors[key]
-        if (existing != null && existing.resolvedCount < existing.shuffledItems.size) return existing
-        // Pool exhausted (or first run) — reshuffle so infinite scroll never
-        // repeats the exact same order twice in a row.
-        val fresh = FeedCursor(shuffledItems = pool.shuffled(), resolvedCount = 0)
-        cursors[key] = fresh
-        return fresh
-    }
-
-    // Cache of collection-name -> expanded list of individual item
-    // identifiers, so a config entry can point at either a single archive.org
-    // item OR a whole collection (e.g. "tiktoks", which itself contains
-    // thousands of single-video items) without needing different config
-    // shapes. Expansion only has to happen once per collection per session.
-    private val collectionCache = mutableMapOf<String, List<String>>()
-
-    private companion object {
-        const val COLLECTION_PAGE_ROWS = 200
-    }
-
-    /**
-     * Expands every pool entry into concrete item identifiers. An entry that
-     * is already a playable item passes through untouched; an entry that
-     * turns out to be a collection (mediatype:collection, e.g. "tiktoks")
-     * is expanded via archive.org's advancedsearch.php into up to
-     * COLLECTION_PAGE_ROWS of its member item identifiers, cached for the
-     * rest of the session. This runs once per distinct pool per feed, not
-     * per page, so it doesn't slow down pagination after the first load.
-     */
-    private suspend fun expandPool(pool: List<String>): List<String> = coroutineScope {
-        pool.map { entry -> async { expandEntry(entry.trim()) } }
-            .awaitAll()
-            .flatten()
-    }
-
-    private fun expandEntry(entry: String): List<String> {
-        if (entry.isBlank()) return emptyList()
-        collectionCache[entry]?.let { return it }
-
-        val expanded = fetchCollectionItems(entry)
-        return if (expanded.isNotEmpty()) {
-            dbg("✓ [$entry] is a collection — expanded to ${expanded.size} item(s)")
-            collectionCache[entry] = expanded
-            expanded
-        } else {
-            // Not a collection (or empty) — treat the entry itself as a
-            // single playable item identifier, which resolveIdentifier()
-            // will confirm/deny via its own metadata call.
-            listOf(entry)
-        }
-    }
-
-    /**
-     * Tries to resolve `entry` as an archive.org collection name via the
-     * Advanced Search API. Returns an empty list if it isn't a collection
-     * (which is the normal case for a single-item identifier) — callers
-     * treat that as "use the entry as-is".
-     */
-    private fun fetchCollectionItems(entry: String): List<String> {
-        val encoded = URLEncoder.encode(entry, "UTF-8")
-        val url = "https://archive.org/advancedsearch.php" +
-            "?q=collection:($encoded)" +
-            "&fl[]=identifier" +
-            "&rows=$COLLECTION_PAGE_ROWS" +
-            "&page=1" +
-            "&output=json"
-        return try {
-            val req = Request.Builder().url(url).get().build()
-            okHttp.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return emptyList()
-                val body = resp.body?.string() ?: return emptyList()
-                val docs = JSONObject(body).optJSONObject("response")?.optJSONArray("docs")
-                    ?: return emptyList()
-                buildList {
-                    for (i in 0 until docs.length()) {
-                        val id = docs.getJSONObject(i).optString("identifier")
-                        // A collection can itself list its own identifier as a
-                        // "doc" in some edge cases — skip that self-reference
-                        // to avoid infinite expansion loops.
-                        if (id.isNotBlank() && id != entry) add(id)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            dbg("✗ collection search error for $entry: ${e.message}")
-            emptyList()
-        }
-    }
+    // ── Pagination state ──────────────────────────────────────────────────────
+    private var nextCursor: String? = null
+    private var hasMore: Boolean = true
 
     data class UiState(
         val feedMode: FeedMode = FeedMode.FOR_YOU,
@@ -396,7 +290,6 @@ class ShortsViewModel @Inject constructor(
             configRepo.config
                 .filterNotNull()
                 .collect {
-                    _ui.update { s -> s.copy(categories = categories) }
                     if (_ui.value.forYouVideos.isEmpty() && !_ui.value.forYouLoadingMore) {
                         loadForYou()
                     }
@@ -408,6 +301,8 @@ class ShortsViewModel @Inject constructor(
 
     fun refresh() {
         _ui.update { it.copy(isRefreshing = true, error = null) }
+        nextCursor = null
+        hasMore = true
         viewModelScope.launch {
             if (_ui.value.feedMode == FeedMode.FOR_YOU) loadForYou()
             else loadDiscovery(_ui.value.selectedCategory)
@@ -435,7 +330,7 @@ class ShortsViewModel @Inject constructor(
     fun loadMore() {
         val s = _ui.value
         if (s.feedMode == FeedMode.FOR_YOU) {
-            if (s.forYouLoadingMore) return
+            if (s.forYouLoadingMore || !hasMore) return
             loadForYou(append = true)
         } else {
             if (s.discLoadingMore) return
@@ -455,173 +350,72 @@ class ShortsViewModel @Inject constructor(
         else        _ui.update { it.copy(forYouLoading = true, error = null) }
 
         viewModelScope.launch {
-            val videos = withContext(Dispatchers.IO) {
-                resolveNextPage(feedKey = "for_you", pool = emptyList())
+            val result = withContext(Dispatchers.IO) {
+                repo.getShorts(cursor = if (append) nextCursor else null, limit = 10)
             }
-            dbg("forYou total=${videos.size}")
-            if (append) {
-                _ui.update { it.copy(forYouVideos = it.forYouVideos + videos, forYouLoadingMore = false) }
-            } else {
-                _ui.update { it.copy(
-                    forYouVideos  = videos,
-                    forYouLoading = false,
-                    error = if (videos.isEmpty()) "No videos right now — pull to refresh" else null,
-                )}
+            when (result) {
+                is com.axio.reelz.core.network.NetworkResult.Success -> {
+                    val (videos, cursor, more) = result.data
+                    nextCursor = cursor
+                    hasMore = more
+                    // Derive categories from unique sources in the full list
+                    val allVideos = if (append) _ui.value.forYouVideos + videos else videos
+                    val cats = buildCategories(allVideos)
+                    if (append) {
+                        _ui.update { it.copy(forYouVideos = allVideos, forYouLoadingMore = false, categories = cats) }
+                    } else {
+                        _ui.update { it.copy(
+                            forYouVideos  = allVideos,
+                            forYouLoading = false,
+                            categories    = cats,
+                            error = if (allVideos.isEmpty()) "No videos right now — pull to refresh" else null,
+                        )}
+                    }
+                }
+                else -> {
+                    val msg = "Couldn't load videos — pull to refresh"
+                    if (append) _ui.update { it.copy(forYouLoadingMore = false, error = msg) }
+                    else        _ui.update { it.copy(forYouLoading = false, error = msg) }
+                }
             }
         }
     }
 
     private fun loadDiscovery(categoryIndex: Int, append: Boolean = false) {
-        val category = categories.getOrNull(categoryIndex) ?: return
+        val category = _ui.value.categories.getOrNull(categoryIndex)
 
         if (!append) _ui.update { it.copy(discLoading = true, error = null) }
         else         _ui.update { it.copy(discLoadingMore = true) }
 
         viewModelScope.launch {
-            val videos = withContext(Dispatchers.IO) {
-                resolveNextPage(feedKey = "cat_$categoryIndex", pool = category.items)
+            // Filter the already-loaded forYou videos by the selected category source
+            val filtered = if (category == null || category.source == null) {
+                _ui.value.forYouVideos
+            } else {
+                _ui.value.forYouVideos.filter { it.source == category.source }
             }
-            dbg("✓ discovery cat=$categoryIndex (${category.label}) total=${videos.size}")
+            val label = category?.label ?: "All"
             if (!append) {
                 _ui.update { it.copy(
-                    discVideos  = videos,
+                    discVideos  = filtered,
                     discLoading = false,
-                    error       = if (videos.isEmpty())
-                        "No videos configured yet for \"${category.label}\"" else null,
+                    error       = if (filtered.isEmpty()) "No videos in \"$label\"" else null,
                 )}
             } else {
-                _ui.update { it.copy(discVideos = it.discVideos + videos, discLoadingMore = false) }
+                _ui.update { it.copy(discVideos = it.discVideos + filtered, discLoadingMore = false) }
             }
         }
     }
 
-    /**
-     * Resolves the next `items_per_page` archive.org identifiers from this
-     * feed's shuffled cursor into playable ShortVideos. Identifiers are
-     * resolved in parallel (they're independent network calls); a failed
-     * identifier (404, malformed, no video files) is simply skipped rather
-     * than failing the whole page — matches the "never stall the feed on
-     * one bad item" rule the player pool already follows.
-     */
-    private suspend fun resolveNextPage(feedKey: String, pool: List<String>): List<ShortVideo> {
-        if (pool.isEmpty()) {
-            dbg("✗ [$feedKey] identifier pool is empty — nothing configured")
-            return emptyList()
-        }
-        // Expand any collection entries (e.g. "tiktoks") into their member
-        // item identifiers before paginating — cached, so this is a no-op
-        // network-wise after the very first call for a given entry.
-        val expandedPool = expandPool(pool)
-        if (expandedPool.isEmpty()) {
-            dbg("✗ [$feedKey] pool expanded to zero items")
-            return emptyList()
-        }
-
-        val pageSize = 10
-        val cursor   = cursorFor(feedKey, expandedPool)
-        val slice    = cursor.shuffledItems.drop(cursor.resolvedCount).take(pageSize)
-        cursors[feedKey] = cursor.copy(resolvedCount = cursor.resolvedCount + slice.size)
-
-        if (slice.isEmpty()) return emptyList()
-
-        return coroutineScope {
-            slice.map { identifier -> async { resolveIdentifier(identifier) } }
-                .awaitAll()
-                .flatten()
-                .shuffled() // interleave videos from different identifiers, not grouped by item
+    private fun buildCategories(videos: List<ShortVideo>): List<ShortCategory> {
+        val sources = videos.mapNotNull { it.source }.distinct()
+        return listOf(ShortCategory("All", null)) + sources.map { src ->
+            ShortCategory(src.replaceFirstChar { it.uppercaseChar() }, src)
         }
     }
 
-    private fun resolveIdentifier(identifier: String): List<ShortVideo> {
-        val trimmed = identifier.trim()
-        if (trimmed.isBlank()) return emptyList()
+    private fun dbg(msg: String) { android.util.Log.d("ShortsVM", msg) }
 
-        val url = "${archiveCfg.metadataBaseUrl.trimEnd('/')}/${URLEncoder.encode(trimmed, "UTF-8")}"
-        return try {
-            val req = Request.Builder().url(url).get().build()
-            okHttp.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    dbg("✗ metadata ${resp.code} for $trimmed")
-                    return emptyList()
-                }
-                val body = resp.body?.string() ?: return emptyList()
-                parseArchiveOrgMetadata(trimmed, body)
-            }
-        } catch (e: Exception) {
-            dbg("✗ metadata error for $trimmed: ${e.message}")
-            emptyList()
-        }
-    }
-
-    private fun JSONObject.optUrlString(key: String): String {
-        val raw = optString(key).trim()
-        return if (raw.isBlank() || raw.equals("null", ignoreCase = true)) "" else raw
-    }
-
-    /**
-     * Parses one archive.org /metadata/{id} response into ShortVideos.
-     * Docs: server + dir + "/" + urlEncode(file name) is the stable direct
-     * download URL pattern archive.org guarantees for every file listed.
-     */
-    private fun parseArchiveOrgMetadata(identifier: String, json: String): List<ShortVideo> {
-        return try {
-            val root = JSONObject(json)
-            val server = root.optUrlString("server").ifBlank {
-                root.optJSONArray("workable_servers")?.optString(0).orEmpty()
-            }
-            val dir   = root.optUrlString("dir")
-            val files = root.optJSONArray("files") ?: return emptyList()
-            if (server.isBlank() || dir.isBlank()) {
-                dbg("✗ [$identifier] no server/dir in metadata")
-                return emptyList()
-            }
-
-            val exts     = listOf("mp4", "m3u8")
-            val excludes = emptyList<String>()
-            val itemMeta = root.optJSONObject("metadata")
-            val itemTitle = itemMeta?.optString("title").orEmpty()
-            val itemDesc  = itemMeta?.optString("description").orEmpty()
-
-            val result = mutableListOf<ShortVideo>()
-            for (i in 0 until files.length()) {
-                val f = files.getJSONObject(i)
-                val name = f.optString("name")
-                if (name.isBlank()) continue
-                val ext = name.substringAfterLast('.', "").lowercase()
-                if (ext !in exts) continue
-                val lowerName = name.lowercase()
-                if (excludes.any { lowerName.contains(it) }) continue
-
-                val encodedName = name.split("/").joinToString("/") { URLEncoder.encode(it, "UTF-8") }
-                    .replace("+", "%20")
-                val videoUrl = "https://$server$dir/$encodedName"
-                // archive.org's per-item auto-thumbnail — cheap and always available,
-                // no need to guess a per-file poster frame.
-                val thumbUrl = "${archiveCfg.thumbnailBaseUrl.trimEnd('/')}/$identifier"
-
-                // Caption in these bulk uploads is baked into the filename
-                // (hashtags etc.) — falls back to the item's own title/description.
-                val caption = name.substringBeforeLast('.').ifBlank { itemTitle.ifBlank { identifier } }
-
-                result += ShortVideo(
-                    id        = "$identifier/$videoFile",
-                    title     = videoTitle.ifBlank { itemTitle },
-                    source    = "original",
-                    url       = videoUrl,
-                    thumbnail = thumbUrl,
-                )
-            }
-            dbg("✓ [$identifier] resolved ${result.size} playable video(s)")
-            result
-        } catch (e: Exception) {
-            dbg("✗ [$identifier] parse error: ${e.message}")
-            emptyList()
-        }
-    }
-
-    private fun dbg(msg: String) {
-        android.util.Log.d("ShortsVM", msg)
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1068,9 +1068,9 @@ fun HeroBannerPager(
                         horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                     ) {
                         if (media.rating > 0) RatingChip(media.rating)
-                        null?.let {
+                        (null as String?)?.let { year: String ->
                             Box(Modifier.size(d.spaceXxs + 1.dp).clip(androidx.compose.foundation.shape.CircleShape).background(White40))
-                            Text(it.take(4), color = White60, fontSize = d.textMd)
+                            Text(year.take(4), color = White60, fontSize = d.textMd)
                         }
                         Box(Modifier.size(d.spaceXxs + 1.dp).clip(androidx.compose.foundation.shape.CircleShape).background(White40))
                         Text(if (media.mediaType == MediaType.TV) "TV Series" else "Movie", color = White60, fontSize = d.textMd)

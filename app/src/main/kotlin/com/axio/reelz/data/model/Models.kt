@@ -21,6 +21,8 @@ data class Media(
     val posterUrl: String?,
     val rating: Double,
     val mediaType: MediaType,
+    /** Genre IDs — not in the media card schema but populated by Explore/Search for client-side filtering. */
+    val genres: List<String> = emptyList(),
 )
 
 // ── Detail screen ─────────────────────────────────────────────────────────────
@@ -65,6 +67,8 @@ data class CastMember(
     val name: String,
     val character: String,
     val photoUrl: String?,
+    /** Stable key for Compose lazy list — composed from name+character since backend doesn't send an id. */
+    val id: String = "$name|$character",
 )
 
 // ── Feed ──────────────────────────────────────────────────────────────────────
@@ -85,6 +89,8 @@ data class Subtitle(
     val url: String,
     val language: String,
     val enabled: Boolean,
+    /** Display label — defaults to language code if not provided by backend. */
+    val label: String = language,
 )
 
 data class StreamTrack(

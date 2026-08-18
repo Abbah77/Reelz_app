@@ -257,6 +257,37 @@ class CatalogRepository @Inject constructor(
             }
         }
 
+    // ── Shorts — schema v3: GET /api/v1/shorts ───────────────────────────────
+
+    /**
+     * Returns a triple of (videos, nextCursor, hasMore).
+     * Auth is optional — guests get the same response as signed-in users.
+     */
+    suspend fun getShorts(
+        cursor: String? = null,
+        limit: Int = 10,
+    ): NetworkResult<Triple<List<com.axio.reelz.data.model.ShortVideo>, String?, Boolean>> =
+        withContext(Dispatchers.IO) {
+            val result = safeApiCall(tag) { api.getShorts(cursor, limit) }
+            when (result) {
+                is NetworkResult.Success -> {
+                    val dto = result.data
+                    NetworkResult.Success(Triple(
+                        dto.items.map { it.toModel() },
+                        dto.nextCursor,
+                        dto.hasMore,
+                    ))
+                }
+                is NetworkResult.Error -> NetworkResult.Error(
+                    message        = result.message,
+                    code           = result.code,
+                    isNetworkError = result.isNetworkError,
+                    isNotFound     = result.isNotFound,
+                )
+                NetworkResult.Loading -> NetworkResult.Loading
+            }
+        }
+
     // ── Cache maintenance ─────────────────────────────────────────────────────
 
     suspend fun evictStaleCache() = withContext(Dispatchers.IO) {

@@ -412,7 +412,7 @@ class DetailViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            val headers = preResolvedStream?.headers ?: emptyMap()
+            val headers = preResolvedStream?.primaryStream?.headers ?: emptyMap()
             downloadRepo.enqueue(
                 ctx         = ctx,
                 id          = detail.id,

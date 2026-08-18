@@ -40,6 +40,7 @@ import com.axio.reelz.ads.ReelzBrowserSheet
 import com.axio.reelz.data.repository.PaymentRepository
 import com.axio.reelz.data.repository.UserRepository
 import com.axio.reelz.data.dto.UserState
+import com.axio.reelz.data.dto.PremiumConfig
 import com.axio.reelz.data.repository.ConfigRepository
 import com.axio.reelz.ui.components.BrandButton
 import com.axio.reelz.ui.theme.*
@@ -73,6 +74,33 @@ private val IconX: ImageVector get() = ImageVector.Builder("X", 24.dp, 24.dp, 24
        strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
 }.build()
 
+// ── Tier feature descriptor — used only by the comparison table in the UI ──────
+// Schema v3 backend does not send tier definitions; these are static UI
+// constants that reflect the app's actual feature gates.
+data class TierInfo(
+    val maxResolution: String,
+    val maxDownloads: Int,        // -1 = unlimited
+    val adsEnabled: Boolean,
+    val subtitlesManualSearch: Boolean,
+    val backgroundPlay: Boolean,
+)
+
+private val FREE_TIER = TierInfo(
+    maxResolution          = "720p",
+    maxDownloads           = 5,
+    adsEnabled             = true,
+    subtitlesManualSearch  = false,
+    backgroundPlay         = false,
+)
+
+private val PREMIUM_TIER = TierInfo(
+    maxResolution          = "4K",
+    maxDownloads           = -1,
+    adsEnabled             = false,
+    subtitlesManualSearch  = true,
+    backgroundPlay         = true,
+)
+
 @HiltViewModel
 class PremiumViewModel @Inject constructor(
     private val configRepo: ConfigRepository,
@@ -95,6 +123,9 @@ class PremiumViewModel @Inject constructor(
         val backendConfigured: Boolean = false,
         /** Non-null when payment init failed — distinct from refreshMessage (which is success/info). */
         val paymentError: String? = null,
+        /** Static tier feature info for the comparison table. */
+        val freeTier: TierInfo = FREE_TIER,
+        val premiumTier: TierInfo = PREMIUM_TIER,
     )
 
     private val _ui = MutableStateFlow(UiState())

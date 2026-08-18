@@ -282,6 +282,9 @@ data class AdPlacementsDto(
     @SerializedName("interstitial_enabled") val interstitialEnabled: Boolean = true,
     @SerializedName("native_enabled")       val nativeEnabled: Boolean = true,
     @SerializedName("preroll_enabled")      val prerollEnabled: Boolean = false,
+    // Not in schema v3 — defaulting to false; enable via backend config extension
+    @SerializedName("rewarded_enabled")     val rewardedEnabled: Boolean = false,
+    @SerializedName("app_open_enabled")     val appOpenEnabled: Boolean = false,
 )
 
 data class AdFrequencyDto(
@@ -289,17 +292,23 @@ data class AdFrequencyDto(
     @SerializedName("every_n_plays")              val everyNPlays: Int = 3,
     @SerializedName("min_ms_between")             val minMsBetween: Long = 60_000L,
     @SerializedName("max_per_session")            val maxPerSession: Int = 10,
+    /** Retry delay in ms after a failed ad load. Not in schema v3 — defaults to 30 s. */
+    @SerializedName("retry_delay_ms")             val retryDelayMs: Long = 30_000L,
 )
 
 data class AdsConfigDto(
     val enabled: Boolean = false,
-    @SerializedName("applovin_sdk_key") val applovinSdkKey: String = "",
-    @SerializedName("banner_id")        val bannerId: String = "",
-    @SerializedName("interstitial_id")  val interstitialId: String = "",
-    @SerializedName("rewarded_id")      val rewardedId: String = "",
-    @SerializedName("native_id")        val nativeId: String = "",
+    @SerializedName("applovin_sdk_key")    val applovinSdkKey: String = "",
+    @SerializedName("banner_id")           val bannerId: String = "",
+    @SerializedName("interstitial_id")     val interstitialId: String = "",
+    @SerializedName("rewarded_id")         val rewardedId: String = "",
+    @SerializedName("native_id")           val nativeId: String = "",
+    /** Mediation provider string for AppLovin SDK. Defaults to "max". */
+    @SerializedName("mediation_provider")  val mediationProvider: String = "max",
     val placements: AdPlacementsDto = AdPlacementsDto(),
     val frequency: AdFrequencyDto = AdFrequencyDto(),
+    /** Convenience alias so AdEngine can use interstitialFrequency.retryDelayMs */
+    val interstitialFrequency: AdFrequencyDto get() = frequency,
 )
 
 // ── Auth — schema v3 ──────────────────────────────────────────────────────────
