@@ -464,7 +464,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("✓", fontSize = d.textLg + 1.sp, color = Color(0xFF30D158))
+                    Text("✓", fontSize = d.textXl, color = Color(0xFF30D158))
                     Text(
                         ui.refreshMessage ?: "",
                         color    = Color.White.copy(.85f),
