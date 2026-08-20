@@ -1186,16 +1186,16 @@ private fun ShortsErrorState(
     ) {
         Box(contentAlignment = Alignment.Center) {
             Box(
-                Modifier.size(88.dp)
+                Modifier.size(d.avatarLg + d.spaceLg)
                     .clip(CircleShape)
                     .background(Brush.radialGradient(listOf(Error.copy(.18f), Color.Transparent)))
-                    .border(1.dp, Error.copy(.4f), CircleShape)
+                    .border(d.borderThin, Error.copy(.4f), CircleShape)
             )
             Icon(
                 if (isNetworkError) IconVolumeOff else IconSearch,
                 contentDescription = null,
                 tint = Error.copy(.85f),
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(d.iconXl),
             )
         }
         Text(
@@ -1232,16 +1232,16 @@ private fun ShortsEmptyState(onRetry: () -> Unit) {
     ) {
         Box(contentAlignment = Alignment.Center) {
             Box(
-                Modifier.size(88.dp)
+                Modifier.size(d.avatarLg + d.spaceLg)
                     .clip(CircleShape)
                     .background(Brush.radialGradient(listOf(White.copy(.06f), Color.Transparent)))
-                    .border(1.dp, GlassBorderMd, CircleShape)
+                    .border(d.borderThin, GlassBorderMd, CircleShape)
             )
             Icon(
                 com.axio.reelz.ui.components.IconReel,
                 contentDescription = null,
                 tint = White20,
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(d.iconXl),
             )
         }
         Text(

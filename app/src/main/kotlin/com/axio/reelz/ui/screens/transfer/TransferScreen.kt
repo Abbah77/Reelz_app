@@ -67,8 +67,8 @@ import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.transfer.*
 import com.axio.reelz.ui.components.*
-import com.axio.reelz.ui.screens.downloads.formatSize
-import com.axio.reelz.ui.screens.downloads.formatSpeed
+import com.axio.reelz.ui.screens.files.formatSize
+import com.axio.reelz.ui.screens.files.formatSpeed
 import com.axio.reelz.ui.theme.*
 import com.axio.reelz.ui.theme.LocalDimensions
 import com.google.zxing.*

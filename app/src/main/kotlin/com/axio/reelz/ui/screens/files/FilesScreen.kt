@@ -1,4 +1,4 @@
-package com.axio.reelz.ui.screens.downloads
+package com.axio.reelz.ui.screens.files
 
 import android.content.Context
 import android.content.Intent
@@ -232,7 +232,7 @@ class DownloadsViewModel @Inject constructor(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun DownloadsScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
+fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
     val d               = LocalDimensions.current
     val ctx             = LocalContext.current
     val movieGroups     by vm.movieGroups.collectAsState()

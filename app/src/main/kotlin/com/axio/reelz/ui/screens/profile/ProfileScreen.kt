@@ -769,12 +769,12 @@ fun EmptyTabHint(
             if (icon != null) {
                 Box(contentAlignment = Alignment.Center) {
                     Box(
-                        Modifier.size(72.dp)
+                        Modifier.size(d.avatarLg)
                             .clip(CircleShape)
                             .background(Brush.radialGradient(listOf(White.copy(.05f), Color.Transparent)))
-                            .border(1.dp, GlassBorderMd, CircleShape)
+                            .border(d.borderThin, GlassBorderMd, CircleShape)
                     )
-                    Icon(icon, contentDescription = null, tint = White20, modifier = Modifier.size(30.dp))
+                    Icon(icon, contentDescription = null, tint = White20, modifier = Modifier.size(d.iconLg))
                 }
                 Spacer(Modifier.height(d.spaceXs))
             }

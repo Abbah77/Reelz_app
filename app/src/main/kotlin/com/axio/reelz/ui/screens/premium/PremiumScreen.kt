@@ -266,7 +266,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
     Box(Modifier.fillMaxSize().background(Bg)) {
         LazyColumn(
             Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 32.dp),
+            contentPadding = PaddingValues(bottom = d.spaceXxl),
         ) {
             // ── Header ───────────────────────────────────────────────────
             item {
@@ -283,7 +283,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
             // ── Signature: glowing crown + state-aware headline ─────────────
             item {
                 Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = d.spaceXl, vertical = d.spaceMd),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Box(
@@ -400,7 +400,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                                 Spacer(Modifier.height(d.spaceMd))
                                 Text(
                                     ui.premiumConfig.paymentNote,
-                                    color = White60, fontSize = d.textSm, textAlign = TextAlign.Center, lineHeight = 17.sp,
+                                    color = White60, fontSize = d.textSm, textAlign = TextAlign.Center, lineHeight = (d.textSm.value * 1.42f).sp,
                                 )
                             }
                             Spacer(Modifier.height(d.spaceXl - d.spaceXs))
@@ -417,7 +417,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
             visible  = ui.paymentError != null,
             enter    = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
             exit     = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(d.spaceLg),
         ) {
             androidx.compose.material3.Card(
                 colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = Color(0xFF2A1010)),
@@ -425,11 +425,11 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                 shape  = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
             ) {
                 Row(
-                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    Modifier.padding(horizontal = d.spaceLg, vertical = d.spaceMd),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("⚠", fontSize = 18.sp)
+                    Text("⚠", fontSize = d.textXl)
                     Text(
                         ui.paymentError ?: "",
                         color    = Color.White.copy(.85f),
@@ -441,7 +441,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                         onClick            = { vm.dismissPaymentError() },
                         contentPadding     = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                     ) {
-                        Text("OK", color = Color(0xFFFF453A), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("OK", color = Color(0xFFFF453A), fontWeight = FontWeight.SemiBold, fontSize = d.textSm)
                     }
                 }
             }
@@ -452,7 +452,7 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
             visible  = ui.refreshMessage != null,
             enter    = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
             exit     = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(d.spaceLg),
         ) {
             androidx.compose.material3.Card(
                 colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = Color(0xFF0A2A1A)),
@@ -460,11 +460,11 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                 shape  = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
             ) {
                 Row(
-                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    Modifier.padding(horizontal = d.spaceLg, vertical = d.spaceMd),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("✓", fontSize = 16.sp, color = Color(0xFF30D158))
+                    Text("✓", fontSize = d.textLg + 1.sp, color = Color(0xFF30D158))
                     Text(
                         ui.refreshMessage ?: "",
                         color    = Color.White.copy(.85f),
@@ -473,9 +473,9 @@ fun PremiumScreen(nav: NavController, vm: PremiumViewModel = hiltViewModel()) {
                     )
                     TextButton(
                         onClick        = { vm.dismissMessage() },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        contentPadding = PaddingValues(horizontal = d.spaceXs + d.spaceXxs, vertical = 0.dp),
                     ) {
-                        Text("OK", color = Color(0xFF30D158), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("OK", color = Color(0xFF30D158), fontWeight = FontWeight.SemiBold, fontSize = d.textSm)
                     }
                 }
             }

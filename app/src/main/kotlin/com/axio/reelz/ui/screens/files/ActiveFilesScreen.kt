@@ -1,4 +1,4 @@
-package com.axio.reelz.ui.screens.downloads
+package com.axio.reelz.ui.screens.files
 
 import android.content.Context
 import androidx.compose.animation.core.*
@@ -30,7 +30,7 @@ import com.axio.reelz.ui.theme.LocalDimensions
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun ActiveDownloadsScreen(
+fun ActiveFilesScreen(
     nav: NavController,
     vm: DownloadsViewModel = hiltViewModel(),
 ) {

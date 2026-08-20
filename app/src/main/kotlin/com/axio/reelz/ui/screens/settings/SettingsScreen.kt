@@ -208,7 +208,7 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = hiltViewModel()) 
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 14.dp),
+                .padding(horizontal = d.appBarHorizPad, vertical = d.appBarVertPad),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
         ) {
@@ -231,7 +231,7 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = hiltViewModel()) 
             Modifier
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = d.screenHorizPad)
-                .padding(bottom = 40.dp),
+                .padding(bottom = d.spaceXxl + d.spaceLg),
             verticalArrangement = Arrangement.spacedBy(d.spaceSm + d.spaceXxs),
         ) {
 
@@ -301,7 +301,7 @@ fun StorageUsageScreen(nav: NavController) {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = d.screenHorizPad)
-                .padding(top = d.spaceLg, bottom = 40.dp),
+                .padding(top = d.spaceLg, bottom = d.spaceXxl + d.spaceLg),
             verticalArrangement = Arrangement.spacedBy(d.spaceMd)
         ) {
             // Hero icon card
@@ -320,12 +320,12 @@ fun StorageUsageScreen(nav: NavController) {
                 Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
                     Box(
                         Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .size(d.avatarMd)
+                            .clip(RoundedCornerShape(d.radiusMd))
                             .background(GlassMd)
-                            .border(1.dp, GlassBorderMd, RoundedCornerShape(14.dp)),
+                            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd)),
                         Alignment.Center,
-                    ) { Icon(IconStorage, null, tint = Brand2, modifier = Modifier.size(24.dp)) }
+                    ) { Icon(IconStorage, null, tint = Brand2, modifier = Modifier.size(d.iconMd)) }
                     Text(
                         "Storage information will appear here soon.",
                         color = White,
@@ -384,7 +384,7 @@ private fun SimpleTopBar(nav: NavController, title: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 14.dp),
+            .padding(horizontal = d.appBarHorizPad, vertical = d.appBarVertPad),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = { nav.popBackStack() }) {
@@ -428,7 +428,7 @@ private fun LegalDocumentScreen(
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .padding(horizontal = d.screenHorizPad)
-                .padding(bottom = 48.dp),
+                .padding(bottom = d.spaceXxl + d.spaceXl),
             verticalArrangement = Arrangement.spacedBy(d.spaceMd),
         ) {
 
@@ -453,7 +453,7 @@ private fun LegalDocumentScreen(
                             .background(accentColor.copy(alpha = 0.16f))
                             .border(1.dp, accentColor.copy(alpha = 0.35f), RoundedCornerShape(14.dp)),
                         Alignment.Center,
-                    ) { Icon(docIcon, null, tint = accentColor, modifier = Modifier.size(24.dp)) }
+                    ) { Icon(docIcon, null, tint = accentColor, modifier = Modifier.size(d.iconMd)) }
 
                     Text(
                         docTitle,
@@ -473,11 +473,11 @@ private fun LegalDocumentScreen(
                         Modifier
                             .clip(RoundedCornerShape(999.dp))
                             .background(GlassSm)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                            .padding(horizontal = d.spaceXs + d.spaceXxs, vertical = d.spaceXxs + d.spaceXxs),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Icon(IconClock, null, tint = White60, modifier = Modifier.size(13.dp))
+                        Icon(IconClock, null, tint = White60, modifier = Modifier.size(d.iconSm + d.spaceXxs))
                         Text("Last updated $lastUpdated", color = White60, fontSize = d.textXs, fontWeight = FontWeight.Medium)
                     }
                 }
@@ -486,7 +486,7 @@ private fun LegalDocumentScreen(
             // ── Quick jump ────────────────────────────────────────────
             Column(verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(IconListBullet, null, tint = White40, modifier = Modifier.size(14.dp))
+                    Icon(IconListBullet, null, tint = White40, modifier = Modifier.size(d.iconSm + d.spaceXs))
                     Text(
                         "Jump to section",
                         color = White40,
@@ -515,7 +515,7 @@ private fun LegalDocumentScreen(
                                         }
                                     }
                                 }
-                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                                .padding(horizontal = d.chipHorizPad, vertical = d.spaceXs),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
@@ -526,7 +526,7 @@ private fun LegalDocumentScreen(
                                     .background(accentColor.copy(alpha = 0.2f)),
                                 Alignment.Center,
                             ) {
-                                Text(s.num, color = accentColor, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                Text(s.num, color = accentColor, fontSize = d.textXxs, fontWeight = FontWeight.Bold)
                             }
                             Text(s.title, color = White70Local(), fontSize = d.textXs, fontWeight = FontWeight.Medium)
                         }
@@ -560,12 +560,12 @@ private fun LegalDocumentScreen(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
                     Box(
                         Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .size(d.avatarSm + d.spaceXs)
+                            .clip(RoundedCornerShape(d.radiusMd))
                             .background(GlassMd)
-                            .border(1.dp, GlassBorderMd, RoundedCornerShape(12.dp)),
+                            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd)),
                         Alignment.Center,
-                    ) { Icon(IconMail, null, tint = Brand2, modifier = Modifier.size(18.dp)) }
+                    ) { Icon(IconMail, null, tint = Brand2, modifier = Modifier.size(d.iconMd - d.spaceXxs)) }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("Questions about this document?", color = White, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
                         Text("axio.founder@gmail.com", color = White60, fontSize = d.textXs)
@@ -573,7 +573,7 @@ private fun LegalDocumentScreen(
                     IconButton(onClick = {
                         uriHandler.openUri("mailto:axio.founder@gmail.com?subject=$contactSubject")
                     }) {
-                        Icon(IconChevronRight, null, tint = White40, modifier = Modifier.size(18.dp))
+                        Icon(IconChevronRight, null, tint = White40, modifier = Modifier.size(d.iconMd - d.spaceXxs))
                     }
                 }
             }
@@ -626,7 +626,7 @@ private fun LegalSectionCard(
                     .background(accentColor.copy(alpha = if (isOpen) 0.22f else 0.12f)),
                 Alignment.Center,
             ) {
-                Text(section.num, color = accentColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(section.num, color = accentColor, fontSize = d.textSm, fontWeight = FontWeight.Bold)
             }
             Text(
                 section.title,
@@ -637,7 +637,7 @@ private fun LegalSectionCard(
             )
             Icon(
                 IconChevronDown, null, tint = White40,
-                modifier = Modifier.size(16.dp).rotate(rotation),
+                modifier = Modifier.size(d.iconSm + d.spaceSm).rotate(rotation),
             )
         }
 
@@ -648,8 +648,8 @@ private fun LegalSectionCard(
                     .padding(bottom = d.spaceLg),
                 verticalArrangement = Arrangement.spacedBy(d.spaceSm),
             ) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(GlassBorder))
-                Spacer(Modifier.height(2.dp))
+                Box(Modifier.fillMaxWidth().height(d.borderThin).background(GlassBorder))
+                Spacer(Modifier.height(d.spaceXxs))
                 LegalBodyText(section.body)
             }
         }
@@ -747,7 +747,7 @@ fun AboutScreen(nav: NavController) {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = d.screenHorizPad)
-                .padding(top = d.spaceLg, bottom = 40.dp),
+                .padding(top = d.spaceLg, bottom = d.spaceXxl + d.spaceLg),
             verticalArrangement = Arrangement.spacedBy(d.spaceLg)
         ) {
             // Hero brand card
@@ -773,11 +773,11 @@ fun AboutScreen(nav: NavController) {
                         Modifier
                             .clip(RoundedCornerShape(999.dp))
                             .background(GlassSm)
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                            .padding(horizontal = d.spaceXs + d.spaceXxs, vertical = d.spaceXxs + 1.dp),
                     ) {
                         Text("Version 1.0.0", color = White60, fontSize = d.textXs, fontWeight = FontWeight.SemiBold)
                     }
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(d.spaceXs))
                     Text(
                         "Your personal cinema — stream movies and TV shows, download for offline viewing, and discover what to watch next.",
                         color = White80,
@@ -852,7 +852,7 @@ private fun SettingsSectionLabel(text: String) {
         fontSize = d.textXs,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = 0.8.sp,
-        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
+        modifier = Modifier.padding(start = d.spaceXs, top = d.spaceXs + d.spaceXxs, bottom = d.spaceXxs),
     )
 }
 

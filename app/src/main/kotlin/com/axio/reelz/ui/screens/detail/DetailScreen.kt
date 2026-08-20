@@ -39,7 +39,7 @@ import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
 import com.axio.reelz.data.repository.StreamRepository
 import com.axio.reelz.ui.components.*
-import com.axio.reelz.ui.screens.downloads.formatSize
+import com.axio.reelz.ui.screens.files.formatSize
 import com.axio.reelz.ui.screens.player.PlayerActivity
 import com.axio.reelz.ui.theme.*
 import com.axio.reelz.ui.theme.LocalDimensions

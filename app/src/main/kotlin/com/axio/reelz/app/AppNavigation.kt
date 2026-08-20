@@ -31,7 +31,7 @@ import com.axio.reelz.ui.screens.browse.BrowseViewModel
 import com.axio.reelz.ui.screens.explore.ExploreScreen
 import com.axio.reelz.ui.screens.shorts.ShortsScreen
 import com.axio.reelz.ui.screens.shorts.ShortsViewModel
-import com.axio.reelz.ui.screens.downloads.DownloadsScreen
+import com.axio.reelz.ui.screens.files.FilesScreen
 import com.axio.reelz.ui.screens.transfer.TransferScreen
 import com.axio.reelz.ui.screens.profile.ProfileScreen
 import com.axio.reelz.ui.screens.premium.PremiumScreen
@@ -74,7 +74,7 @@ val navTabs = listOf(
     NavTab(Route.Browse.path,    "Home",      IconHome,             IconHomeFilled),
     NavTab(Route.Explore.path,   "Explore",   IconCompass,          IconCompassFilled),
     NavTab(Route.Shorts.path,    "Shorts",    IconReel,             IconReelFilled),
-    NavTab(Route.Downloads.path, "Downloads", IconDownloadCloud,    IconDownloadCloudFilled),
+    NavTab(Route.Downloads.path, "Files",     IconDownloadCloud,    IconDownloadCloudFilled),
     NavTab(Route.Profile.path,   "Profile",   IconUser,             IconUserFilled),
 )
 
@@ -165,8 +165,8 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
             composable(Route.Browse.path)    { BrowseScreen(nav, adEngine, browseVm, browseListState) }
             composable(Route.Explore.path)   { ExploreScreen(nav) }
             composable(Route.Shorts.path)    { ShortsScreen(nav, adEngine, shortsVm) }
-            composable(Route.Downloads.path)       { DownloadsScreen(nav) }
-            composable(Route.DownloadsActive.path) { com.axio.reelz.ui.screens.downloads.ActiveDownloadsScreen(nav) }
+            composable(Route.Downloads.path)       { FilesScreen(nav) }
+            composable(Route.DownloadsActive.path) { com.axio.reelz.ui.screens.files.ActiveFilesScreen(nav) }
             composable(Route.Transfer.path)  { TransferScreen(nav) }
             composable(Route.Profile.path)   { ProfileScreen(nav) }
             composable(Route.Search.path)    { SearchScreen(nav) }

@@ -200,7 +200,12 @@ private fun buildDimensions(sw: Int): ReelzDimensions {
         avatarLg = (64.dp).s(),
 
         navIconSize = (22.dp).s(),
-        navFontSize = (10.sp).s(),
+        // Slightly smaller on compact/tiny screens so labels never wrap, slightly larger on tablets
+        navFontSize = when {
+            isTablet  -> (11.sp).s()
+            isCompact -> (9.sp).s()
+            else      -> (10.sp).s()
+        },
 
         appBarHorizPad = (16.dp).s(),
         appBarVertPad  = (10.dp).s(),
