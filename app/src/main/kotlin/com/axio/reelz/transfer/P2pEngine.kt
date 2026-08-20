@@ -349,7 +349,7 @@ class P2pEngine @Inject constructor(
 
         return suspendCancellableCoroutine { cont ->
             val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE)
-                as? WifiManager ?: run { cont.resume(null); return@suspendCancellableCoroutine }
+                as? WifiManager ?: run { cont.resume(null, null); return@suspendCancellableCoroutine }
 
             wm.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
                 @SuppressLint("NewApi")
@@ -379,12 +379,12 @@ class P2pEngine @Inject constructor(
                             ssid       = ssid,
                             password   = pass,
                         ).encode()
-                        cont.resume(payload)
+                        cont.resume(payload, null)
                     }
                 }
                 override fun onFailed(reason: Int) {
                     Log.w(TAG, "Hotspot failed: $reason")
-                    cont.resume(null)
+                    cont.resume(null, null)
                 }
                 override fun onStopped() {
                     Log.d(TAG, "Hotspot stopped")
