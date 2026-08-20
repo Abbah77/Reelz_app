@@ -9,30 +9,16 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
-    <!-- ── Wi-Fi Direct / Beam transfer ──────────────────────────────────── -->
+    <!-- ── Wi-Fi Direct ───────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <!-- Wi-Fi Direct (WifiP2pManager) -->
     <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
 
-    <!-- ── Bluetooth (Nearby Connections) ───────────────────────────────── -->
-    <uses-permission android:name="android.permission.BLUETOOTH"
-        android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
-        android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"
-        tools:targetApi="s" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
-        tools:targetApi="s" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation"
-        tools:targetApi="s" />
-
-    <!-- ── Storage / Downloads ──────────────────────────────────────────── -->
+    <!-- ── Storage ──────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -70,7 +56,6 @@
         android:largeHeap="true"
         tools:targetApi="31">
 
-        <!-- ── Main Activity ─────────────────────────────────────────────── -->
         <activity
             android:name="com.axio.reelz.app.MainActivity"
             android:exported="true"
@@ -83,7 +68,6 @@
             </intent-filter>
         </activity>
 
-        <!-- ── Player Activity ───────────────────────────────────────────── -->
         <activity
             android:name=".ui.screens.player.PlayerActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
@@ -92,21 +76,18 @@
             android:theme="@style/Theme.Reelz.Player"
             android:supportsPictureInPicture="true" />
 
-        <!-- ── Download service ──────────────────────────────────────────── -->
         <service
             android:name="com.axio.reelz.media.download.ReelzDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync"
             tools:targetApi="29" />
 
-        <!-- ── Transfer foreground service (Reelz Beam) ─────────────────── -->
         <service
             android:name="com.axio.reelz.transfer.TransferForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync"
             tools:targetApi="29" />
 
-        <!-- ── WorkManager — disable auto-init (HiltWorkerFactory via ReelzApp) ── -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
@@ -118,7 +99,6 @@
                 tools:node="remove" />
         </provider>
 
-        <!-- ── AppLovin MAX ──────────────────────────────────────────────── -->
         <activity
             android:name="com.applovin.adview.AppLovinFullscreenActivity"
             android:exported="false"

@@ -1,41 +1,45 @@
 package com.axio.reelz.transfer
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  P2pEngine — three-tier wireless negotiation
+//  BeamEngine — 2-tier wireless file transfer
 //
-//  Priority:
-//    1. Wi-Fi Direct (WifiP2pManager) — fastest, no AP needed, ~250 Mbps
-//    2. Local Wi-Fi  (NSD + TCP)       — both on same LAN/AP, ~150 Mbps
-//    3. Hotspot      (WifiManager)     — one device creates AP, other joins
+//  How Xender/QuickShare do it (and how we do it):
 //
-//  QR payload format:
-//    reelzbeam://<sessionId>|<deviceName>|<caps>|<localIp>|<port>
+//  Tier 1 — Wi-Fi Direct (WifiP2pManager)
+//    • Android OS negotiates a P2P group automatically.
+//    • One device becomes Group Owner (GO), the other a client.
+//    • GO runs the TCP ServerSocket; client connects to GO's p2p0 IP.
+//    • No router/internet needed. Up to ~200 Mbps raw.
 //
-//  caps is a bitmask: bit0=wifiDirect, bit1=localWifi, bit2=hotspot
+//  Tier 2 — Hotspot (LocalOnlyHotspot + TCP)
+//    • SENDER creates a LocalOnlyHotspot (silent, no notification required).
+//    • QR encodes: sessionId | deviceName | ssid | password | port
+//    • RECEIVER sees SSID + password in the QR, connects to that Wi-Fi.
+//    • Once on the same AP, standard TCP socket completes the link.
+//    • Works on every Android device, even API 21+.
+//    • ~40–100 Mbps depending on hardware.
 //
-//  Flow:
-//    Sender   → advertise all 3 tiers → generate QR
-//    Receiver → scan QR → read caps → intersect with own caps
-//             → attempt tier-1 first, fallback chain on failure
-//    Both     → once transport established → bidirectional TCP socket
+//  LAN/NSD removed — it requires both devices on the same router and adds
+//  complexity without helping when that condition is not met.
+//
+//  QR format:
+//    reelzbeam://<sessionId>|<deviceName>|<tier>|<ip>|<port>[|<ssid>|<pass>]
+//    tier: "WD" = WiFiDirect ready (receiver connects after WD handshake)
+//          "HS" = Hotspot (ssid + pass follow ip|port)
 // ─────────────────────────────────────────────────────────────────────────────
 
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.net.nsd.NsdManager
-import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
-import android.net.wifi.p2p.WifiP2pConfig
-import android.net.wifi.p2p.WifiP2pDevice
-import android.net.wifi.p2p.WifiP2pManager
+import android.net.wifi.p2p.*
 import android.os.Build
 import android.os.Looper
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import java.io.*
 import java.net.*
@@ -43,71 +47,68 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private const val TAG = "P2pEngine"
-private const val NSD_SERVICE_TYPE = "_reelzbeam._tcp."
-private const val NSD_SERVICE_NAME = "ReelzBeam"
-private const val DEFAULT_PORT     = 49800
+private const val TAG  = "BeamEngine"
+private const val PORT = 49800
 
-// ─── Transport medium ─────────────────────────────────────────────────────────
+// ─── Transport tier ───────────────────────────────────────────────────────────
 
-enum class TransportTier {
-    WIFI_DIRECT,   // tier-1: fastest
-    LOCAL_WIFI,    // tier-2: same LAN
-    HOTSPOT,       // tier-3: one device is AP
-}
+enum class TransportTier { WIFI_DIRECT, HOTSPOT }
 
-// ─── Engine state machine ─────────────────────────────────────────────────────
+// ─── Engine states ────────────────────────────────────────────────────────────
 
 sealed class EngineState {
-    object Idle                                           : EngineState()
-    object Advertising                                    : EngineState()
-    data class QrReady(
-        val qrPayload: String,
-        val sessionId: String,
-        val tier: TransportTier?,     // null until receiver connects
-    )                                                     : EngineState()
-    object Negotiating                                    : EngineState()
+    object Idle                                                                : EngineState()
+    object Preparing                                                           : EngineState()
+    data class QrReady(val qrPayload: String, val sessionId: String)           : EngineState()
+    object Negotiating                                                         : EngineState()
     data class Connected(
         val tier: TransportTier,
         val peerName: String,
         val isHost: Boolean,
         val socket: Socket,
-    )                                                     : EngineState()
+    )                                                                          : EngineState()
     data class Transferring(
         val tier: TransportTier,
         val peerName: String,
         val fileName: String,
-        val direction: String,       // "SEND"|"RECEIVE"
+        val direction: String,
         val transferredBytes: Long,
         val totalBytes: Long,
         val speedBps: Long,
-    )                                                     : EngineState()
-    object Done                                           : EngineState()
+    )                                                                          : EngineState()
+    object Done                                                                : EngineState()
     data class Error(val msg: String, val retryable: Boolean = true, val kind: String = "GENERIC") : EngineState()
 }
 
 // ─── QR payload ───────────────────────────────────────────────────────────────
 
-data class QrPayload(
-    val sessionId: String,
+data class BeamPayload(
+    val sessionId:  String,
     val deviceName: String,
-    val caps: Int,           // bitmask: 1=wifiDirect, 2=localWifi, 4=hotspot
-    val localIp: String,
-    val port: Int,
+    val tier:       String,   // "WD" or "HS"
+    val ip:         String,
+    val port:       Int,
+    val ssid:       String = "",
+    val password:   String = "",
 ) {
-    fun encode() = "reelzbeam://$sessionId|$deviceName|$caps|$localIp|$port"
+    fun encode(): String {
+        val base = "reelzbeam://$sessionId|$deviceName|$tier|$ip|$port"
+        return if (tier == "HS") "$base|$ssid|$password" else base
+    }
 
     companion object {
-        fun decode(raw: String): QrPayload? = try {
-            val stripped = raw.removePrefix("reelzbeam://")
-            val parts = stripped.split("|")
-            if (parts.size < 5) null
-            else QrPayload(
-                sessionId  = parts[0],
-                deviceName = parts[1],
-                caps       = parts[2].toInt(),
-                localIp    = parts[3],
-                port       = parts[4].toInt(),
+        fun decode(raw: String): BeamPayload? = try {
+            val s = raw.removePrefix("reelzbeam://")
+            val p = s.split("|")
+            if (p.size < 5) null
+            else BeamPayload(
+                sessionId  = p[0],
+                deviceName = p[1],
+                tier       = p[2],
+                ip         = p[3],
+                port       = p[4].toInt(),
+                ssid       = p.getOrElse(5) { "" },
+                password   = p.getOrElse(6) { "" },
             )
         } catch (_: Exception) { null }
     }
@@ -124,41 +125,25 @@ class P2pEngine @Inject constructor(
     private val _state = MutableStateFlow<EngineState>(EngineState.Idle)
     val state: StateFlow<EngineState> = _state.asStateFlow()
 
+    // Sockets
     private var serverSocket: ServerSocket? = null
-    private var activeSocket: Socket? = null
-    private var nsdManager: NsdManager? = null
-    private var wifiP2pManager: WifiP2pManager? = null
-    private var wifiP2pChannel: WifiP2pManager.Channel? = null
-    private var wifiDirectReceiver: BroadcastReceiver? = null
-    private var nsdRegistrationListener: NsdManager.RegistrationListener? = null
-    private var hotspotReservation: Any? = null  // WifiManager.LocalOnlyHotspotReservation
-    private var hotspotSsid: String? = null
-    private var hotspotPassword: String? = null
+    private var activeSocket:  Socket?      = null
 
-    private val transferEvents = Channel<TransferEvent>(Channel.UNLIMITED)
-    private var currentSessionId: String = ""
-    private var peerName: String = ""
+    // Wi-Fi Direct
+    private var p2pManager:  WifiP2pManager?         = null
+    private var p2pChannel:  WifiP2pManager.Channel? = null
+    private var p2pReceiver: BroadcastReceiver?      = null
 
-    sealed class TransferEvent {
-        data class Progress(val bytes: Long, val total: Long, val speed: Long) : TransferEvent()
-        data class Finished(val fileName: String, val bytes: Long)             : TransferEvent()
-        data class Failed(val reason: String)                                  : TransferEvent()
-    }
+    // Hotspot
+    @Suppress("DEPRECATION")
+    private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
 
-    // ── Capability detection ──────────────────────────────────────────────────
+    private var peerName    = ""
+    private var sessionId   = ""
 
-    fun detectCaps(): Int {
-        var caps = 0
-        // Bit 0: Wi-Fi Direct — hardware feature check
-        if (ctx.packageManager.hasSystemFeature("android.hardware.wifi.direct")) caps = caps or 1
-        // Bit 1: Local Wi-Fi — verify we actually have a routable IPv4 address.
-        // On Android 10+ isWifiEnabled can return false even when connected via
-        // Wi-Fi suggestion or enterprise network, so check IP directly instead.
-        if (getLocalIp().isNotEmpty()) caps = caps or 2
-        // Bit 2: Hotspot — always advertise; we'll create one at runtime if needed
-        caps = caps or 4
-        return caps
-    }
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun deviceName() = "${Build.MANUFACTURER} ${Build.MODEL}".take(24)
 
     fun getLocalIp(): String = try {
         NetworkInterface.getNetworkInterfaces()?.toList()
@@ -168,380 +153,357 @@ class P2pEngine @Inject constructor(
             ?.hostAddress ?: ""
     } catch (_: Exception) { "" }
 
-    /**
-     * After startLocalOnlyHotspot() fires onStarted(), a new network interface appears
-     * (commonly named wlan1, p2p-wlan0-0, swlan0, etc. — OEM-specific).
-     * We find it by scanning ALL interfaces for a private IPv4 address that is NOT
-     * the existing wlan0 (station) address.  Known hotspot gateway addresses:
-     *   192.168.49.1  — AOSP / Samsung
-     *   192.168.0.1   — Pixel (some builds)
-     *   192.168.43.1  — Xiaomi / MIUI
-     *   192.168.1.1   — some MediaTek OEMs
-     * By querying at runtime we handle all of them without hardcoding.
-     */
-    private fun resolveHotspotIp(): String {
-        val stationIp = getLocalIp()   // current wlan0 IP (may be empty if Wi-Fi is off)
-        // Prefer a hotspot-range address; fall back to any non-loopback IPv4
-        val candidate = try {
-            NetworkInterface.getNetworkInterfaces()?.toList()
-                ?.filter { it.isUp && !it.isLoopback }
-                ?.flatMap { it.inetAddresses.toList() }
-                ?.filterIsInstance<Inet4Address>()
-                ?.filter { addr ->
-                    val h = addr.hostAddress ?: return@filter false
-                    !h.startsWith("169.") &&   // link-local — skip
-                    h != stationIp             // exclude existing Wi-Fi station IP
-                }
-                ?.firstOrNull()
-                ?.hostAddress
-        } catch (_: Exception) { null }
-        return candidate ?: stationIp.ifEmpty { "192.168.49.1" }
-    }
+    private fun hasWifiDirect(): Boolean =
+        ctx.packageManager.hasSystemFeature("android.hardware.wifi.direct")
 
-    // ── Sender: build QR payload + start server socket ────────────────────────
+    // ── SENDER: prepare (try WD first, fall back to hotspot) ─────────────────
 
-    fun prepareAsSender(deviceName: String): String {
+    fun prepareAsSender(onQrReady: (String) -> Unit) {
         disconnect()
-        currentSessionId = UUID.randomUUID().toString().take(8).uppercase()
-        peerName = deviceName
-
-        val caps = detectCaps()
-        val localIp = getLocalIp()
-        val port = startServerSocket()
-
-        val payload = QrPayload(
-            sessionId  = currentSessionId,
-            deviceName = deviceName,
-            caps       = caps,
-            localIp    = localIp,
-            port       = port,
-        ).encode()
-
-        _state.value = EngineState.QrReady(
-            qrPayload = payload,
-            sessionId = currentSessionId,
-            tier = null,
-        )
-
-        // Advertise via NSD so receiver on same LAN can discover without QR
-        scope.launch { advertiseNsd(port) }
-
-        // Start accepting connections in background
-        scope.launch { acceptLoop(caps) }
-
-        return payload
-    }
-
-    // ── Receiver: parse QR → negotiate tier → connect ─────────────────────────
-
-    fun connectFromQr(rawQr: String, myDeviceName: String) {
-        val remote = QrPayload.decode(rawQr) ?: run {
-            _state.value = EngineState.Error("Invalid QR code — not a Reelz Beam code.", retryable = true, kind = "CONNECTION")
-            return
-        }
-        peerName = remote.deviceName
-        currentSessionId = remote.sessionId
-        _state.value = EngineState.Negotiating
-
-        val myCaps  = detectCaps()
-        val shared  = myCaps and remote.caps  // bits both devices support
+        sessionId = UUID.randomUUID().toString().take(8).uppercase()
+        _state.value = EngineState.Preparing
 
         scope.launch {
-            val tiers = buildFallbackChain(shared)
-            var connected = false
-            for (tier in tiers) {
-                Log.d(TAG, "Trying tier: $tier")
-                // Emit per-tier state so the NegotiatingCard UI stays up-to-date
-                _state.value = EngineState.Negotiating
-                connected = tryConnect(tier, remote, myDeviceName)
-                if (connected) break
-                delay(300) // brief gap before next tier
+            if (hasWifiDirect()) {
+                Log.d(TAG, "Sender: trying Wi-Fi Direct group")
+                val wdPayload = tryCreateWifiDirectGroup()
+                if (wdPayload != null) {
+                    _state.value = EngineState.QrReady(wdPayload, sessionId)
+                    withContext(Dispatchers.Main) { onQrReady(wdPayload) }
+                    acceptConnectionOnServerSocket(TransportTier.WIFI_DIRECT)
+                    return@launch
+                }
+                Log.d(TAG, "Sender: WD group failed, falling back to Hotspot")
             }
-            if (!connected) {
+
+            // Hotspot fallback
+            val hsPayload = tryCreateHotspot()
+            if (hsPayload != null) {
+                _state.value = EngineState.QrReady(hsPayload, sessionId)
+                withContext(Dispatchers.Main) { onQrReady(hsPayload) }
+                acceptConnectionOnServerSocket(TransportTier.HOTSPOT)
+            } else {
                 _state.value = EngineState.Error(
-                    "Could not connect via Wi-Fi Direct, local Wi-Fi, or hotspot. Check that permissions are granted and both devices are nearby.",
-                    retryable = true,
-                    kind = "CONNECTION",
+                    "Could not create Wi-Fi Direct group or Hotspot. Check permissions and try again.",
+                    retryable = true, kind = "CONNECTION"
                 )
             }
         }
     }
 
-    // ── Tier fallback chain ───────────────────────────────────────────────────
+    // ── RECEIVER: connect from QR ─────────────────────────────────────────────
 
-    private fun buildFallbackChain(sharedCaps: Int): List<TransportTier> {
-        // Priority order (fastest negotiation first):
-        //  1. LOCAL_WIFI  — simple TCP connect; succeeds or fails in < 3s
-        //  2. WIFI_DIRECT — peer discovery can take up to 5s; try after LAN
-        //  3. HOTSPOT     — last resort; creates an AP and waits 30s
-        val chain = mutableListOf<TransportTier>()
-        if (sharedCaps and 2 != 0) chain += TransportTier.LOCAL_WIFI
-        if (sharedCaps and 1 != 0) chain += TransportTier.WIFI_DIRECT
-        if (sharedCaps and 4 != 0) chain += TransportTier.HOTSPOT
-        // If nothing shared (shouldn't happen), try everything in best-effort order
-        if (chain.isEmpty()) chain += listOf(
-            TransportTier.LOCAL_WIFI,
-            TransportTier.WIFI_DIRECT,
-            TransportTier.HOTSPOT,
-        )
-        return chain
-    }
-
-    private suspend fun tryConnect(
-        tier: TransportTier,
-        remote: QrPayload,
-        myName: String,
-    ): Boolean = withContext(Dispatchers.IO) {
-        return@withContext when (tier) {
-            TransportTier.LOCAL_WIFI    -> tryLocalWifi(remote, myName)
-            TransportTier.WIFI_DIRECT   -> tryWifiDirect(remote, myName)
-            TransportTier.HOTSPOT       -> tryHotspot(remote, myName)
+    fun connectFromQr(rawQr: String) {
+        val payload = BeamPayload.decode(rawQr) ?: run {
+            _state.value = EngineState.Error("Invalid QR code.", retryable = true, kind = "CONNECTION")
+            return
         }
-    }
+        peerName  = payload.deviceName
+        sessionId = payload.sessionId
+        _state.value = EngineState.Negotiating
 
-    // ── Tier 1: Wi-Fi Direct ─────────────────────────────────────────────────
-
-    private suspend fun tryWifiDirect(remote: QrPayload, myName: String): Boolean {
-        return try {
-            val p2pMgr = ctx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
-                ?: return false
-            val channel = p2pMgr.initialize(ctx, Looper.getMainLooper(), null)
-            wifiP2pManager = p2pMgr
-            wifiP2pChannel = channel
-
-            // Register broadcast receiver to monitor P2P state
-            val peerFoundDeferred = CompletableDeferred<WifiP2pDevice?>()
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    when (intent.action) {
-                        WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
-                            p2pMgr.requestPeers(channel) { peers ->
-                                val device = peers.deviceList.firstOrNull()
-                                if (device != null) peerFoundDeferred.complete(device)
-                            }
-                        }
-                    }
+        scope.launch {
+            val connected = when (payload.tier) {
+                "WD" -> connectViaWifiDirect(payload)
+                "HS" -> connectViaHotspotIp(payload)
+                else -> false
+            }
+            if (!connected) {
+                // Try the other tier as fallback
+                val fallbackOk = when (payload.tier) {
+                    "WD" -> connectViaHotspotIp(payload)  // WD failed, try TCP if IP is in QR
+                    else -> false
+                }
+                if (!fallbackOk) {
+                    _state.value = EngineState.Error(
+                        "Could not connect. Make sure both devices are close together and Wi-Fi is on.",
+                        retryable = true, kind = "CONNECTION"
+                    )
                 }
             }
-            val filter = IntentFilter(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
-            ctx.registerReceiver(receiver, filter)
-            wifiDirectReceiver = receiver
-
-            // Discover peers
-            val discoverResult = CompletableDeferred<Boolean>()
-            p2pMgr.discoverPeers(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() { discoverResult.complete(true) }
-                override fun onFailure(reason: Int) { discoverResult.complete(false) }
-            })
-
-            if (!discoverResult.await()) {
-                ctx.unregisterReceiver(receiver)
-                return false
-            }
-
-            // Wait up to 5s for a Reelz device
-            val peer = withTimeoutOrNull(5_000) { peerFoundDeferred.await() }
-            ctx.unregisterReceiver(receiver)
-            wifiDirectReceiver = null
-
-            if (peer == null) return false
-
-            // Connect to peer
-            val config = WifiP2pConfig().apply { deviceAddress = peer.deviceAddress }
-            val connectResult = CompletableDeferred<Boolean>()
-            p2pMgr.connect(channel, config, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() { connectResult.complete(true) }
-                override fun onFailure(reason: Int) { connectResult.complete(false) }
-            })
-
-            if (!connectResult.await()) return false
-
-            // Get WifiP2pInfo to resolve the actual group owner IP address
-            val groupDeferred = CompletableDeferred<String?>()
-            val connReceiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action == WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION) {
-                        // requestConnectionInfo gives us WifiP2pInfo with groupOwnerAddress (real IP)
-                        p2pMgr.requestConnectionInfo(channel) { info ->
-                            // info.groupOwnerAddress is an InetAddress — the true GO IP on the p2p0 interface
-                            val goIp = info?.groupOwnerAddress?.hostAddress
-                            groupDeferred.complete(goIp)
-                        }
-                    }
-                }
-            }
-            val connFilter = IntentFilter(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
-            ctx.registerReceiver(connReceiver, connFilter)
-
-            val groupOwnerIp = withTimeoutOrNull(8_000) { groupDeferred.await() }
-            ctx.unregisterReceiver(connReceiver)
-
-            // groupOwnerIp is the real IP of the GO on the p2p0 interface (e.g. 192.168.49.1).
-            // If we are the GO, the sender is waiting on serverSocket — no outbound connect needed.
-            // If we are the client, connect to the GO's IP.
-            val ip = groupOwnerIp ?: remote.localIp.ifEmpty { null } ?: return false
-            return establishTcpConnection(ip, remote.port, myName, TransportTier.WIFI_DIRECT)
-        } catch (e: Exception) {
-            Log.w(TAG, "Wi-Fi Direct failed: ${e.message}")
-            false
         }
     }
 
-    // ── Tier 2: Local Wi-Fi (NSD + TCP) ─────────────────────────────────────
+    // ── Wi-Fi Direct group (SENDER) ───────────────────────────────────────────
 
-    private suspend fun tryLocalWifi(remote: QrPayload, myName: String): Boolean {
-        if (remote.localIp.isEmpty()) return false
-        return try {
-            establishTcpConnection(remote.localIp, remote.port, myName, TransportTier.LOCAL_WIFI)
-        } catch (e: Exception) {
-            Log.w(TAG, "Local Wi-Fi failed: ${e.message}")
-            false
-        }
-    }
-
-    // ── Tier 3: Hotspot ──────────────────────────────────────────────────────
-
-    @Suppress("DEPRECATION")
-    private suspend fun tryHotspot(remote: QrPayload, myName: String): Boolean {
-        // If sender already has a hotspot IP embedded in QR, try it directly
-        if (remote.localIp.isNotEmpty()) {
-            val direct = tryLocalWifi(remote, myName)
-            if (direct) return true
-        }
-
-        // Otherwise create our own hotspot so sender can join us
-        return try {
-            val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                ?: return false
-
-            val hotspotReady = CompletableDeferred<String>() // resolves to our hotspot IP
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                wm.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
-                    override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
-                        hotspotReservation = reservation
-                        val ssid = reservation.wifiConfiguration?.SSID
-                            ?: reservation.softApConfiguration?.ssid ?: ""
-                        hotspotSsid = ssid
-                        hotspotPassword = reservation.wifiConfiguration?.preSharedKey
-                            ?: reservation.softApConfiguration?.passphrase ?: ""
-                        // Resolve the actual hotspot interface IP — don't hardcode 192.168.49.1.
-                        // Different OEMs use different subnets:
-                        //   Samsung/AOSP → 192.168.49.1 (wlan1 / p2p0)
-                        //   Pixel        → 192.168.0.1
-                        //   Xiaomi       → 192.168.43.1
-                        // We identify the hotspot interface by looking for a non-loopback,
-                        // non-169.x IPv4 address that appeared AFTER hotspot started.
-                        val hotspotIp = resolveHotspotIp()
-                        hotspotReady.complete(hotspotIp)
-                    }
-                    override fun onFailed(reason: Int) { hotspotReady.completeExceptionally(Exception("Hotspot failed: $reason")) }
-                }, null)
-            } else {
-                hotspotReady.complete(getLocalIp())
-            }
-
-            val hotspotIp = withTimeoutOrNull(8_000) {
-                try { hotspotReady.await() } catch (_: Exception) { null }
-            } ?: return false
-
-            // Start server on hotspot interface and wait for peer to connect
-            val port = startServerSocket(bindAddr = hotspotIp)
-            delay(1_000) // let peer discover our hotspot SSID via side-channel (future: NFC/BT)
-
-            // Block waiting for the peer connection (they'll scan and join via retry)
-            val socket = withTimeoutOrNull(30_000) { serverSocket?.accept() } ?: return false
-            val peerId = socket.inetAddress.hostAddress ?: ""
-            onSocketConnected(socket, TransportTier.HOTSPOT, isHost = true)
-            true
-        } catch (e: Exception) {
-            Log.w(TAG, "Hotspot failed: ${e.message}")
-            false
-        }
-    }
-
-    // ── TCP helpers ───────────────────────────────────────────────────────────
-
-    private fun startServerSocket(bindAddr: String? = null): Int {
-        serverSocket?.closeQuietly()
-        val ss = if (bindAddr != null) {
-            ServerSocket(DEFAULT_PORT, 5, InetAddress.getByName(bindAddr))
-        } else {
-            ServerSocket(0)  // OS picks a free port
-        }
-        serverSocket = ss
-        return ss.localPort
-    }
-
-    private suspend fun acceptLoop(senderCaps: Int) = withContext(Dispatchers.IO) {
+    @SuppressLint("MissingPermission")
+    private suspend fun tryCreateWifiDirectGroup(): String? = withContext(Dispatchers.Main) {
         try {
-            val ss = serverSocket ?: return@withContext
-            val socket = ss.accept()
-            val tier = guessTierFromSocket(socket, senderCaps)
-            onSocketConnected(socket, tier, isHost = true)
+            val mgr = ctx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
+                ?: return@withContext null
+            val chan = mgr.initialize(ctx, Looper.getMainLooper(), null)
+            p2pManager = mgr
+            p2pChannel  = chan
+
+            // Request group info — if we already own a group, use it
+            val groupDeferred = CompletableDeferred<WifiP2pGroup?>()
+            mgr.requestGroupInfo(chan) { group -> groupDeferred.complete(group) }
+            val existingGroup = withTimeoutOrNull(3_000) { groupDeferred.await() }
+
+            if (existingGroup != null && existingGroup.isGroupOwner) {
+                Log.d(TAG, "Reusing existing WD group: ${existingGroup.networkName}")
+                return@withContext buildWdPayload(mgr, chan, existingGroup)
+            }
+
+            // Create a new persistent group
+            val createDeferred = CompletableDeferred<Boolean>()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val config = WifiP2pConfig.Builder()
+                    .setNetworkName("DIRECT-${sessionId.take(4)}")
+                    .setPassphrase(sessionId.lowercase())
+                    .build()
+                mgr.createGroup(chan, config, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { createDeferred.complete(true) }
+                    override fun onFailure(r: Int) { createDeferred.complete(false) }
+                })
+            } else {
+                @Suppress("DEPRECATION")
+                mgr.createGroup(chan, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { createDeferred.complete(true) }
+                    override fun onFailure(r: Int) { createDeferred.complete(false) }
+                })
+            }
+
+            if (!withTimeoutOrNull(6_000) { createDeferred.await() }!!) {
+                return@withContext null
+            }
+
+            // Retrieve group info with actual SSID/password
+            val newGroupDeferred = CompletableDeferred<WifiP2pGroup?>()
+            mgr.requestGroupInfo(chan) { group -> newGroupDeferred.complete(group) }
+            val group = withTimeoutOrNull(5_000) { newGroupDeferred.await() }
+                ?: return@withContext null
+
+            buildWdPayload(mgr, chan, group)
         } catch (e: Exception) {
-            if (_state.value !is EngineState.Idle) {
-                Log.w(TAG, "Accept loop ended: ${e.message}")
+            Log.w(TAG, "WD group creation failed: ${e.message}")
+            null
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun buildWdPayload(
+        mgr: WifiP2pManager,
+        chan: WifiP2pManager.Channel,
+        group: WifiP2pGroup,
+    ): String {
+        // The GO's IP on the p2p interface is always 192.168.49.1 in AOSP
+        // (WifiP2pServiceImpl hardcodes this). We start a server socket on all
+        // interfaces and embed the GO ip so the client knows where to connect.
+        val goIp = "192.168.49.1"
+        startServerSocket()
+        return BeamPayload(
+            sessionId  = sessionId,
+            deviceName = deviceName(),
+            tier       = "WD",
+            ip         = goIp,
+            port       = PORT,
+            ssid       = group.networkName,
+            password   = group.passphrase,
+        ).encode()
+    }
+
+    // ── Wi-Fi Direct connect (RECEIVER) ───────────────────────────────────────
+
+    private suspend fun connectViaWifiDirect(payload: BeamPayload): Boolean {
+        // The receiver just needs to connect via TCP to the GO IP.
+        // Android handles joining the WD group automatically once the user
+        // connects to the WD AP (SSID from QR). We try a direct TCP connect
+        // first — if the device already joined the WD network, it works instantly.
+        return try {
+            val ok = tcpConnect(payload.ip, payload.port, TransportTier.WIFI_DIRECT)
+            if (ok) return true
+
+            // If direct TCP fails, it means the receiver hasn't joined the
+            // WD group yet. Show a hint — user must join the Wi-Fi named
+            // in the QR. Then retry for up to 30s.
+            Log.d(TAG, "WD TCP failed initially; waiting for user to join WD network...")
+            val deadline = System.currentTimeMillis() + 30_000L
+            while (System.currentTimeMillis() < deadline) {
+                delay(2_000)
+                if (tcpConnect(payload.ip, payload.port, TransportTier.WIFI_DIRECT)) return true
             }
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "WD connect: ${e.message}")
+            false
         }
     }
 
-    private fun guessTierFromSocket(socket: Socket, caps: Int): TransportTier {
-        val ip = socket.inetAddress.hostAddress ?: ""
-        return when {
-            ip.startsWith("192.168.49") -> TransportTier.HOTSPOT
-            ip.startsWith("192.168.")   -> if (caps and 1 != 0) TransportTier.WIFI_DIRECT else TransportTier.LOCAL_WIFI
-            else                        -> TransportTier.LOCAL_WIFI
+    // ── Hotspot (SENDER) ──────────────────────────────────────────────────────
+
+    @SuppressLint("MissingPermission")
+    private suspend fun tryCreateHotspot(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            // API < 26: use existing Wi-Fi IP (assume user creates hotspot manually)
+            val ip = getLocalIp()
+            startServerSocket()
+            return if (ip.isNotEmpty()) BeamPayload(
+                sessionId  = sessionId,
+                deviceName = deviceName(),
+                tier       = "HS",
+                ip         = ip,
+                port       = PORT,
+            ).encode() else null
+        }
+
+        return suspendCancellableCoroutine { cont ->
+            val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE)
+                as? WifiManager ?: run { cont.resume(null); return@suspendCancellableCoroutine }
+
+            wm.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
+                @SuppressLint("NewApi")
+                override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
+                    hotspotReservation = reservation
+
+                    // Wait briefly for the hotspot interface to come up
+                    scope.launch {
+                        delay(1_500)
+                        val ip = resolveHotspotGatewayIp()
+                        startServerSocket()
+
+                        val ssid = reservation.softApConfiguration?.ssid
+                            ?: reservation.wifiConfiguration?.SSID
+                            ?: ""
+                        val pass = reservation.softApConfiguration?.passphrase
+                            ?: reservation.wifiConfiguration?.preSharedKey
+                            ?: ""
+
+                        Log.d(TAG, "Hotspot started: ssid=$ssid pass=$pass ip=$ip")
+                        val payload = BeamPayload(
+                            sessionId  = sessionId,
+                            deviceName = deviceName(),
+                            tier       = "HS",
+                            ip         = ip,
+                            port       = PORT,
+                            ssid       = ssid,
+                            password   = pass,
+                        ).encode()
+                        cont.resume(payload)
+                    }
+                }
+                override fun onFailed(reason: Int) {
+                    Log.w(TAG, "Hotspot failed: $reason")
+                    cont.resume(null)
+                }
+                override fun onStopped() {
+                    Log.d(TAG, "Hotspot stopped")
+                }
+            }, null)
         }
     }
 
-    private suspend fun establishTcpConnection(
-        ip: String, port: Int, myName: String, tier: TransportTier,
-    ): Boolean = withContext(Dispatchers.IO) {
-        for (attempt in 1..3) {
+    /** Returns the hotspot gateway IP across all OEMs.
+     *  Samsung/AOSP → 192.168.49.1
+     *  Pixel        → 192.168.0.1
+     *  Xiaomi/MIUI  → 192.168.43.1
+     *  We detect it by looking for a new non-loopback, non-169.x private IPv4. */
+    private fun resolveHotspotGatewayIp(): String {
+        val wlanIp = getLocalIp()
+        return try {
+            NetworkInterface.getNetworkInterfaces()?.toList()
+                ?.filter { it.isUp && !it.isLoopback }
+                ?.flatMap { it.inetAddresses.toList() }
+                ?.filterIsInstance<Inet4Address>()
+                ?.firstOrNull { addr ->
+                    val h = addr.hostAddress ?: return@firstOrNull false
+                    !h.startsWith("169.") && h != wlanIp
+                }
+                ?.hostAddress
+        } catch (_: Exception) { null }
+            ?: "192.168.49.1"  // safe AOSP default
+    }
+
+    // ── Hotspot connect (RECEIVER) ─────────────────────────────────────────────
+
+    private suspend fun connectViaHotspotIp(payload: BeamPayload): Boolean {
+        if (payload.ip.isEmpty()) return false
+        // Receiver needs to join the hotspot Wi-Fi first (user sees SSID/pass on screen).
+        // We retry for 60s giving the user time to switch Wi-Fi.
+        val deadline = System.currentTimeMillis() + 60_000L
+        while (System.currentTimeMillis() < deadline) {
+            if (tcpConnect(payload.ip, payload.port, TransportTier.HOTSPOT)) return true
+            delay(2_000)
+        }
+        return false
+    }
+
+    // ── TCP plumbing ──────────────────────────────────────────────────────────
+
+    private fun startServerSocket() {
+        serverSocket?.closeQuietly()
+        serverSocket = ServerSocket(PORT)
+        Log.d(TAG, "ServerSocket listening on port $PORT")
+    }
+
+    /** Sender side: block until a client connects, then complete the handshake. */
+    private suspend fun acceptConnectionOnServerSocket(tier: TransportTier) {
+        withContext(Dispatchers.IO) {
             try {
-                val sock = Socket()
-                sock.connect(InetSocketAddress(ip, port), 3_000)
-                sock.soTimeout = 0  // no read timeout during transfer
-
-                // Handshake: send our name, read peer name
-                val writer = BufferedWriter(OutputStreamWriter(sock.getOutputStream()))
-                val reader = BufferedReader(InputStreamReader(sock.getInputStream()))
-                writer.write("HELLO $myName\n"); writer.flush()
-                val hello = reader.readLine() ?: ""
-                peerName = if (hello.startsWith("HELLO ")) hello.removePrefix("HELLO ") else "Unknown"
-
-                onSocketConnected(sock, tier, isHost = false)
-                return@withContext true
+                Log.d(TAG, "Waiting for incoming connection ($tier)...")
+                val ss = serverSocket ?: return@withContext
+                ss.soTimeout = 120_000   // 2 min max wait
+                val sock = ss.accept()
+                sock.soTimeout = 0
+                completeHandshake(sock, isHost = true)
+                _state.value = EngineState.Connected(
+                    tier     = tier,
+                    peerName = peerName,
+                    isHost   = true,
+                    socket   = sock,
+                )
+                activeSocket = sock
             } catch (e: Exception) {
-                Log.w(TAG, "TCP attempt $attempt to $ip:$port failed: ${e.message}")
-                delay(500L * attempt)
+                Log.w(TAG, "Accept failed: ${e.message}")
+                if (_state.value !is EngineState.Idle) {
+                    _state.value = EngineState.Error("Connection timed out. Try again.", retryable = true, kind = "TIMEOUT")
+                }
             }
         }
-        false
     }
 
-    private fun onSocketConnected(socket: Socket, tier: TransportTier, isHost: Boolean) {
-        activeSocket = socket
-        // Complete handshake on host side
-        if (isHost) {
-            try {
-                val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream()))
-                val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-                val hello = reader.readLine() ?: ""
-                peerName = if (hello.startsWith("HELLO ")) hello.removePrefix("HELLO ") else "Unknown"
-                writer.write("HELLO ${deviceName()}\n"); writer.flush()
-            } catch (_: Exception) {}
+    /** Receiver side: connect to sender's IP:port with retries. */
+    private suspend fun tcpConnect(ip: String, port: Int, tier: TransportTier): Boolean =
+        withContext(Dispatchers.IO) {
+            repeat(3) { attempt ->
+                try {
+                    val sock = Socket()
+                    sock.connect(InetSocketAddress(ip, port), 4_000)
+                    sock.soTimeout = 0
+                    completeHandshake(sock, isHost = false)
+                    activeSocket = sock
+                    _state.value = EngineState.Connected(
+                        tier     = tier,
+                        peerName = peerName,
+                        isHost   = false,
+                        socket   = sock,
+                    )
+                    return@withContext true
+                } catch (e: Exception) {
+                    Log.d(TAG, "TCP attempt ${attempt + 1} to $ip:$port — ${e.message}")
+                    delay(600L * (attempt + 1))
+                }
+            }
+            false
         }
-        _state.value = EngineState.Connected(
-            tier     = tier,
-            peerName = peerName,
-            isHost   = isHost,
-            socket   = socket,
-        )
+
+    /** Exchange device names so both sides know who they're talking to. */
+    private fun completeHandshake(sock: Socket, isHost: Boolean) {
+        val writer = BufferedWriter(OutputStreamWriter(sock.getOutputStream()))
+        val reader = BufferedReader(InputStreamReader(sock.getInputStream()))
+        if (isHost) {
+            val hello = reader.readLine() ?: ""
+            peerName = if (hello.startsWith("HELLO ")) hello.removePrefix("HELLO ") else "Unknown"
+            writer.write("HELLO ${deviceName()}\n"); writer.flush()
+        } else {
+            writer.write("HELLO ${deviceName()}\n"); writer.flush()
+            val hello = reader.readLine() ?: ""
+            peerName = if (hello.startsWith("HELLO ")) hello.removePrefix("HELLO ") else "Unknown"
+        }
+        Log.d(TAG, "Handshake done — peer=$peerName isHost=$isHost")
     }
 
-    // ── File transfer ─────────────────────────────────────────────────────────
+    // ── File send ─────────────────────────────────────────────────────────────
 
     fun sendFile(
         filePath: String,
@@ -554,24 +516,18 @@ class P2pEngine @Inject constructor(
         val file = File(filePath)
         if (!file.exists()) { onError("File not found: $filePath"); return }
 
+        val tier = currentTier()
         scope.launch(Dispatchers.IO) {
             try {
                 val total = file.length()
-                _state.value = EngineState.Transferring(
-                    tier = tierFromSocket(sock), peerName = peerName,
-                    fileName = fileName, direction = "SEND",
-                    transferredBytes = 0, totalBytes = total, speedBps = 0,
-                )
+                _state.value = EngineState.Transferring(tier, peerName, fileName, "SEND", 0, total, 0)
 
-                val out = DataOutputStream(BufferedOutputStream(sock.getOutputStream(), 131_072))
-                // Header: "FILE <name> <size>\n"
-                val header = "FILE $fileName $total\n"
-                out.write(header.toByteArray())
+                // 128 KB buffer — sweet spot for mobile TCP
+                val out = BufferedOutputStream(sock.getOutputStream(), 131_072)
+                out.write("FILE $fileName $total\n".toByteArray())
 
                 val buf = ByteArray(131_072)
-                var sent = 0L
-                var lastTime = System.currentTimeMillis()
-                var lastSent = 0L
+                var sent = 0L; var tLast = System.currentTimeMillis(); var bLast = 0L
 
                 FileInputStream(file).use { fis ->
                     var n: Int
@@ -579,15 +535,11 @@ class P2pEngine @Inject constructor(
                         out.write(buf, 0, n)
                         sent += n
                         val now = System.currentTimeMillis()
-                        if (now - lastTime >= 200) {
-                            val bps = ((sent - lastSent) * 1000L) / (now - lastTime).coerceAtLeast(1)
-                            lastTime = now; lastSent = sent
+                        if (now - tLast >= 200) {
+                            val bps = (sent - bLast) * 1000L / (now - tLast).coerceAtLeast(1)
+                            tLast = now; bLast = sent
                             withContext(Dispatchers.Main) { onProgress(sent, total, bps) }
-                            _state.value = EngineState.Transferring(
-                                tier = tierFromSocket(sock), peerName = peerName,
-                                fileName = fileName, direction = "SEND",
-                                transferredBytes = sent, totalBytes = total, speedBps = bps,
-                            )
+                            _state.value = EngineState.Transferring(tier, peerName, fileName, "SEND", sent, total, bps)
                         }
                     }
                 }
@@ -601,6 +553,8 @@ class P2pEngine @Inject constructor(
         }
     }
 
+    // ── File receive ──────────────────────────────────────────────────────────
+
     fun receiveFile(
         saveDir: File,
         onProgress: (received: Long, total: Long, bps: Long, fileName: String) -> Unit,
@@ -608,26 +562,26 @@ class P2pEngine @Inject constructor(
         onError: (String) -> Unit,
     ) {
         val sock = activeSocket ?: run { onError("Not connected"); return }
+        val tier = currentTier()
+
         scope.launch(Dispatchers.IO) {
             try {
-                val din = DataInputStream(BufferedInputStream(sock.getInputStream(), 131_072))
-                // Read header line
-                val headerLine = StringBuilder()
+                val din = BufferedInputStream(sock.getInputStream(), 131_072)
+
+                // Read header line: "FILE <name> <size>\n"
+                val header = StringBuilder()
                 var b: Int
-                while (din.read().also { b = it } != -1 && b.toChar() != '\n') {
-                    headerLine.append(b.toChar())
-                }
-                val parts = headerLine.toString().trim().split(" ")
-                if (parts.size < 3 || parts[0] != "FILE") { onError("Bad protocol"); return@launch }
+                while (din.read().also { b = it } != -1 && b.toChar() != '\n') header.append(b.toChar())
+                val parts = header.toString().trim().split(" ")
+                if (parts.size < 3 || parts[0] != "FILE") { onError("Bad protocol header"); return@launch }
+
                 val fileName = parts[1]
                 val total    = parts[2].toLongOrNull() ?: 0L
 
                 saveDir.mkdirs()
                 val outFile = File(saveDir, fileName)
                 val buf = ByteArray(131_072)
-                var received = 0L
-                var lastTime = System.currentTimeMillis()
-                var lastRecv = 0L
+                var received = 0L; var tLast = System.currentTimeMillis(); var bLast = 0L
 
                 FileOutputStream(outFile).use { fos ->
                     while (received < total) {
@@ -637,15 +591,11 @@ class P2pEngine @Inject constructor(
                         fos.write(buf, 0, n)
                         received += n
                         val now = System.currentTimeMillis()
-                        if (now - lastTime >= 200) {
-                            val bps = ((received - lastRecv) * 1000L) / (now - lastTime).coerceAtLeast(1)
-                            lastTime = now; lastRecv = received
+                        if (now - tLast >= 200) {
+                            val bps = (received - bLast) * 1000L / (now - tLast).coerceAtLeast(1)
+                            tLast = now; bLast = received
                             withContext(Dispatchers.Main) { onProgress(received, total, bps, fileName) }
-                            _state.value = EngineState.Transferring(
-                                tier = tierFromSocket(sock), peerName = peerName,
-                                fileName = fileName, direction = "RECEIVE",
-                                transferredBytes = received, totalBytes = total, speedBps = bps,
-                            )
+                            _state.value = EngineState.Transferring(tier, peerName, fileName, "RECEIVE", received, total, bps)
                         }
                     }
                 }
@@ -658,51 +608,6 @@ class P2pEngine @Inject constructor(
         }
     }
 
-    // ── NSD (Local Wi-Fi discovery) ───────────────────────────────────────────
-
-    private fun advertiseNsd(port: Int) {
-        try {
-            val nsd = ctx.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
-            nsdManager = nsd
-
-            val info = NsdServiceInfo().apply {
-                serviceName = "$NSD_SERVICE_NAME-$currentSessionId"
-                serviceType = NSD_SERVICE_TYPE
-                setPort(port)
-            }
-            val listener = object : NsdManager.RegistrationListener {
-                override fun onServiceRegistered(info: NsdServiceInfo) {
-                    Log.d(TAG, "NSD registered: ${info.serviceName}")
-                }
-                override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
-                    Log.w(TAG, "NSD registration failed: $code")
-                }
-                override fun onServiceUnregistered(info: NsdServiceInfo) {}
-                override fun onUnregistrationFailed(info: NsdServiceInfo, code: Int) {}
-            }
-            nsdRegistrationListener = listener
-            nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
-        } catch (e: Exception) {
-            Log.w(TAG, "NSD advertise failed: ${e.message}")
-        }
-    }
-
-    // ── Utilities ─────────────────────────────────────────────────────────────
-
-    private fun tierFromSocket(sock: Socket): TransportTier {
-        val ip = sock.inetAddress.hostAddress ?: ""
-        return when {
-            ip.startsWith("192.168.49") -> TransportTier.HOTSPOT
-            ip.startsWith("192.168.")   -> TransportTier.LOCAL_WIFI
-            else                        -> TransportTier.LOCAL_WIFI
-        }
-    }
-
-    private fun deviceName() = "${Build.MANUFACTURER} ${Build.MODEL}".take(24)
-
-    private fun Socket.closeQuietly() = try { close() } catch (_: Exception) {}
-    private fun ServerSocket.closeQuietly() = try { close() } catch (_: Exception) {}
-
     // ── Cleanup ───────────────────────────────────────────────────────────────
 
     fun disconnect() {
@@ -711,30 +616,18 @@ class P2pEngine @Inject constructor(
         serverSocket?.closeQuietly()
         serverSocket = null
 
-        // NSD
-        nsdRegistrationListener?.let {
-            try { nsdManager?.unregisterService(it) } catch (_: Exception) {}
+        p2pReceiver?.let { try { ctx.unregisterReceiver(it) } catch (_: Exception) {} }
+        p2pReceiver = null
+        p2pChannel?.let { ch ->
+            try { p2pManager?.removeGroup(ch, null) } catch (_: Exception) {}
         }
-        nsdRegistrationListener = null
+        p2pManager = null
+        p2pChannel = null
 
-        // Wi-Fi Direct
-        wifiDirectReceiver?.let {
-            try { ctx.unregisterReceiver(it) } catch (_: Exception) {}
-        }
-        wifiDirectReceiver = null
-        wifiP2pChannel?.let { ch ->
-            try { wifiP2pManager?.removeGroup(ch, null) } catch (_: Exception) {}
-        }
-        wifiP2pManager = null
-        wifiP2pChannel = null
-
-        // Hotspot
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            (hotspotReservation as? WifiManager.LocalOnlyHotspotReservation)?.close()
+            hotspotReservation?.close()
         }
         hotspotReservation = null
-        hotspotSsid = null
-        hotspotPassword = null
 
         _state.value = EngineState.Idle
     }
@@ -743,4 +636,14 @@ class P2pEngine @Inject constructor(
         disconnect()
         scope.cancel()
     }
+
+    // ── Internals ─────────────────────────────────────────────────────────────
+
+    private fun currentTier(): TransportTier {
+        val ip = activeSocket?.inetAddress?.hostAddress ?: ""
+        return if (ip.startsWith("192.168.49")) TransportTier.WIFI_DIRECT else TransportTier.HOTSPOT
+    }
+
+    private fun Socket.closeQuietly()       = try { close() } catch (_: Exception) {}
+    private fun ServerSocket.closeQuietly() = try { close() } catch (_: Exception) {}
 }

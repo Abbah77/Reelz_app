@@ -1,13 +1,7 @@
 package com.axio.reelz.transfer
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  TransferManager — bridges P2pEngine ↔ ViewModel
-//
-//  Responsibilities:
-//   • Owns P2pEngine lifecycle
-//   • Translates EngineState → TransferState (UI-friendly)
-//   • Records transfers in Room via TransferRepository
-//   • Exposes simple send/receive commands
+//  TransferManager — bridges BeamEngine ↔ ViewModel / UI
 // ─────────────────────────────────────────────────────────────────────────────
 
 import android.content.Context
@@ -34,8 +28,6 @@ class TransferManager @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // ── UI state ──────────────────────────────────────────────────────────────
-
     val engineState: StateFlow<EngineState> = engine.state
 
     private val _uiState = MutableStateFlow<TransferUiState>(TransferUiState.Idle)
@@ -43,24 +35,19 @@ class TransferManager @Inject constructor(
 
     init {
         scope.launch {
-            engine.state.collect { es ->
-                _uiState.value = mapEngineToUi(es)
-            }
+            engine.state.collect { es -> _uiState.value = mapToUi(es) }
         }
     }
 
-    private fun mapEngineToUi(es: EngineState): TransferUiState = when (es) {
+    private fun mapToUi(es: EngineState): TransferUiState = when (es) {
         is EngineState.Idle        -> TransferUiState.Idle
-        is EngineState.Advertising -> TransferUiState.Preparing
+        is EngineState.Preparing   -> TransferUiState.Preparing
         is EngineState.Negotiating -> TransferUiState.Connecting
-        is EngineState.QrReady     -> {
-            val qr = generateQr(es.qrPayload, 700)
-            TransferUiState.QrReady(
-                qr         = qr,
-                payload    = es.qrPayload,
-                sessionId  = es.sessionId,
-            )
-        }
+        is EngineState.QrReady     -> TransferUiState.QrReady(
+            qr        = generateQr(es.qrPayload, 700),
+            payload   = es.qrPayload,
+            sessionId = es.sessionId,
+        )
         is EngineState.Connected -> TransferUiState.Connected(
             peerName = es.peerName,
             tier     = es.tier,
@@ -77,9 +64,9 @@ class TransferManager @Inject constructor(
         )
         is EngineState.Done  -> TransferUiState.Done
         is EngineState.Error -> TransferUiState.Error(
-            es.msg,
-            es.retryable,
-            when (es.kind) {
+            msg       = es.msg,
+            retryable = es.retryable,
+            kind = when (es.kind) {
                 "CONNECTION" -> TransferUiState.ErrorKind.CONNECTION
                 "TRANSFER"   -> TransferUiState.ErrorKind.TRANSFER
                 "PERMISSION" -> TransferUiState.ErrorKind.PERMISSION
@@ -89,91 +76,58 @@ class TransferManager @Inject constructor(
         )
     }
 
-    // ── Sender ────────────────────────────────────────────────────────────────
+    // ── Commands ──────────────────────────────────────────────────────────────
 
     fun startAsSender() {
-        val name = deviceName()
-        _uiState.value = TransferUiState.Preparing
-        scope.launch(Dispatchers.IO) {
-            val payload = engine.prepareAsSender(name)
-            val qr = generateQr(payload, 700)
-            val parts = payload.removePrefix("reelzbeam://").split("|")
-            _uiState.value = TransferUiState.QrReady(
-                qr        = qr,
-                payload   = payload,
-                sessionId = parts.getOrElse(0) { "" },
-            )
+        engine.prepareAsSender { qrPayload ->
+            // QrReady state is already set by the engine
         }
     }
 
-    // ── Receiver ──────────────────────────────────────────────────────────────
-
     fun connectFromQr(rawQr: String) {
-        engine.connectFromQr(rawQr, deviceName())
+        engine.connectFromQr(rawQr)
     }
-
-    // ── Send file ─────────────────────────────────────────────────────────────
 
     fun sendFile(filePath: String, fileName: String, peerName: String) {
         engine.sendFile(
             filePath   = filePath,
             fileName   = fileName,
-            onProgress = { sent, total, bps ->
-                _uiState.value = TransferUiState.Transferring(
-                    fileName = fileName, direction = "SEND", peerName = peerName,
-                    transferredBytes = sent, totalBytes = total, speedBps = bps,
-                    tier = (engine.state.value as? EngineState.Transferring)?.tier,
-                )
-            },
+            onProgress = { _, _, _ -> },
             onDone = {
                 scope.launch {
-                    repo.recordTransfer(
-                        TransferRecord(
-                            id        = UUID.randomUUID().toString(),
-                            fileName  = fileName,
-                            sizeBytes = File(filePath).length(),
-                            direction = "SEND",
-                            peerName  = peerName,
-                            status    = "DONE",
-                        )
-                    )
-                }
-            },
-            onError = { msg -> _uiState.value = TransferUiState.Error(msg, retryable = false, kind = TransferUiState.ErrorKind.CONNECTION) },
-        )
-    }
-
-    // ── Receive file (called by receiver after connect) ───────────────────────
-
-    fun startReceiving(saveDir: File, peerName: String) {
-        engine.receiveFile(
-            saveDir    = saveDir,
-            onProgress = { recv, total, bps, fileName ->
-                _uiState.value = TransferUiState.Transferring(
-                    fileName = fileName, direction = "RECEIVE", peerName = peerName,
-                    transferredBytes = recv, totalBytes = total, speedBps = bps,
-                    tier = (engine.state.value as? EngineState.Transferring)?.tier,
-                )
-            },
-            onDone = { file ->
-                scope.launch {
-                    repo.recordTransfer(
-                        TransferRecord(
-                            id        = UUID.randomUUID().toString(),
-                            fileName  = file.name,
-                            sizeBytes = file.length(),
-                            direction = "RECEIVE",
-                            peerName  = peerName,
-                            status    = "DONE",
-                        )
-                    )
+                    repo.recordTransfer(TransferRecord(
+                        id        = UUID.randomUUID().toString(),
+                        fileName  = fileName,
+                        sizeBytes = File(filePath).length(),
+                        direction = "SEND",
+                        peerName  = peerName,
+                        status    = "DONE",
+                    ))
                 }
             },
             onError = { msg -> _uiState.value = TransferUiState.Error(msg, retryable = false) },
         )
     }
 
-    // ── Disconnect / reset ────────────────────────────────────────────────────
+    fun startReceiving(saveDir: File, peerName: String) {
+        engine.receiveFile(
+            saveDir    = saveDir,
+            onProgress = { _, _, _, _ -> },
+            onDone = { file ->
+                scope.launch {
+                    repo.recordTransfer(TransferRecord(
+                        id        = UUID.randomUUID().toString(),
+                        fileName  = file.name,
+                        sizeBytes = file.length(),
+                        direction = "RECEIVE",
+                        peerName  = peerName,
+                        status    = "DONE",
+                    ))
+                }
+            },
+            onError = { msg -> _uiState.value = TransferUiState.Error(msg, retryable = false) },
+        )
+    }
 
     fun disconnect() {
         engine.disconnect()
@@ -184,10 +138,6 @@ class TransferManager @Inject constructor(
         engine.release()
         scope.cancel()
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private fun deviceName() = "${Build.MANUFACTURER} ${Build.MODEL}".take(24)
 }
 
 // ─── UI state ─────────────────────────────────────────────────────────────────
@@ -196,37 +146,41 @@ sealed class TransferUiState {
     object Idle       : TransferUiState()
     object Preparing  : TransferUiState()
     object Connecting : TransferUiState()
+
     data class QrReady(
         val qr: Bitmap?,
         val payload: String,
         val sessionId: String,
     ) : TransferUiState()
+
     data class Connected(
         val peerName: String,
         val tier: TransportTier,
         val isHost: Boolean,
     ) : TransferUiState()
+
     data class Transferring(
         val fileName: String,
-        val direction: String,   // "SEND" | "RECEIVE"
+        val direction: String,
         val peerName: String,
         val transferredBytes: Long,
         val totalBytes: Long,
         val speedBps: Long,
         val tier: TransportTier?,
     ) : TransferUiState()
+
     object Done : TransferUiState()
+
     data class Error(
         val msg: String,
         val retryable: Boolean,
-        /** Hint for the UI to pick a contextual icon and copy. */
         val kind: ErrorKind = ErrorKind.GENERIC,
     ) : TransferUiState()
 
     enum class ErrorKind { PERMISSION, CONNECTION, TIMEOUT, TRANSFER, GENERIC }
 }
 
-// ─── QR generator (kept here, shared with screen) ─────────────────────────────
+// ─── QR generator ─────────────────────────────────────────────────────────────
 
 fun generateQr(content: String, sizePx: Int): Bitmap? = try {
     val hints = mapOf(

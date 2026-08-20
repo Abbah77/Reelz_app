@@ -307,9 +307,10 @@ data class AdsConfigDto(
     @SerializedName("mediation_provider")  val mediationProvider: String = "max",
     val placements: AdPlacementsDto = AdPlacementsDto(),
     val frequency: AdFrequencyDto = AdFrequencyDto(),
+) {
     /** Convenience alias so AdEngine can use interstitialFrequency.retryDelayMs */
-    val interstitialFrequency: AdFrequencyDto get() = frequency,
-)
+    val interstitialFrequency: AdFrequencyDto get() = frequency
+}
 
 // ── Auth — schema v3 ──────────────────────────────────────────────────────────
 data class AuthResponseDto(
