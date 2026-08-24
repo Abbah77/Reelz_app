@@ -634,7 +634,11 @@ class PlayerViewModel @Inject constructor(
     fun playStream(result: StreamResult) {
         val p = exoPlayer ?: return
         val primary = result.primaryStream ?: return
-        val url = primary.url
+        val rawUrl = primary.url
+        // Normalise: plain absolute paths from downloads don't carry "file://" — add it so
+        // ExoPlayer uses the local file system instead of the network data source.
+        val url = if (!rawUrl.startsWith("file://") && !rawUrl.startsWith("http://") && !rawUrl.startsWith("https://"))
+            "file://$rawUrl" else rawUrl
         val isLocalFile = url.startsWith("file://")
         val item = MediaItem.Builder().setUri(url)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build()).build()
@@ -686,7 +690,8 @@ class PlayerViewModel @Inject constructor(
             val match = offlineDownloads.firstOrNull { it.quality == label && it.status == DownloadStatus.DONE }
                 ?: offlineDownloads.firstOrNull { it.status == DownloadStatus.DONE }
             if (match != null) {
-                val url = match.filePath.takeIf { it.isNotBlank() } ?: return
+                val rawPath = match.filePath.takeIf { it.isNotBlank() } ?: return
+                val url = if (!rawPath.startsWith("file://") && !rawPath.startsWith("http")) "file://$rawPath" else rawPath
                 val savedPos = exoPlayer?.currentPosition ?: 0L
                 val track = StreamTrack(name = label, url = url,
                     type = if (url.contains(".m3u8", ignoreCase = true)) "hls" else "mp4")
