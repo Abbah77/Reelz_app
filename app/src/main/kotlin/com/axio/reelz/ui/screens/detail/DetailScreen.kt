@@ -205,7 +205,9 @@ class DetailViewModel @Inject constructor(
      * Makes the download sheet open instantly — zero network call on tap.
      * Key is "tmdbId_season_episode" so episodes don't collide with movies.
      */
-    private val preResolvedQualities = HashMap<String, List<QualityTrack>>()
+    private val preResolvedQualities  = HashMap<String, List<QualityTrack>>()
+    // url → type mapping so enqueue knows "mp4" vs "hls" without re-parsing
+    private val preResolvedLinkTypes  = HashMap<String, String>()
 
     private fun qualityKey(id: String, season: Int = 0, episode: Int = 0) =
         "${id}_${season}_${episode}"
@@ -368,6 +370,10 @@ class DetailViewModel @Inject constructor(
                 // Convert DownloadLink → QualityTrack for the download picker UI
                 val tracks = links.map { l -> QualityTrack(label = l.label, url = l.url,
                     estimatedSizeBytes = l.sizeBytes) }
+                // Store type mapping for enqueue: url → type ("mp4" | "hls")
+                val linkTypeMap = links.associate { it.url to it.type }
+                preResolvedLinkTypes.clear()
+                preResolvedLinkTypes.putAll(linkTypeMap)
                 preResolvedQualities[key] = tracks
                 _ui.update {
                     it.copy(
@@ -413,6 +419,8 @@ class DetailViewModel @Inject constructor(
 
         viewModelScope.launch {
             val headers = preResolvedStream?.primaryStream?.headers ?: emptyMap()
+            val linkType = preResolvedLinkTypes[track.url]
+                ?: if (track.url.contains(".m3u8")) "hls" else "mp4"
             downloadRepo.enqueue(
                 ctx         = ctx,
                 id          = detail.id,
@@ -423,6 +431,7 @@ class DetailViewModel @Inject constructor(
                 episode     = state.pendingDownloadEpisode,
                 episodeName = if (state.pendingDownloadSeason > 0) state.pendingDownloadTitle else "",
                 quality     = track.label,
+                linkType    = linkType,
                 streamUrl   = track.url,
                 headers     = headers,
             )

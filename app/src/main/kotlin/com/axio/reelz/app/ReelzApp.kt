@@ -80,7 +80,7 @@ class ReelzApp : Application(), ImageLoaderFactory, Configuration.Provider {
                             downloadDao.getByStatus(DownloadStatus.DOWNLOADING.name)
                 stuck.forEach { row ->
                     downloadDao.markPaused(row.id)
-                    androidx.media3.exoplayer.offline.DownloadService.sendResumeDownloads(this@ReelzApp, ReelzDownloadService::class.java, false)
+                    ReelzDownloadService.resumeAll(this@ReelzApp)
                 }
             } catch (e: Exception) {
                 FirebaseCrashlytics.getInstance().recordException(e)

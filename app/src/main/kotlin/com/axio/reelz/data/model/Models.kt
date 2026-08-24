@@ -112,6 +112,7 @@ data class StreamResult(
 // ── Downloads — schema v3: label, url, language, size_bytes, premium ─────────
 data class DownloadLink(
     val label: String,
+    val type: String = "mp4",     // "mp4" | "hls" — tells downloader how to handle
     val url: String,
     val language: String,
     val sizeBytes: Long,
@@ -151,6 +152,7 @@ data class DownloadItem(
     val watchProgressMs: Long = 0,
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
+    val localPlaylistPath: String = "",  // HLS: path to local index.m3u8; MP4: same as filePath
 )
 
 // ── User session ──────────────────────────────────────────────────────────────

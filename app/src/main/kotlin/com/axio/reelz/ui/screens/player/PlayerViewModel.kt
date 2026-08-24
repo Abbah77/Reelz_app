@@ -301,7 +301,13 @@ class PlayerViewModel @Inject constructor(
                 val offlineQualities = allDownloads
                     .filter { it.status == DownloadStatus.DONE }
                     .sortedByDescending { it.sizeBytes }
-                    .map { QualityTrack(it.quality, it.filePath) }
+                    .map { item ->
+                        // For HLS: use localPlaylistPath (local index.m3u8)
+                        // For MP4: use filePath
+                        val playPath = if (item.streamUrl.contains(".m3u8") && item.localPlaylistPath.isNotBlank())
+                            item.localPlaylistPath else item.filePath
+                        QualityTrack(item.quality, playPath)
+                    }
                 val startQuality = preferredOfflineQuality.takeIf { q ->
                     q.isNotBlank() && offlineQualities.any { it.label == q }
                 } ?: offlineQualities.firstOrNull()?.label ?: ""
@@ -314,11 +320,16 @@ class PlayerViewModel @Inject constructor(
                     val preferred = _ui.value.selectedQuality
                     val match = offlineDownloads.firstOrNull { it.quality == preferred && it.status == DownloadStatus.DONE }
                         ?: offlineDownloads.firstOrNull { it.status == DownloadStatus.DONE }
-                    match?.filePath?.takeIf { it.isNotBlank() } ?: streamUrl
+                    // Prefer localPlaylistPath for HLS, fallback to filePath for MP4
+                    val localPath = match?.let { item ->
+                        if (item.streamUrl.contains(".m3u8") && item.localPlaylistPath.isNotBlank())
+                            item.localPlaylistPath else item.filePath
+                    }
+                    localPath?.takeIf { it.isNotBlank() } ?: streamUrl
                 } else streamUrl
 
                 val track = StreamTrack(name = "Offline", url = resolvedUrl,
-                    type = if (streamIsHls) "hls" else "mp4")
+                    type = if (resolvedUrl.endsWith(".m3u8") || streamIsHls) "hls" else "mp4")
                 val result = StreamResult(streams = listOf(track),
                     expiresAtMs = Long.MAX_VALUE)
                 lastResult = result

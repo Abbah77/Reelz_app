@@ -197,6 +197,7 @@ data class StreamResponseDto(
 // ── Download links — schema v3: links[], expires_at_ms ───────────────────────
 data class DownloadLinkDto(
     val label: String = "Auto",
+    val type: String = "mp4",           // "mp4" | "hls"
     val url: String = "",
     val language: String = "English",
     @SerializedName("size_bytes") val sizeBytes: Long = 0,
@@ -204,6 +205,7 @@ data class DownloadLinkDto(
 ) {
     fun toModel() = DownloadLink(
         label     = label,
+        type      = type,
         url       = url,
         language  = language,
         sizeBytes = sizeBytes,
