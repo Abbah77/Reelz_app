@@ -109,10 +109,8 @@ class ConfigRepository @Inject constructor(
                 applyConfig(payload)
                 _state.value = ConfigState.READY
                 cacheDao.upsert(AppConfigCacheRow(
-                    configJson    = gson.toJson(payload),
-                    version       = payload.version,
-                    // honour the server-supplied TTL when caching in Room
-                    cacheTtlMs    = envelope.cacheTtlMs ?: 3_600_000L,
+                    configJson = gson.toJson(payload),
+                    version    = payload.version,
                 ))
                 Log.d(tag, "Config fetched from backend v${payload.version}")
             }
