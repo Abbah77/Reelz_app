@@ -13,13 +13,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * StreamRepository — schema v3
+ * StreamRepository — Schema v4
  *
- * Stream: returns StreamResult with streams[], expires_at_ms.
- * Download: returns list of DownloadLink (label, url, language, size_bytes, premium).
- * Subtitles: returns list of Subtitle (url, language, enabled).
+ * ENVELOPE RULE: Every call returns ApiResponse<T>.
+ * Pattern: unwrap envelope.data, read expires_at_ms from inside data
+ * (it is content metadata — link expiry), read cache_ttl_ms from
+ * envelope root (null for stream/download — URLs are never app-cached).
  *
- * Auth is optional for all three — guests get identical service.
+ * Auth is optional for all three endpoints — guests get identical service.
  * Token is sent when available to enable server-side history logging.
  */
 @Singleton
@@ -68,17 +69,25 @@ class StreamRepository @Inject constructor(
 
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val dto = result.data
-                if (!dto.ok || dto.streams.isEmpty()) {
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return@withContext NetworkResult.Error(
+                        message    = envelope.error ?: "No streams available for this title",
+                        isNotFound = true,
+                    )
+                }
+                if (payload.streams.isEmpty()) {
                     return@withContext NetworkResult.Error(
                         message    = "No streams available for this title",
                         isNotFound = true,
                     )
                 }
-                val model = dto.toModel()
+                // expires_at_ms is inside data — it is content metadata (link expiry)
+                val model = payload.toModel()
                 streamCache[key] = StreamEntry(result = model)
                 Log.d(tag, "Stream resolved: ${model.streams.size} track(s) for $key")
-                NetworkResult.Success<StreamResult>(model)
+                NetworkResult.Success(model)
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,
@@ -111,8 +120,13 @@ class StreamRepository @Inject constructor(
         val result = safeApiCall(tag) { api.getDownloadLinks(body) }
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val links = result.data.links.map { it.toModel() }
-                NetworkResult.Success<List<DownloadLink>>(links)
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return@withContext NetworkResult.Error(envelope.error ?: "No download links available")
+                }
+                // expires_at_ms is inside data — content metadata, not response metadata
+                NetworkResult.Success(payload.links.map { it.toModel() })
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,
@@ -148,9 +162,14 @@ class StreamRepository @Inject constructor(
         val result = safeApiCall(tag) { api.getSubtitles(body) }
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val subs = result.data.subtitles.map { it.toModel() }
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return@withContext NetworkResult.Error(envelope.error ?: "Subtitles unavailable")
+                }
+                val subs = payload.subtitles.map { it.toModel() }
                 if (subs.isNotEmpty()) subtitleCache[key] = subs
-                NetworkResult.Success<List<Subtitle>>(subs)
+                NetworkResult.Success(subs)
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,

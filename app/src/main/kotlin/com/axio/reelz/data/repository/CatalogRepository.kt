@@ -14,6 +14,17 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  CatalogRepository — Schema v4
+//
+//  ENVELOPE RULE: Every API call returns ApiResponse<T>.
+//  Pattern in every branch:
+//    val envelope = result.data           // ApiResponse<T>
+//    if (!envelope.ok || envelope.data == null) → Error
+//    val payload  = envelope.data         // T — the actual content
+//    val ttl      = envelope.cacheTtlMs   // Long? — from root, not inside payload
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Singleton
 class CatalogRepository @Inject constructor(
     private val api: ReelzApi,
@@ -27,15 +38,15 @@ class CatalogRepository @Inject constructor(
 
     suspend fun getFeed(forceRefresh: Boolean = false): NetworkResult<List<FeedSection>> =
         withContext(Dispatchers.IO) {
-            val cached  = feedDao.getAll()
+            val cached   = feedDao.getAll()
             val hasCache = cached.isNotEmpty()
             val isStale  = forceRefresh || cached.any { it.isStale() }
 
             if (hasCache && !isStale) {
                 Log.d(tag, "Feed: serving ${cached.size} sections from cache")
                 return@withContext NetworkResult.Success(
-                    data      = cached.map { it.toFeedSection() },
-                    fromCache = true,
+                    data       = cached.map { it.toFeedSection() },
+                    fromCache  = true,
                     cacheAgeMs = System.currentTimeMillis() - (cached.minOfOrNull { it.cachedAtMs } ?: 0L),
                 )
             }
@@ -44,8 +55,14 @@ class CatalogRepository @Inject constructor(
 
             return@withContext when (result) {
                 is NetworkResult.Success -> {
-                    val dto  = result.data
-                    val rows = dto.sections.mapNotNull { sectionDto ->
+                    val envelope = result.data
+                    val payload  = envelope.data
+                    if (!envelope.ok || payload == null) {
+                        return@withContext NetworkResult.Error(envelope.error ?: "Feed unavailable")
+                    }
+                    val cacheTtlMs = envelope.cacheTtlMs ?: 3_600_000L
+
+                    val rows = payload.sections.mapNotNull { sectionDto ->
                         if (sectionDto.items.isEmpty()) null
                         else CachedFeedRow(
                             sectionId  = sectionDto.id,
@@ -53,21 +70,19 @@ class CatalogRepository @Inject constructor(
                             itemsJson  = gson.toJson(sectionDto.items),
                             hasMore    = sectionDto.hasMore,
                             nextCursor = sectionDto.nextCursor,
-                            cacheTtlMs = dto.cacheTtlMs,
+                            cacheTtlMs = cacheTtlMs,
                         )
                     }
                     if (rows.isNotEmpty()) {
                         feedDao.upsertAll(rows)
-                        Log.d(tag, "Feed: cached ${rows.size} sections")
+                        Log.d(tag, "Feed: cached ${rows.size} sections (ttl=${cacheTtlMs}ms)")
                     }
-                    NetworkResult.Success<List<FeedSection>>(
-                        data = dto.sections.map { it.toModel() }
-                    )
+                    NetworkResult.Success(data = payload.sections.map { it.toModel() })
                 }
                 is NetworkResult.Error -> {
                     if (hasCache) {
                         Log.w(tag, "Feed: network failed, serving stale cache")
-                        NetworkResult.Success<List<FeedSection>>(
+                        NetworkResult.Success(
                             data      = cached.map { it.toFeedSection() },
                             fromCache = true,
                         )
@@ -81,7 +96,7 @@ class CatalogRepository @Inject constructor(
                     }
                 }
                 NetworkResult.Loading -> {
-                    if (hasCache) NetworkResult.Success<List<FeedSection>>(
+                    if (hasCache) NetworkResult.Success(
                         data = cached.map { it.toFeedSection() }, fromCache = true
                     ) else NetworkResult.Loading
                 }
@@ -98,8 +113,12 @@ class CatalogRepository @Inject constructor(
         val result = safeApiCall(tag) { api.getFeedSection(sectionId, cursor, limit) }
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val items = result.data.items.map { it.toModel() }
-                NetworkResult.Success<Pair<List<Media>, String?>>(items to result.data.nextCursor)
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return@withContext NetworkResult.Error(envelope.error ?: "Section unavailable")
+                }
+                NetworkResult.Success(payload.items.map { it.toModel() } to payload.nextCursor)
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,
@@ -125,8 +144,12 @@ class CatalogRepository @Inject constructor(
         }
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val items = result.data.items.map { it.toModel() }
-                NetworkResult.Success<Pair<List<Media>, String?>>(items to result.data.nextCursor)
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return@withContext NetworkResult.Error(envelope.error ?: "Discover unavailable")
+                }
+                NetworkResult.Success(payload.items.map { it.toModel() } to payload.nextCursor)
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,
@@ -140,8 +163,8 @@ class CatalogRepository @Inject constructor(
 
     // ── Genres ────────────────────────────────────────────────────────────────
 
-    private val genreCache  = mutableMapOf<String, Pair<List<Genre>, Long>>()
-    private val genreTtlMs  = 24 * 3_600_000L
+    private val genreCache = mutableMapOf<String, Pair<List<Genre>, Long>>()
+    private val genreTtlMs = 24 * 3_600_000L
 
     suspend fun getGenres(mediaType: String = "movie"): NetworkResult<List<Genre>> =
         withContext(Dispatchers.IO) {
@@ -153,9 +176,14 @@ class CatalogRepository @Inject constructor(
             val result = safeApiCall(tag) { api.getGenres(mediaType) }
             return@withContext when (result) {
                 is NetworkResult.Success -> {
-                    val genres = result.data.genres.map { it.toModel() }
+                    val envelope = result.data
+                    val payload  = envelope.data
+                    if (!envelope.ok || payload == null) {
+                        return@withContext NetworkResult.Error(envelope.error ?: "Genres unavailable")
+                    }
+                    val genres = payload.genres.map { it.toModel() }
                     genreCache[mediaType] = genres to System.currentTimeMillis()
-                    NetworkResult.Success<List<Genre>>(genres)
+                    NetworkResult.Success(genres)
                 }
                 is NetworkResult.Error -> NetworkResult.Error(
                     message        = result.message,
@@ -202,25 +230,42 @@ class CatalogRepository @Inject constructor(
         val result = safeApiCall(tag) { api.getDetail(id) }
         return when (result) {
             is NetworkResult.Success -> {
-                val dto   = result.data
-                val model = dto.toModel()
-                detailDao.upsert(CachedDetailRow(mediaId = id, detailJson = gson.toJson(dto), cacheTtlMs = dto.cacheTtlMs))
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return NetworkResult.Error(envelope.error ?: "Detail unavailable")
+                }
+                val cacheTtlMs = envelope.cacheTtlMs ?: 3_600_000L
+                val model = payload.toModel()
+                detailDao.upsert(CachedDetailRow(
+                    mediaId    = id,
+                    detailJson = gson.toJson(payload),
+                    cacheTtlMs = cacheTtlMs,
+                ))
                 detailDao.evictToLimit(500)
                 detailMemCache[id] = model to System.currentTimeMillis()
-                NetworkResult.Success<MediaDetail>(model)
+                NetworkResult.Success(model)
             }
             is NetworkResult.Error -> {
                 if (staleRow != null) {
                     try {
                         val dto = gson.fromJson(staleRow.detailJson, MediaDetailDto::class.java)
-                        NetworkResult.Success<MediaDetail>(dto.toModel(), fromCache = true)
+                        NetworkResult.Success(dto.toModel(), fromCache = true)
                     } catch (_: Exception) {
-                        NetworkResult.Error(message = result.message, code = result.code,
-                            isNetworkError = result.isNetworkError, isNotFound = result.isNotFound)
+                        NetworkResult.Error(
+                            message        = result.message,
+                            code           = result.code,
+                            isNetworkError = result.isNetworkError,
+                            isNotFound     = result.isNotFound,
+                        )
                     }
                 } else {
-                    NetworkResult.Error(message = result.message, code = result.code,
-                        isNetworkError = result.isNetworkError, isNotFound = result.isNotFound)
+                    NetworkResult.Error(
+                        message        = result.message,
+                        code           = result.code,
+                        isNetworkError = result.isNetworkError,
+                        isNotFound     = result.isNotFound,
+                    )
                 }
             }
             NetworkResult.Loading -> NetworkResult.Loading
@@ -243,9 +288,14 @@ class CatalogRepository @Inject constructor(
             val result = safeApiCall(tag) { api.getSeasonEpisodes(id, season) }
             return@withContext when (result) {
                 is NetworkResult.Success -> {
-                    val eps = result.data.episodes.map { it.toModel() }
+                    val envelope = result.data
+                    val payload  = envelope.data
+                    if (!envelope.ok || payload == null) {
+                        return@withContext NetworkResult.Error(envelope.error ?: "Episodes unavailable")
+                    }
+                    val eps = payload.episodes.map { it.toModel() }
                     seasonMemCache[cacheKey] = eps to System.currentTimeMillis()
-                    NetworkResult.Success<List<Episode>>(eps)
+                    NetworkResult.Success(eps)
                 }
                 is NetworkResult.Error -> NetworkResult.Error(
                     message        = result.message,
@@ -257,12 +307,8 @@ class CatalogRepository @Inject constructor(
             }
         }
 
-    // ── Shorts — schema v3: GET /api/v1/shorts ───────────────────────────────
+    // ── Shorts ────────────────────────────────────────────────────────────────
 
-    /**
-     * Returns a triple of (videos, nextCursor, hasMore).
-     * Auth is optional — guests get the same response as signed-in users.
-     */
     suspend fun getShorts(
         cursor: String? = null,
         limit: Int = 10,
@@ -271,11 +317,15 @@ class CatalogRepository @Inject constructor(
             val result = safeApiCall(tag) { api.getShorts(cursor, limit) }
             when (result) {
                 is NetworkResult.Success -> {
-                    val dto = result.data
+                    val envelope = result.data
+                    val payload  = envelope.data
+                    if (!envelope.ok || payload == null) {
+                        return@withContext NetworkResult.Error(envelope.error ?: "Shorts unavailable")
+                    }
                     NetworkResult.Success(Triple(
-                        dto.items.map { it.toModel() },
-                        dto.nextCursor,
-                        dto.hasMore,
+                        payload.items.map { it.toModel() },
+                        payload.nextCursor,
+                        payload.hasMore,
                     ))
                 }
                 is NetworkResult.Error -> NetworkResult.Error(

@@ -4,10 +4,15 @@ import com.axio.reelz.data.model.*
 import com.google.gson.annotations.SerializedName
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Backend DTOs — Schema v3
+//  Backend DTOs — Schema v4
 //
-//  Every field matches the server contract exactly.
-//  toModel() mappers convert to domain types consumed by the UI.
+//  ENVELOPE RULE: Every endpoint now returns the standard envelope:
+//    { "ok": true, "data": {...}, "error": null, "cache_ttl_ms": 3600000 }
+//
+//  ApiResponse<T> wraps every call. Repositories unwrap .data before mapping.
+//  cache_ttl_ms is read from the envelope root — NOT from inside data objects.
+//  expires_at_ms (stream/download link expiry) lives inside data — it is
+//  content metadata, not response metadata.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Standard envelope ─────────────────────────────────────────────────────────
@@ -18,7 +23,7 @@ data class ApiResponse<T>(
     @SerializedName("cache_ttl_ms") val cacheTtlMs: Long? = null,
 )
 
-// ── Media card (list item) — schema v3: id, title, poster_url, rating, media_type ──
+// ── Media card (list item) ────────────────────────────────────────────────────
 data class MediaDto(
     val id: String = "",
     val title: String = "",
@@ -35,7 +40,7 @@ data class MediaDto(
     )
 }
 
-// ── Feed response ─────────────────────────────────────────────────────────────
+// ── Feed ──────────────────────────────────────────────────────────────────────
 data class FeedSectionDto(
     val id: String = "",
     val title: String = "",
@@ -54,17 +59,17 @@ data class FeedSectionDto(
     )
 }
 
-data class FeedResponseDto(
+// data field inside ApiResponse<FeedData>
+data class FeedData(
     val sections: List<FeedSectionDto> = emptyList(),
-    @SerializedName("cache_ttl_ms") val cacheTtlMs: Long = 3_600_000L,
 )
 
 // ── Paginated content list ─────────────────────────────────────────────────────
-data class PagedResponseDto(
+// data field inside ApiResponse<PagedData>
+data class PagedData(
     val items: List<MediaDto> = emptyList(),
     @SerializedName("has_more")    val hasMore: Boolean = false,
     @SerializedName("next_cursor") val nextCursor: String? = null,
-    @SerializedName("cache_ttl_ms") val cacheTtlMs: Long = 1_800_000L,
 )
 
 // ── Detail ────────────────────────────────────────────────────────────────────
@@ -82,6 +87,7 @@ data class CastMemberDto(
     fun toModel() = CastMember(name = name, character = character, photoUrl = photoUrl)
 }
 
+// data field inside ApiResponse<MediaDetailDto>
 data class MediaDetailDto(
     val id: String = "",
     val title: String = "",
@@ -100,7 +106,6 @@ data class MediaDetailDto(
     val cast: List<CastMemberDto> = emptyList(),
     val seasons: List<SeasonDto> = emptyList(),
     val similar: List<MediaDto> = emptyList(),
-    @SerializedName("cache_ttl_ms") val cacheTtlMs: Long = 3_600_000L,
 ) {
     fun toModel() = MediaDetail(
         id             = id,
@@ -144,9 +149,9 @@ data class EpisodeDto(
     )
 }
 
-data class SeasonDetailDto(
+// data field inside ApiResponse<SeasonData>
+data class SeasonData(
     val episodes: List<EpisodeDto> = emptyList(),
-    @SerializedName("cache_ttl_ms") val cacheTtlMs: Long = 86_400_000L,
 )
 
 // ── Genre list ────────────────────────────────────────────────────────────────
@@ -154,11 +159,12 @@ data class GenreDto(val id: String = "", val name: String = "") {
     fun toModel() = Genre(id = id, name = name)
 }
 
-data class GenresResponseDto(
+// data field inside ApiResponse<GenresData>
+data class GenresData(
     val genres: List<GenreDto> = emptyList(),
 )
 
-// ── Stream response — schema v3: streams[], expires_at_ms ────────────────────
+// ── Stream ────────────────────────────────────────────────────────────────────
 data class StreamSubtitleDto(
     val url: String = "",
     val language: String = "en",
@@ -183,18 +189,19 @@ data class StreamItemDto(
     )
 }
 
-data class StreamResponseDto(
-    val ok: Boolean = false,
+// data field inside ApiResponse<StreamData>
+// expires_at_ms lives here — it is content metadata (link expiry), not response metadata
+data class StreamData(
     val streams: List<StreamItemDto> = emptyList(),
     @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
 ) {
     fun toModel() = StreamResult(
-        streams   = streams.map { it.toModel() },
+        streams     = streams.map { it.toModel() },
         expiresAtMs = expiresAtMs,
     )
 }
 
-// ── Download links — schema v3: links[], expires_at_ms ───────────────────────
+// ── Download links ────────────────────────────────────────────────────────────
 data class DownloadLinkDto(
     val label: String = "Auto",
     val type: String = "mp4",           // "mp4" | "hls"
@@ -213,13 +220,14 @@ data class DownloadLinkDto(
     )
 }
 
-data class DownloadLinksResponseDto(
-    val ok: Boolean = false,
+// data field inside ApiResponse<DownloadData>
+// expires_at_ms lives here — it is content metadata (link expiry), not response metadata
+data class DownloadData(
     val links: List<DownloadLinkDto> = emptyList(),
     @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
 )
 
-// ── Subtitles response ────────────────────────────────────────────────────────
+// ── Subtitles ─────────────────────────────────────────────────────────────────
 data class SubtitleDto(
     val url: String = "",
     val language: String = "en",
@@ -228,12 +236,12 @@ data class SubtitleDto(
     fun toModel() = Subtitle(url = url, language = language, enabled = enabled)
 }
 
-data class SubtitlesResponseDto(
-    val ok: Boolean = false,
+// data field inside ApiResponse<SubtitlesData>
+data class SubtitlesData(
     val subtitles: List<SubtitleDto> = emptyList(),
 )
 
-// ── Shorts — schema v3: id, title, source, url, thumbnail ────────────────────
+// ── Shorts ────────────────────────────────────────────────────────────────────
 data class ShortVideoDto(
     val id: String = "",
     val title: String = "",
@@ -250,13 +258,15 @@ data class ShortVideoDto(
     )
 }
 
-data class ShortsResponseDto(
+// data field inside ApiResponse<ShortsData>
+data class ShortsData(
     val items: List<ShortVideoDto> = emptyList(),
     @SerializedName("has_more")    val hasMore: Boolean = false,
     @SerializedName("next_cursor") val nextCursor: String? = null,
 )
 
-// ── App Config — schema v3 ────────────────────────────────────────────────────
+// ── App Config ────────────────────────────────────────────────────────────────
+// data field inside ApiResponse<AppConfigDto>
 data class AppConfigDto(
     val version: Int = 1,
     @SerializedName("min_app_version")    val minAppVersion: Int = 1,
@@ -284,7 +294,6 @@ data class AdPlacementsDto(
     @SerializedName("interstitial_enabled") val interstitialEnabled: Boolean = true,
     @SerializedName("native_enabled")       val nativeEnabled: Boolean = true,
     @SerializedName("preroll_enabled")      val prerollEnabled: Boolean = false,
-    // Not in schema v3 — defaulting to false; enable via backend config extension
     @SerializedName("rewarded_enabled")     val rewardedEnabled: Boolean = false,
     @SerializedName("app_open_enabled")     val appOpenEnabled: Boolean = false,
 )
@@ -294,7 +303,6 @@ data class AdFrequencyDto(
     @SerializedName("every_n_plays")              val everyNPlays: Int = 3,
     @SerializedName("min_ms_between")             val minMsBetween: Long = 60_000L,
     @SerializedName("max_per_session")            val maxPerSession: Int = 10,
-    /** Retry delay in ms after a failed ad load. Not in schema v3 — defaults to 30 s. */
     @SerializedName("retry_delay_ms")             val retryDelayMs: Long = 30_000L,
 )
 
@@ -305,18 +313,16 @@ data class AdsConfigDto(
     @SerializedName("interstitial_id")     val interstitialId: String = "",
     @SerializedName("rewarded_id")         val rewardedId: String = "",
     @SerializedName("native_id")           val nativeId: String = "",
-    /** Mediation provider string for AppLovin SDK. Defaults to "max". */
     @SerializedName("mediation_provider")  val mediationProvider: String = "max",
     val placements: AdPlacementsDto = AdPlacementsDto(),
     val frequency: AdFrequencyDto = AdFrequencyDto(),
 ) {
-    /** Convenience alias so AdEngine can use interstitialFrequency.retryDelayMs */
     val interstitialFrequency: AdFrequencyDto get() = frequency
 }
 
-// ── Auth — schema v3 ──────────────────────────────────────────────────────────
-data class AuthResponseDto(
-    val ok: Boolean = false,
+// ── Auth ──────────────────────────────────────────────────────────────────────
+// data field inside ApiResponse<AuthData>
+data class AuthData(
     @SerializedName("user_id")               val userId: String = "",
     @SerializedName("access_token")          val accessToken: String = "",
     @SerializedName("refresh_token")         val refreshToken: String = "",
@@ -325,21 +331,23 @@ data class AuthResponseDto(
     @SerializedName("premium_expires_at_ms") val premiumExpiresAtMs: Long = 0L,
 )
 
-// ── Token refresh response ─────────────────────────────────────────────────────
-data class RefreshResponseDto(
-    val ok: Boolean = false,
+// ── Token refresh ─────────────────────────────────────────────────────────────
+// data field inside ApiResponse<RefreshData>
+data class RefreshData(
     @SerializedName("access_token")  val accessToken: String = "",
     @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
 )
 
 // ── Sync ──────────────────────────────────────────────────────────────────────
-data class SyncResponseDto(
-    val ok: Boolean = false,
+// data field inside ApiResponse<SyncData>
+data class SyncData(
+    // empty — server returns {} as acknowledgement
+    val placeholder: String? = null,
 )
 
 // ── Payment init ──────────────────────────────────────────────────────────────
-data class PaymentInitDto(
-    val ok: Boolean = false,
+// data field inside ApiResponse<PaymentData>
+data class PaymentData(
     @SerializedName("authorization_url") val authorizationUrl: String = "",
     val reference: String = "",
 )

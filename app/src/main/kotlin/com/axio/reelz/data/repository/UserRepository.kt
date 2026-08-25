@@ -17,15 +17,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * UserRepository — schema v3
+ * UserRepository — Schema v4
  *
- * /auth/google returns: ok, user_id, access_token, refresh_token, expires_at_ms,
- *                       premium, premium_expires_at_ms
+ * ENVELOPE RULE: all auth endpoints return ApiResponse<T>.
+ *   /auth/google  → ApiResponse<AuthData>
+ *   /auth/refresh → ApiResponse<RefreshData>
+ *   /auth/sync    → ApiResponse<SyncData>
+ *
  * name, email, photo_url come from Google SDK — NOT from backend.
- *
- * /auth/refresh uses refresh_token (not access_token) in the Bearer header.
- * Returns: ok, access_token, expires_at_ms
- *
+ * /auth/refresh uses refresh_token (not access_token) in Bearer header.
  * /auth/sync syncs history only — watchlist is 100% local (Room DB).
  */
 @Singleton
@@ -50,7 +50,6 @@ class UserRepository @Inject constructor(
         if (row != null) {
             _session.value = row.toModel()
             Log.d(tag, "Session loaded: uid=${row.uid.take(8)} premium=${row.isPremium}")
-            // Refresh access token if near expiry (within 5 min)
             val fiveMin = 5 * 60 * 1000L
             if (row.expiresAtMs > 0 && row.expiresAtMs - System.currentTimeMillis() < fiveMin) {
                 refreshAccessToken()
@@ -70,25 +69,30 @@ class UserRepository @Inject constructor(
         val result = safeApiCall(tag) { api.authWithGoogle(GoogleAuthBody(idToken)) }
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val dto = result.data
-                if (!dto.ok || dto.userId.isBlank()) {
+                // Unwrap envelope
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return@withContext NetworkResult.Error(envelope.error ?: "Auth failed")
+                }
+                if (payload.userId.isBlank()) {
                     return@withContext NetworkResult.Error("Auth failed: no user ID returned")
                 }
                 val row = UserSessionRow(
-                    uid                = dto.userId,
+                    uid                = payload.userId,
                     name               = name,
                     email              = email,
                     photoUrl           = photoUrl,
-                    accessToken        = dto.accessToken,
-                    refreshToken       = dto.refreshToken,
-                    isPremium          = dto.premium,
-                    premiumExpiresAtMs = dto.premiumExpiresAtMs,
-                    expiresAtMs        = dto.expiresAtMs,
+                    accessToken        = payload.accessToken,
+                    refreshToken       = payload.refreshToken,
+                    isPremium          = payload.premium,
+                    premiumExpiresAtMs = payload.premiumExpiresAtMs,
+                    expiresAtMs        = payload.expiresAtMs,
                 )
                 dao.clear()
                 dao.upsert(row)
                 _session.value = row.toModel()
-                Log.i(tag, "Signed in: uid=${dto.userId.take(8)} premium=${dto.premium}")
+                Log.i(tag, "Signed in: uid=${payload.userId.take(8)} premium=${payload.premium}")
                 NetworkResult.Success(row.toModel())
             }
             is NetworkResult.Error -> NetworkResult.Error(
@@ -106,12 +110,13 @@ class UserRepository @Inject constructor(
         val refreshToken = dao.get()?.refreshToken?.takeIf { it.isNotBlank() } ?: return@withContext
         val result = safeApiCall(tag) { api.refreshToken("Bearer $refreshToken") }
         if (result is NetworkResult.Success) {
-            val dto = result.data
-            if (dto.ok && dto.accessToken.isNotBlank()) {
+            val envelope = result.data
+            val payload  = envelope.data
+            if (envelope.ok && payload != null && payload.accessToken.isNotBlank()) {
                 val current = dao.get() ?: return@withContext
                 val updated = current.copy(
-                    accessToken = dto.accessToken,
-                    expiresAtMs = dto.expiresAtMs,
+                    accessToken = payload.accessToken,
+                    expiresAtMs = payload.expiresAtMs,
                     cachedAtMs  = System.currentTimeMillis(),
                 )
                 dao.upsert(updated)

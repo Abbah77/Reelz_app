@@ -6,9 +6,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * PaymentRepository — schema v3
+ * PaymentRepository — Schema v4
  *
- * POST /payment/init returns { ok, authorization_url, reference }
+ * ENVELOPE RULE: POST /payment/init returns ApiResponse<PaymentData>.
+ * Unwrap envelope.data to get authorization_url and reference.
+ *
  * Open authorization_url in WebView or browser for Paystack checkout.
  * Store reference locally to verify payment status after redirect.
  */
@@ -24,12 +26,21 @@ class PaymentRepository @Inject constructor(
 
     suspend fun initPayment(plan: String): InitResult {
         return try {
-            val response = api.initPayment(plan)
-            val dto = if (response.isSuccessful) response.body() else null
-            val url = dto?.authorizationUrl.orEmpty()
-            val ref = dto?.reference.orEmpty()
-            if (url.isNotBlank()) InitResult.Success(authorizationUrl = url, reference = ref)
-            else InitResult.FallbackToStaticLink
+            val result = safeApiCall("PaymentRepository") { api.initPayment(plan) }
+            if (result is com.axio.reelz.core.network.NetworkResult.Success) {
+                val envelope = result.data
+                val payload  = envelope.data
+                if (envelope.ok && payload != null && payload.authorizationUrl.isNotBlank()) {
+                    InitResult.Success(
+                        authorizationUrl = payload.authorizationUrl,
+                        reference        = payload.reference,
+                    )
+                } else {
+                    InitResult.FallbackToStaticLink
+                }
+            } else {
+                InitResult.FallbackToStaticLink
+            }
         } catch (e: Exception) {
             InitResult.FallbackToStaticLink
         }

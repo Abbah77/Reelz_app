@@ -17,6 +17,14 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  SearchRepository — Schema v4
+//
+//  ENVELOPE RULE: GET /api/v1/search returns ApiResponse<PagedData>.
+//  Unwrap envelope.data to get items, has_more, next_cursor.
+//  cache_ttl_ms is at envelope root — used when writing to Room cache.
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Singleton
 class SearchRepository @Inject constructor(
     private val api: ReelzApi,
@@ -52,21 +60,27 @@ class SearchRepository @Inject constructor(
         val result = safeApiCall(tag) { api.search(query, mediaType, cursor) }
         return@withContext when (result) {
             is NetworkResult.Success -> {
-                val dto   = result.data
-                val items = dto.items.map { it.toModel() }
+                // Unwrap the standard envelope
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return@withContext NetworkResult.Error(envelope.error ?: "Search failed")
+                }
+                val cacheTtlMs = envelope.cacheTtlMs ?: 300_000L
+                val items = payload.items.map { it.toModel() }
 
                 if (cursor == null && items.isNotEmpty()) {
                     searchDao.upsert(CachedSearchRow(
                         query       = query,
-                        resultsJson = gson.toJson(dto.items),
-                        hasMore     = dto.hasMore,
-                        nextCursor  = dto.nextCursor,
-                        cacheTtlMs  = dto.cacheTtlMs,
+                        resultsJson = gson.toJson(payload.items),
+                        hasMore     = payload.hasMore,
+                        nextCursor  = payload.nextCursor,
+                        cacheTtlMs  = cacheTtlMs,
                     ))
                     searchDao.evictToLimit()
                 }
                 Log.d(tag, "Search '$query': got ${items.size} from network")
-                NetworkResult.Success<Pair<List<Media>, String?>>(items to dto.nextCursor)
+                NetworkResult.Success<Pair<List<Media>, String?>>(items to payload.nextCursor)
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,

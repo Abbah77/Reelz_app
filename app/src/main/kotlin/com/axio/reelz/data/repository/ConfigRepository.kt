@@ -20,6 +20,14 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  ConfigRepository — Schema v4
+//
+//  ENVELOPE RULE: GET /config returns ApiResponse<AppConfigDto>.
+//  Unwrap envelope.data to get AppConfigDto.
+//  cache_ttl_ms is at envelope root — used to know how long to honour the cache.
+// ─────────────────────────────────────────────────────────────────────────────
+
 enum class ConfigState { LOADING, READY, ERROR }
 
 @Singleton
@@ -90,11 +98,23 @@ class ConfigRepository @Inject constructor(
         val result = safeApiCall(tag) { api.getAppConfig() }
         when (result) {
             is NetworkResult.Success -> {
-                val dto = result.data
-                applyConfig(dto)
+                // Unwrap the standard envelope
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    Log.e(tag, "Config envelope error: ${envelope.error}")
+                    if (_config.value == null) _state.value = ConfigState.ERROR
+                    return@withContext
+                }
+                applyConfig(payload)
                 _state.value = ConfigState.READY
-                cacheDao.upsert(AppConfigCacheRow(configJson = gson.toJson(dto), version = dto.version))
-                Log.d(tag, "Config fetched from backend v${dto.version}")
+                cacheDao.upsert(AppConfigCacheRow(
+                    configJson    = gson.toJson(payload),
+                    version       = payload.version,
+                    // honour the server-supplied TTL when caching in Room
+                    cacheTtlMs    = envelope.cacheTtlMs ?: 3_600_000L,
+                ))
+                Log.d(tag, "Config fetched from backend v${payload.version}")
             }
             is NetworkResult.Error -> {
                 Log.e(tag, "Config fetch failed: ${result.message}")
