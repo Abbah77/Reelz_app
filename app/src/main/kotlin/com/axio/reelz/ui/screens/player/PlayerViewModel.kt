@@ -409,9 +409,21 @@ class PlayerViewModel @Inject constructor(
     // ── Subtitle handling ─────────────────────────────────────────────────────
 
     private fun loadStreamSubtitles(subtitles: List<Subtitle>) {
-        val options = subtitles.map { SubtitleOption(it.language, it.language, it.url, isEnabled = it.enabled) }
-        _ui.update { it.copy(subtitleOptions = options, subtitles = subtitles,
-            activeSubtitleLanguage = "off", subtitlesEnabled = false) }
+        // Use the subtitle's label field for display; fall back to language code only if label is blank.
+        val options = subtitles.map { sub ->
+            val displayLabel = sub.label.takeIf { it.isNotBlank() } ?: sub.language
+            SubtitleOption(sub.language, displayLabel, sub.url, isEnabled = sub.enabled)
+        }
+        // If backend pre-enables a subtitle track, respect it.
+        val autoEnabled = options.firstOrNull { it.isEnabled }
+        _ui.update { it.copy(
+            subtitleOptions        = options,
+            subtitles              = subtitles,
+            activeSubtitleLanguage = autoEnabled?.language ?: "off",
+            subtitlesEnabled       = autoEnabled != null,
+        ) }
+        // Sync auto-enabled state to ExoPlayer track selector.
+        if (autoEnabled != null) selectSubtitle(autoEnabled.language)
     }
 
     private suspend fun loadDownloadedSubtitles(id: String, season: Int, episode: Int) {
@@ -427,7 +439,8 @@ class PlayerViewModel @Inject constructor(
     fun searchOnlineSubtitles(query: String = "") {
         if (!sessionRepo.isPremium) {
             _ui.update { it.copy(subtitleUpsellMessage =
-                "Manual subtitle search is a Premium feature. Upgrade to search any language.") }
+                "Searching for additional subtitle languages online requires Premium. " +
+                "Stream subtitles (if available) are shown automatically above.") }
             return
         }
         val langs = if (query.isBlank()) {
@@ -441,15 +454,19 @@ class PlayerViewModel @Inject constructor(
             val result = streamRepo.getSubtitles(currentId, currentType, currentSeason, currentEpisode, langs)
             val subs = (result as? NetworkResult.Success)?.data ?: emptyList()
             if (subs.isNotEmpty()) {
-                val options = subs.map { s -> SubtitleOption(s.language, s.language, s.url, isEnabled = s.enabled) }
+                val options = subs.map { s ->
+                    val displayLabel = s.label.takeIf { it.isNotBlank() } ?: s.language
+                    SubtitleOption(s.language, displayLabel, s.url, isEnabled = s.enabled)
+                }
                 val currentLang = _ui.value.activeSubtitleLanguage
+                val stillActive = options.any { o -> o.language == currentLang }
                 _ui.update { it.copy(
-                    subtitleOptions     = options,
-                    subtitles           = subs,
-                    isSubtitleSearching = false,
-                    subtitleSearchEmpty = false,
-                    activeSubtitleLanguage = if (options.any { o -> o.language == currentLang }) currentLang else "off",
-                    subtitlesEnabled = _ui.value.subtitlesEnabled && options.any { o -> o.language == currentLang },
+                    subtitleOptions        = options,
+                    subtitles              = subs,
+                    isSubtitleSearching    = false,
+                    subtitleSearchEmpty    = false,
+                    activeSubtitleLanguage = if (stillActive) currentLang else "off",
+                    subtitlesEnabled       = _ui.value.subtitlesEnabled && stillActive,
                 )}
             } else {
                 _ui.update { it.copy(isSubtitleSearching = false, subtitleSearchEmpty = true) }
@@ -506,24 +523,46 @@ class PlayerViewModel @Inject constructor(
             subtitlesEnabled       = enabled,
             selectedSubtitle       = option?.label ?: "Off",
         )}
-        trackSelector?.let { ts ->
+        // Sync subtitle selection to ExoPlayer via track selector.
+        // trackSelector may be null if player hasn't been built yet — safe to skip.
+        val ts = trackSelector ?: return
+        try {
             val params = ts.buildUponParameters()
             if (enabled) {
-                ts.setParameters(params.setPreferredTextLanguage(language).setIgnoredTextSelectionFlags(0))
+                // Set preferred language so ExoPlayer picks an in-stream track if one exists.
+                // setIgnoredTextSelectionFlags(0) clears any flags that would suppress the track.
+                ts.setParameters(
+                    params
+                        .setPreferredTextLanguage(language)
+                        .setPreferredTextRoleFlags(0)
+                        .setIgnoredTextSelectionFlags(0)
+                )
             } else {
-                ts.setParameters(params.setPreferredTextLanguage(null)
-                    .setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED))
+                // Clear preference and suppress auto-selected tracks.
+                ts.setParameters(
+                    params
+                        .setPreferredTextLanguage(null)
+                        .setIgnoredTextSelectionFlags(
+                            C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED
+                        )
+                )
             }
+        } catch (e: Exception) {
+            Log.w("PlayerVM", "selectSubtitle: trackSelector update failed — ${e.message}")
         }
     }
 
     fun toggleSubtitlesOnOff() {
         val cur = _ui.value
-        if (cur.subtitlesEnabled) selectSubtitle("off")
-        else {
-            val target = cur.subtitleOptions.firstOrNull { it.language == cur.activeSubtitleLanguage }
-                ?: cur.subtitleOptions.firstOrNull()
+        if (cur.subtitlesEnabled) {
+            selectSubtitle("off")
+        } else {
+            // Resume the last active language, or fall back to the first available option.
+            val target = cur.subtitleOptions
+                .firstOrNull { it.language == cur.activeSubtitleLanguage && it.language != "off" }
+                ?: cur.subtitleOptions.firstOrNull { it.language != "off" }
             if (target != null) selectSubtitle(target.language)
+            // If no options are available the toggle is a no-op (toggle pill stays off).
         }
     }
 

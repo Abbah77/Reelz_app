@@ -105,12 +105,37 @@ class StreamRepository @Inject constructor(
 
     // ── Download links ────────────────────────────────────────────────────────
 
+    // ── Download links ────────────────────────────────────────────────────────
+    //
+    // Cached in-memory keyed by content identity. Cache lifetime is driven by
+    // expires_at_ms inside the response data — same as stream links.
+
+    private data class DownloadLinksEntry(
+        val links: List<DownloadLink>,
+        val expiresAtMs: Long,
+    ) {
+        fun isAlive() = System.currentTimeMillis() < expiresAtMs
+    }
+
+    private val downloadLinksCache = mutableMapOf<String, DownloadLinksEntry>()
+
     suspend fun getDownloadLinks(
         id: String,
         mediaType: MediaType,
         season: Int = 0,
         episode: Int = 0,
     ): NetworkResult<List<DownloadLink>> = withContext(Dispatchers.IO) {
+        val key = cacheKey(id, mediaType, season, episode)
+
+        // Return cached links if still alive (expires_at_ms not passed).
+        downloadLinksCache[key]?.let { entry ->
+            if (entry.isAlive()) {
+                Log.d(tag, "Download links cache HIT for $key")
+                return@withContext NetworkResult.Success(entry.links, fromCache = true)
+            }
+            downloadLinksCache.remove(key)
+        }
+
         val body = StreamRequestBody(
             id      = id,
             type    = if (mediaType == MediaType.MOVIE) "movie" else "tv",
@@ -125,8 +150,14 @@ class StreamRepository @Inject constructor(
                 if (!envelope.ok || payload == null) {
                     return@withContext NetworkResult.Error(envelope.error ?: "No download links available")
                 }
-                // expires_at_ms is inside data — content metadata, not response metadata
-                NetworkResult.Success(payload.links.map { it.toModel() })
+                // Render exactly what the backend sends — no filtering, no inference.
+                val links = payload.links.map { it.toModel() }
+                // Cache using expires_at_ms from backend (same pattern as stream cache).
+                if (payload.expiresAtMs > 0) {
+                    downloadLinksCache[key] = DownloadLinksEntry(links, payload.expiresAtMs)
+                }
+                Log.d(tag, "Download links: ${links.size} link(s) for $key")
+                NetworkResult.Success(links)
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,

@@ -39,6 +39,7 @@ val GlassSm       = Color(0x08FFFFFF)
 val GlassMd       = Color(0x14FFFFFF)
 val GlassHeavy    = Color(0x26FFFFFF)
 val GlassBorder   = Color(0x0FFFFFFF)
+val GlassBorderSm = Color(0x14FFFFFF)
 val GlassBorderMd = Color(0x1AFFFFFF)
 val GlassBorderHv = Color(0x33FFFFFF)
 

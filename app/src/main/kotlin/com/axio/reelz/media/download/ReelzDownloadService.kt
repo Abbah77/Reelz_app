@@ -115,7 +115,17 @@ class ReelzDownloadService : Service() {
         scope.launch {
             val paused = downloadDao.getByStatus("PAUSED") + downloadDao.getByStatus("QUEUED")
             paused.forEach { row ->
-                engine.start(row.id, row.streamUrl, "hls", emptyMap(), row.title)
+                // Infer type from URL — never hardcode "hls" for all resumes.
+                val type = when {
+                    row.streamUrl.contains(".m3u8", ignoreCase = true) -> "hls"
+                    row.streamUrl.contains(".mp4",  ignoreCase = true) -> "mp4"
+                    else -> "mp4"  // safe default — engine handles both
+                }
+                @Suppress("UNCHECKED_CAST")
+                val headers = runCatching {
+                    com.google.gson.Gson().fromJson(row.headersJson, Map::class.java) as Map<String, String>
+                }.getOrDefault(emptyMap())
+                engine.start(row.id, row.streamUrl, type, headers, row.title)
             }
         }
     }

@@ -9,7 +9,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import okhttp3.*
-import okio.*
 import java.io.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -19,35 +18,21 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * ReelzDownloadEngine — High-speed OkHttp download engine for MP4 and HLS.
+ * ReelzDownloadEngine — OkHttp download engine for MP4 and HLS.
  *
- * Architecture:
- *   - MP4: single OkHttp call with streaming write + resume via Range header
- *   - HLS: fetch index.m3u8 → parse segments → parallel download of .ts files
- *          → write local index.m3u8 pointing to local .ts files
- *          → ExoPlayer reads the local index.m3u8 for offline playback
+ * The backend hands the exact URL per quality:
+ *   • MP4  → direct file URL → stream to disk with resume support
+ *   • HLS  → quality-specific media playlist (not master) → download
+ *            segments, write local index.m3u8 for offline ExoPlayer
  *
- * Hierarchy on disk:
- *   <externalFilesDir>/reelz_downloads/
- *     <downloadId>/
- *       meta.json              (mp4 or hls metadata)
- *       movie.mp4              (for mp4 type)
- *       segments/              (for hls type)
- *         index.m3u8           (local playlist pointing to .ts files)
- *         seg000000.ts
- *         seg000001.ts
- *         ...
- *       subtitles/
- *         en.srt
- *
- * Pause/Resume:
- *   - MP4: tracks downloaded bytes; resumes with Range: bytes=N-
- *   - HLS: tracks completed segments; skips already-downloaded .ts files
- *
- * ExoPlayer offline:
- *   - MP4: MediaItem.fromUri(File("movie.mp4").toUri())
- *   - HLS: MediaItem.fromUri(File("segments/index.m3u8").toUri()) — ExoPlayer reads
- *          the local playlist which references local .ts files directly
+ * Disk layout:
+ *   <externalFilesDir>/reelz_downloads/<downloadId>/
+ *     movie.mp4              (MP4)
+ *     movie.mp4.tmp          (MP4 in-progress — renamed on completion)
+ *     segments/
+ *       index.m3u8           (local playlist with absolute segment paths)
+ *       seg000000.ts
+ *       seg000001.ts  …
  */
 @Singleton
 class ReelzDownloadEngine @Inject constructor(
@@ -56,34 +41,29 @@ class ReelzDownloadEngine @Inject constructor(
 ) {
     companion object {
         private const val TAG = "ReelzDownloadEngine"
-
-        private const val PARALLEL_SEGMENTS = 6          // concurrent .ts downloads
-        private const val SEGMENT_RETRY_MAX = 3
-        private const val CONNECT_TIMEOUT_S = 15L
-        private const val READ_TIMEOUT_S    = 30L
-        private const val WRITE_TIMEOUT_S   = 30L
-        private const val BUFFER_SIZE       = 128 * 1024 // 128 KB
-
-        // Root download directory
+        private const val PARALLEL_SEGMENTS = 4
+        private const val SEGMENT_RETRY_MAX = 4
+        private const val BUFFER_SIZE = 128 * 1024   // 128 KB
         private const val DOWNLOADS_DIR = "reelz_downloads"
     }
 
-    // OkHttp client — shared, connection pool for speed
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
-        .readTimeout(READ_TIMEOUT_S, TimeUnit.SECONDS)
-        .writeTimeout(WRITE_TIMEOUT_S, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(45, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
-        .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
+        .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+        .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 
-    // Active job handles — for pause/cancel
     private val activeJobs = ConcurrentHashMap<String, Job>()
     private val pauseFlags = ConcurrentHashMap<String, AtomicBoolean>()
 
+    // SupervisorJob so one failed download never cancels others.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // ── Directory helpers ─────────────────────────────────────────────────────
+    // ── Directories ───────────────────────────────────────────────────────────
 
     private fun rootDir(): File {
         val ext = context.getExternalFilesDir(null)
@@ -103,18 +83,14 @@ class ReelzDownloadEngine @Inject constructor(
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /**
-     * Start or resume a download. Non-blocking — launches coroutine and returns.
-     * Progress is written to the DB via [downloadDao].
-     */
     fun start(
         downloadId: String,
-        url:        String,
-        type:       String,          // "mp4" | "hls"
-        headers:    Map<String, String> = emptyMap(),
-        title:      String = "",
+        url: String,
+        type: String,
+        headers: Map<String, String> = emptyMap(),
+        title: String = "",
     ) {
-        if (activeJobs[downloadId]?.isActive == true) return  // already running
+        if (activeJobs[downloadId]?.isActive == true) return
         pauseFlags[downloadId] = AtomicBoolean(false)
 
         val job = scope.launch {
@@ -125,10 +101,11 @@ class ReelzDownloadEngine @Inject constructor(
                     else  -> downloadMp4(downloadId, url, headers)
                 }
             } catch (e: CancellationException) {
-                Log.d(TAG, "[$downloadId] cancelled")
-                // Don't mark as error on cancellation — it was paused or cancelled intentionally
+                // Paused or cancelled intentionally — don't mark ERROR.
+                Log.d(TAG, "[$downloadId] cancelled/paused")
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "[$downloadId] failed: ${e.message}")
+                Log.e(TAG, "[$downloadId] failed: ${e.message}", e)
                 updateStatus(downloadId, DownloadStatus.ERROR)
             } finally {
                 activeJobs.remove(downloadId)
@@ -137,39 +114,54 @@ class ReelzDownloadEngine @Inject constructor(
         activeJobs[downloadId] = job
     }
 
-    /** Pause an active download gracefully. */
     fun pause(downloadId: String) {
         pauseFlags[downloadId]?.set(true)
         activeJobs[downloadId]?.cancel()
         scope.launch { updateStatus(downloadId, DownloadStatus.PAUSED) }
     }
 
-    /** Cancel and remove a download's files. */
     fun cancel(downloadId: String) {
         pauseFlags[downloadId]?.set(true)
         activeJobs[downloadId]?.cancel()
-        scope.launch {
-            downloadDir(downloadId).deleteRecursively()
-            downloadDao.delete(downloadId)
-        }
+        scope.launch { downloadDir(downloadId).deleteRecursively() }
     }
 
-    // ── MP4 Downloader ────────────────────────────────────────────────────────
+    // ── MP4 ───────────────────────────────────────────────────────────────────
 
     private suspend fun downloadMp4(
         downloadId: String,
-        url:        String,
-        headers:    Map<String, String>,
+        url: String,
+        headers: Map<String, String>,
     ) = withContext(Dispatchers.IO) {
         val outFile = File(downloadDir(downloadId), "movie.mp4")
-        val existingBytes = if (outFile.exists()) outFile.length() else 0L
-        val downloadedBytes = AtomicLong(existingBytes)
+        val tmpFile = File(downloadDir(downloadId), "movie.mp4.tmp")
 
-        val request = Request.Builder()
-            .url(url)
+        if (outFile.exists() && outFile.length() > 1024) {
+            markDone(downloadId, outFile)
+            return@withContext
+        }
+
+        // Probe server for resume support via HEAD + Accept-Ranges.
+        val existingBytes = if (tmpFile.exists()) tmpFile.length() else 0L
+        val acceptsRanges = try {
+            val req = Request.Builder().url(url)
+                .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+                .head().build()
+            client.newCall(req).execute().use { r ->
+                r.isSuccessful &&
+                r.header("Accept-Ranges")?.equals("bytes", ignoreCase = true) == true
+            }
+        } catch (_: Exception) { false }
+
+        val resumeFrom = if (acceptsRanges && existingBytes > 0) existingBytes
+                         else { tmpFile.delete(); 0L }
+
+        val downloadedBytes = AtomicLong(resumeFrom)
+
+        val request = Request.Builder().url(url)
             .apply {
                 headers.forEach { (k, v) -> addHeader(k, v) }
-                if (existingBytes > 0) addHeader("Range", "bytes=$existingBytes-")
+                if (resumeFrom > 0) addHeader("Range", "bytes=$resumeFrom-")
             }
             .build()
 
@@ -179,114 +171,125 @@ class ReelzDownloadEngine @Inject constructor(
             error("HTTP ${response.code}")
         }
 
-        val totalSize = response.header("Content-Length")?.toLongOrNull()
-            ?.let { it + existingBytes } ?: 0L
-
-        val body   = response.body ?: error("Empty body")
-        val source = body.source()
-
-        // Append if resuming (206), otherwise overwrite
-        val append = response.code == 206 && existingBytes > 0
-        FileOutputStream(outFile, append).use { fos ->
-            val buf = ByteArray(BUFFER_SIZE)
-            var read: Int
-            while (source.read(buf).also { read = it } != -1) {
-                checkPause(downloadId)
-                fos.write(buf, 0, read)
-                val done = downloadedBytes.addAndGet(read.toLong())
-                downloadDao.updateProgress(
-                    id       = downloadId,
-                    status   = DownloadStatus.DOWNLOADING.name,
-                    bytes    = done,
-                    done     = 0,
-                    total    = 0,
-                    playlist = "",
-                )
-            }
+        val totalSize = when (response.code) {
+            206  -> response.header("Content-Range")
+                        ?.substringAfterLast('/')?.toLongOrNull()
+                        ?: ((response.body?.contentLength() ?: 0L) + resumeFrom)
+            else -> response.body?.contentLength() ?: 0L
         }
-        response.close()
 
-        val playlistPath = outFile.absolutePath
-        downloadDao.markDone(
-            id     = downloadId,
-            status = DownloadStatus.DONE.name,
-            path   = playlistPath,
-            at     = System.currentTimeMillis(),
-        )
-        Log.i(TAG, "[$downloadId] MP4 done: $playlistPath")
+        val body = response.body ?: run { response.close(); error("Empty body") }
+        try {
+            FileOutputStream(tmpFile, response.code == 206 && resumeFrom > 0).use { fos ->
+                val buf = ByteArray(BUFFER_SIZE)
+                var read: Int
+                while (body.byteStream().read(buf).also { read = it } != -1) {
+                    checkPause(downloadId)
+                    fos.write(buf, 0, read)
+                    val done = downloadedBytes.addAndGet(read.toLong())
+                    // Write progress to DB every ~2 MB to reduce I/O churn.
+                    if (done % (2 * 1024 * 1024) < BUFFER_SIZE) {
+                        downloadDao.updateProgress(
+                            id = downloadId, status = DownloadStatus.DOWNLOADING.name,
+                            bytes = done, done = 0,
+                            total = if (totalSize > 0) 1 else 0, playlist = "",
+                        )
+                    }
+                }
+                fos.flush()
+            }
+        } finally {
+            body.close()
+            response.close()
+        }
+
+        // Atomic rename — only a fully written file becomes the final output.
+        if (!tmpFile.renameTo(outFile)) {
+            tmpFile.copyTo(outFile, overwrite = true)
+            tmpFile.delete()
+        }
+
+        markDone(downloadId, outFile)
+        Log.i(TAG, "[$downloadId] MP4 done: ${outFile.absolutePath}")
     }
 
-    // ── HLS Downloader ────────────────────────────────────────────────────────
+    // ── HLS ───────────────────────────────────────────────────────────────────
+    //
+    // The backend hands a quality-specific media playlist URL — NOT a master
+    // playlist. We fetch it, parse segments, download them in parallel, then
+    // write a local index.m3u8 pointing at the saved .ts files.
 
     private suspend fun downloadHls(
         downloadId: String,
-        indexUrl:   String,
-        headers:    Map<String, String>,
+        mediaPlaylistUrl: String,
+        headers: Map<String, String>,
     ) = withContext(Dispatchers.IO) {
         val segDir = segmentsDir(downloadId)
 
-        // 1. Fetch the quality-specific index.m3u8
-        Log.d(TAG, "[$downloadId] Fetching index: $indexUrl")
-        val playlistContent = fetchText(indexUrl, headers)
-            ?: error("Failed to fetch HLS index")
+        Log.d(TAG, "[$downloadId] Fetching media playlist: $mediaPlaylistUrl")
+        val playlistContent = fetchText(mediaPlaylistUrl, headers)
+            ?: error("Failed to fetch HLS media playlist")
 
-        // 2. Parse segment URLs
-        val segments = parseSegments(playlistContent, indexUrl)
-        if (segments.isEmpty()) error("No segments found in playlist")
+        val segments = parseSegments(playlistContent, mediaPlaylistUrl)
+        if (segments.isEmpty()) error("No segments in media playlist")
 
         val total = segments.size
-        Log.d(TAG, "[$downloadId] ${total} segments to download")
+        Log.d(TAG, "[$downloadId] $total segments")
 
-        // 3. Download segments in parallel (with resume — skip existing)
-        val semaphore = Semaphore(PARALLEL_SEGMENTS)
         val completedCount = AtomicLong(
-            segments.count { File(segDir, segmentFilename(it.index)).exists() }.toLong()
+            segments.count { seg ->
+                File(segDir, segFilename(seg.index)).let { it.exists() && it.length() > 0 }
+            }.toLong()
         )
 
-        segments
-            .filter { !File(segDir, segmentFilename(it.index)).exists() }
+        val semaphore = Semaphore(PARALLEL_SEGMENTS)
+
+        // Only download segments that aren't already on disk (resume support).
+        val jobs = segments
+            .filter { seg -> !File(segDir, segFilename(seg.index)).let { it.exists() && it.length() > 0 } }
             .map { seg ->
                 scope.async {
                     semaphore.withPermit {
                         checkPause(downloadId)
-                        downloadSegment(seg, segDir, headers, SEGMENT_RETRY_MAX)
+                        downloadSegment(seg, segDir, headers)
                         val done = completedCount.incrementAndGet()
-                        val approxBytes = done * (segDir.listFiles()?.firstOrNull()?.length() ?: 0L)
+                        val approxBytes = done * (segDir.listFiles()
+                            ?.firstOrNull()?.length() ?: 512_000L)
                         downloadDao.updateProgress(
-                            id       = downloadId,
-                            status   = DownloadStatus.DOWNLOADING.name,
-                            bytes    = approxBytes,
-                            done     = done.toInt(),
-                            total    = total,
-                            playlist = "",
+                            id = downloadId, status = DownloadStatus.DOWNLOADING.name,
+                            bytes = approxBytes, done = done.toInt(),
+                            total = total, playlist = "",
                         )
                     }
                 }
             }
-            .awaitAll()
 
-        // 4. Verify all segments exist
-        val missingCount = segments.count { !File(segDir, segmentFilename(it.index)).exists() }
-        if (missingCount > 0) error("$missingCount segments failed to download")
+        try {
+            jobs.awaitAll()
+        } catch (e: CancellationException) {
+            jobs.forEach { it.cancel() }
+            throw e
+        }
 
-        // 5. Write local index.m3u8 pointing to local .ts files
-        val localPlaylist = buildLocalPlaylist(playlistContent, segments, segDir)
+        val missing = segments.count {
+            !File(segDir, segFilename(it.index)).let { f -> f.exists() && f.length() > 0 }
+        }
+        if (missing > 0) error("$missing segments failed")
+
+        // Rewrite the playlist replacing remote URIs with local absolute paths.
         val localM3u8 = File(segDir, "index.m3u8")
-        localM3u8.writeText(localPlaylist)
+        localM3u8.writeText(buildLocalPlaylist(playlistContent, segments, segDir))
 
-        // 6. Mark done — ExoPlayer will load local index.m3u8
         downloadDao.markDone(
-            id     = downloadId,
-            status = DownloadStatus.DONE.name,
-            path   = localM3u8.absolutePath,
-            at     = System.currentTimeMillis(),
+            id = downloadId, status = DownloadStatus.DONE.name,
+            path = localM3u8.absolutePath, at = System.currentTimeMillis(),
         )
         Log.i(TAG, "[$downloadId] HLS done: ${localM3u8.absolutePath}")
     }
 
-    // ── HLS Helpers ───────────────────────────────────────────────────────────
+    // ── HLS helpers ───────────────────────────────────────────────────────────
 
-    data class Segment(val index: Int, val url: String, val durationLine: String)
+    data class Segment(val index: Int, val url: String)
 
     private fun parseSegments(content: String, baseUrl: String): List<Segment> {
         val base = baseUrl.substringBeforeLast('/')
@@ -296,19 +299,16 @@ class ReelzDownloadEngine @Inject constructor(
         var i = 0
         while (i < lines.size) {
             val line = lines[i].trim()
-            when {
-                line.startsWith("#EXTINF") -> {
-                    // next non-comment line is the segment URI
-                    var j = i + 1
-                    while (j < lines.size && lines[j].startsWith("#")) j++
-                    if (j < lines.size) {
-                        val uri = lines[j].trim()
-                        if (uri.isNotEmpty() && !uri.startsWith("#")) {
-                            val fullUrl = if (uri.startsWith("http")) uri else "$base/$uri"
-                            segments.add(Segment(idx++, fullUrl, line))
-                            i = j + 1
-                            continue
-                        }
+            if (line.startsWith("#EXTINF")) {
+                // Skip any intermediate tags to find the URI line.
+                var j = i + 1
+                while (j < lines.size && lines[j].trimStart().startsWith("#")) j++
+                if (j < lines.size) {
+                    val uri = lines[j].trim()
+                    if (uri.isNotBlank() && !uri.startsWith("#")) {
+                        segments.add(Segment(idx++, resolveUrl(uri, base, baseUrl)))
+                        i = j + 1
+                        continue
                     }
                 }
             }
@@ -317,48 +317,65 @@ class ReelzDownloadEngine @Inject constructor(
         return segments
     }
 
-    private fun segmentFilename(index: Int): String = "seg%06d.ts".format(index)
-
-    private suspend fun downloadSegment(
-        seg:      Segment,
-        segDir:   File,
-        headers:  Map<String, String>,
-        maxRetry: Int,
-    ) {
-        val outFile = File(segDir, segmentFilename(seg.index))
-        if (outFile.exists() && outFile.length() > 0) return  // resume: skip
-
-        repeat(maxRetry) { attempt ->
-            try {
-                val request = Request.Builder()
-                    .url(seg.url)
-                    .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
-                    .build()
-
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) error("HTTP ${response.code}")
-                    val body = response.body ?: error("Empty body")
-                    outFile.outputStream().use { body.byteStream().copyTo(it, BUFFER_SIZE) }
-                }
-                return  // success
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Segment ${seg.index} attempt $attempt failed: ${e.message}")
-                if (attempt == maxRetry - 1) throw e
-                delay(500L * (attempt + 1))
-            }
+    private fun resolveUrl(uri: String, base: String, fullBaseUrl: String): String = when {
+        uri.startsWith("http://") || uri.startsWith("https://") -> uri
+        uri.startsWith("/") -> {
+            val proto = fullBaseUrl.substringBefore("://")
+            val host  = fullBaseUrl.substringAfter("://").substringBefore("/")
+            "$proto://$host$uri"
         }
+        else -> "$base/$uri"
     }
 
-    /**
-     * Rebuild the m3u8 playlist replacing remote segment URLs with local file paths.
-     * ExoPlayer's FileDataSource can read file:// URIs in a local m3u8.
-     */
+    private fun segFilename(index: Int) = "seg%06d.ts".format(index)
+
+    private suspend fun downloadSegment(
+        seg: Segment,
+        segDir: File,
+        headers: Map<String, String>,
+    ) {
+        val outFile = File(segDir, segFilename(seg.index))
+        if (outFile.exists() && outFile.length() > 0) return
+
+        var lastError: Exception? = null
+        for (attempt in 0 until SEGMENT_RETRY_MAX) {
+            try {
+                val request = Request.Builder().url(seg.url)
+                    .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code} for segment ${seg.index}")
+                    val body = response.body ?: error("Empty segment body")
+                    val tmp = File(segDir, "${segFilename(seg.index)}.tmp")
+                    try {
+                        tmp.outputStream().buffered(BUFFER_SIZE).use { out ->
+                            body.byteStream().buffered(BUFFER_SIZE).copyTo(out)
+                        }
+                        if (!tmp.renameTo(outFile)) {
+                            tmp.copyTo(outFile, overwrite = true)
+                            tmp.delete()
+                        }
+                    } catch (e: Exception) {
+                        tmp.delete(); throw e
+                    }
+                }
+                return
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                lastError = e
+                Log.w(TAG, "Seg ${seg.index} attempt $attempt failed: ${e.message}")
+                if (attempt < SEGMENT_RETRY_MAX - 1) delay(300L * (1L shl attempt))
+            }
+        }
+        throw lastError ?: IOException("Segment ${seg.index} failed after $SEGMENT_RETRY_MAX attempts")
+    }
+
+    /** Rewrite the m3u8 replacing remote segment URIs with local absolute file paths.
+     *  All header and encryption tags (#EXT-X-KEY, etc.) are kept intact. */
     private fun buildLocalPlaylist(
         original: String,
         segments: List<Segment>,
-        segDir:   File,
+        segDir: File,
     ): String {
         val sb = StringBuilder()
         val lines = original.lines()
@@ -366,31 +383,24 @@ class ReelzDownloadEngine @Inject constructor(
         var i = 0
         while (i < lines.size) {
             val line = lines[i].trim()
-            when {
-                line.startsWith("#EXTINF") -> {
-                    sb.appendLine(line)
-                    // Skip original URI line(s) and replace with local path
-                    var j = i + 1
-                    while (j < lines.size && lines[j].startsWith("#")) {
-                        sb.appendLine(lines[j])
-                        j++
-                    }
-                    if (j < lines.size && !lines[j].startsWith("#") && lines[j].isNotBlank()) {
-                        val localFile = File(segDir, segmentFilename(segIdx++))
-                        sb.appendLine(localFile.absolutePath)
-                        i = j + 1
-                        continue
-                    }
+            if (line.startsWith("#EXTINF")) {
+                sb.appendLine(line)
+                var j = i + 1
+                while (j < lines.size && lines[j].trimStart().startsWith("#")) {
+                    sb.appendLine(lines[j])
+                    j++
                 }
-                line.startsWith("#EXT-X-KEY") -> {
-                    // Keep encryption tags as-is; encrypted HLS will still work locally
-                    sb.appendLine(line)
+                if (j < lines.size && !lines[j].startsWith("#") && lines[j].isNotBlank()) {
+                    sb.appendLine(File(segDir, segFilename(segIdx++)).absolutePath)
+                    i = j + 1
+                    continue
                 }
-                else -> sb.appendLine(line)
+            } else if (line.isNotBlank() || i < lines.lastIndex) {
+                sb.appendLine(line)
             }
             i++
         }
-        return sb.toString()
+        return sb.toString().trimEnd()
     }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
@@ -401,11 +411,12 @@ class ReelzDownloadEngine @Inject constructor(
                 val req = Request.Builder().url(url)
                     .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
                     .build()
-                client.newCall(req).execute().use { it.body?.string() }
-            } catch (e: Exception) {
-                Log.e(TAG, "fetchText failed: $url — ${e.message}")
-                null
-            }
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) { Log.e(TAG, "fetchText HTTP ${resp.code}: $url"); null }
+                    else resp.body?.string()
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { Log.e(TAG, "fetchText: $url — ${e.message}"); null }
         }
 
     // ── Lifecycle helpers ─────────────────────────────────────────────────────
@@ -414,36 +425,30 @@ class ReelzDownloadEngine @Inject constructor(
         if (pauseFlags[downloadId]?.get() == true) throw CancellationException("paused")
     }
 
+    private suspend fun markDone(downloadId: String, file: File) {
+        downloadDao.markDone(
+            id = downloadId, status = DownloadStatus.DONE.name,
+            path = file.absolutePath, at = System.currentTimeMillis(),
+        )
+    }
+
     private suspend fun updateStatus(downloadId: String, status: DownloadStatus) {
         try {
             val row = downloadDao.get(downloadId) ?: return
             downloadDao.updateProgress(
-                id       = downloadId,
-                status   = status.name,
-                bytes    = row.downloadedBytes,
-                done     = row.segmentsDone,
-                total    = row.totalSegments,
-                playlist = row.localPlaylistPath,
+                id = downloadId, status = status.name,
+                bytes = row.downloadedBytes, done = row.segmentsDone,
+                total = row.totalSegments, playlist = row.localPlaylistPath,
             )
         } catch (e: Exception) {
-            Log.w(TAG, "updateStatus failed: ${e.message}")
+            Log.w(TAG, "updateStatus: ${e.message}")
         }
     }
 
-    /** Returns the local playback URI for ExoPlayer.
-     *  MP4: file path string
-     *  HLS: local index.m3u8 path
-     */
-    fun getLocalPlaybackPath(downloadId: String, type: String): String? {
-        return when (type.lowercase()) {
-            "hls" -> {
-                val f = File(segmentsDir(downloadId), "index.m3u8")
-                if (f.exists()) f.absolutePath else null
-            }
-            else -> {
-                val f = File(downloadDir(downloadId), "movie.mp4")
-                if (f.exists()) f.absolutePath else null
-            }
+    /** Returns local path for offline ExoPlayer playback. */
+    fun getLocalPlaybackPath(downloadId: String, type: String): String? =
+        when (type.lowercase()) {
+            "hls" -> File(segmentsDir(downloadId), "index.m3u8").takeIf { it.exists() }?.absolutePath
+            else  -> File(downloadDir(downloadId), "movie.mp4").takeIf { it.exists() }?.absolutePath
         }
-    }
 }

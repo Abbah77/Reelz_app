@@ -199,18 +199,9 @@ class DetailViewModel @Inject constructor(
     /** Pre-resolved stream — set in background after detail loads. */
     internal var preResolvedStream: com.axio.reelz.data.model.StreamResult? = null
 
-    /**
-     * Pre-parsed quality list from the master playlist.
-     * Built in the background right after preResolvedStream is resolved.
-     * Makes the download sheet open instantly — zero network call on tap.
-     * Key is "tmdbId_season_episode" so episodes don't collide with movies.
-     */
-    private val preResolvedQualities  = HashMap<String, List<QualityTrack>>()
-    // url → type mapping so enqueue knows "mp4" vs "hls" without re-parsing
+    // Maps download URL → type ("mp4" | "hls") so enqueue knows which engine path to use.
+    // Populated fresh each time the download sheet is opened via getDownloadLinks().
     private val preResolvedLinkTypes  = HashMap<String, String>()
-
-    private fun qualityKey(id: String, season: Int = 0, episode: Int = 0) =
-        "${id}_${season}_${episode}"
 
     /** Observe all non-ERROR downloads and push their keys into UiState so the
      *  episode/movie download button can show IconDownloaded in real time. */
@@ -257,17 +248,14 @@ class DetailViewModel @Inject constructor(
                 // Background: pre-resolve stream so download sheet opens instantly
                 viewModelScope.launch {
                     try {
-                        val key = qualityKey(id)
                         val streamResult = streamRepo.resolveStream(
                             id = id, mediaType = mediaType
                         )
                         if (streamResult is com.axio.reelz.core.network.NetworkResult.Success) {
+                            // Store stream result for player use only.
+                            // Download sheet NEVER uses stream qualities — it only uses
+                            // getDownloadLinks() results so labels always come from the backend.
                             preResolvedStream = streamResult.data
-                            if (preResolvedQualities[key].isNullOrEmpty()) {
-                                preResolvedQualities[key] = streamResult.data.streams.map { t ->
-                                    QualityTrack(label = t.name, url = t.url)
-                                }.ifEmpty { listOf(QualityTrack("Auto", "")) }
-                            }
                         }
                     } catch (_: Exception) {}
                 }
@@ -348,18 +336,8 @@ class DetailViewModel @Inject constructor(
             _ui.update { it.copy(alreadyDownloadedQualities = qualityLabels) }
         }
 
-        val key = qualityKey(id, season, episode)
+        val key = "${id}_${season}_${episode}"
 
-        // Fast path: use qualities resolved in background when detail loaded
-        preResolvedQualities[key]?.let { cached ->
-            if (cached.isNotEmpty()) {
-                _ui.update { it.copy(downloadQualities = cached) }
-                return
-            }
-        }
-
-        // POST /api/v1/download — let the backend decide what links and caps to send.
-        // The app renders whatever comes back; it never infers labels or enforces caps itself.
         viewModelScope.launch {
             val dlResult = streamRepo.getDownloadLinks(
                 id = id, mediaType = mediaType,
@@ -367,32 +345,26 @@ class DetailViewModel @Inject constructor(
             )
             val links = (dlResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data
             if (!links.isNullOrEmpty()) {
-                // Convert DownloadLink → QualityTrack for the download picker UI
-                val tracks = links.map { l -> QualityTrack(label = l.label, url = l.url,
-                    estimatedSizeBytes = l.sizeBytes) }
-                // Store type mapping for enqueue: url → type ("mp4" | "hls")
+                // Convert DownloadLink → QualityTrack for the download picker UI.
+                // Render exactly what the backend sends — no filtering, no inference.
+                val tracks = links.map { l ->
+                    QualityTrack(label = l.label, url = l.url, estimatedSizeBytes = l.sizeBytes)
+                }
                 val linkTypeMap = links.associate { it.url to it.type }
                 preResolvedLinkTypes.clear()
                 preResolvedLinkTypes.putAll(linkTypeMap)
-                preResolvedQualities[key] = tracks
                 _ui.update {
                     it.copy(
-                        downloadQualities           = tracks,
-                        downloadLinks               = links,
-                        isResolvingQualities        = false,
+                        downloadQualities    = tracks,
+                        downloadLinks        = links,
+                        isResolvingQualities = false,
                     )
                 }
             } else {
-                // No download links found
-                val fallbackUrl = preResolvedStream?.primaryStream?.url ?: ""
-                val fallback = if (fallbackUrl.isNotBlank())
-                    listOf(QualityTrack("Best available", fallbackUrl))
-                else emptyList()
                 _ui.update {
                     it.copy(
-                        downloadQualities           = fallback,
-                        maxDownloadResolutionHeight = 0,
-                        isResolvingQualities        = false,
+                        downloadQualities    = emptyList(),
+                        isResolvingQualities = false,
                     )
                 }
             }
@@ -677,6 +649,10 @@ fun DownloadQualitySheet(
                         // and this track's height exceeds it. The app never decides the cap itself.
                         val isLocked      = maxResolutionHeight > 0 && trackHeightPx(track.label) > maxResolutionHeight
                         val isDownloaded  = alreadyDownloadedQualities.contains(track.label)
+                        // Downloaded rows: show badge but block re-download (no duplicates).
+                        // Locked (premium) rows: tap shows upgrade sheet.
+                        // All other rows: tap enqueues download.
+                        val clickable = !isDownloaded
 
                         Row(
                             Modifier
@@ -691,10 +667,14 @@ fun DownloadQualitySheet(
                                 )
                                 .border(
                                     d.borderThin,
-                                    if (isDownloaded) Success.copy(.25f) else GlassBorderMd,
+                                    when {
+                                        isDownloaded -> Success.copy(.25f)
+                                        isLocked     -> Brand.copy(.2f)
+                                        else         -> GlassBorderMd
+                                    },
                                     RoundedCornerShape(d.radiusLg - d.spaceXs),
                                 )
-                                .clickable(enabled = !isDownloaded) {
+                                .clickable(enabled = clickable) {
                                     if (isLocked) onLockedQualityTap() else onSelectQuality(track)
                                 }
                                 .padding(horizontal = d.spaceLg, vertical = d.spaceLg),
@@ -948,13 +928,14 @@ private fun DetailContent(
                         icon     = { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconMd)) },
                     )
                     // ── Download button (movies only) ──────────────────────
+                    // Always tappable — sheet handles "already downloaded" per quality.
+                    // No lock badge on the button itself; that lives inside the sheet.
                     val movieDownloaded = "${detail.id}_0_0" in downloadedKeys
                     OutlinedButton(
-                        onClick  = if (movieDownloaded) ({}) else onDownloadMovie,
+                        onClick  = onDownloadMovie,
                         shape    = RoundedCornerShape(d.radiusPill),
                         border   = BorderStroke(d.borderThin, if (movieDownloaded) Color(0xFF30D158).copy(.5f) else GlassBorderMd),
                         modifier = Modifier.height(d.buttonHeightMd),
-                        enabled  = !movieDownloaded,
                     ) {
                         Icon(
                             if (movieDownloaded) IconDownloaded else IconDownloadCloud,
@@ -1174,11 +1155,11 @@ fun EpisodeRow(
                 Text("${it}m", color = White40, fontSize = d.textXxs)
             }
         }
-        // Download icon: shows IconDownloaded (green) if owned, otherwise normal cloud icon
+        // Download icon: always tappable. Shows green when at least one quality is downloaded.
+        // Per-quality duplicate prevention is inside the download sheet, not on this button.
         IconButton(
-            onClick = if (isDownloaded) ({}) else onDownload,
+            onClick  = onDownload,
             modifier = Modifier.size(d.buttonHeightSm),
-            enabled = !isDownloaded,
         ) {
             Icon(
                 if (isDownloaded) IconDownloaded else IconDownloadCloud,

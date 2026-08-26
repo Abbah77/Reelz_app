@@ -512,9 +512,9 @@ private enum class GestureType { NONE, VOLUME, BRIGHTNESS, SEEK }
 // ─────────────────────────────────────────────────────────────────────────────
 
 private enum class DrawerWidthTier(val fraction: Float) {
-    COMPACT(0.36f),   // Speed / Quality
-    STANDARD(0.44f),  // Settings
-    WIDE(0.52f),      // Subtitles
+    COMPACT(0.30f),   // Speed / Quality — narrow, just enough for labels
+    STANDARD(0.36f),  // Settings
+    WIDE(0.42f),      // Subtitles — needs a bit more for search + language names
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1481,7 +1481,7 @@ private fun SubtitleDrawer(
     ) {
         Box(
             Modifier
-                .fillMaxWidth(DrawerWidthTier.WIDE.fraction)
+                .fillMaxWidth(DrawerWidthTier.WIDE.fraction)  // adaptive — set via DrawerWidthTier enum
                 .fillMaxHeight()
                 .align(Alignment.CenterEnd)
                 .offset(x = offsetX)
@@ -1662,6 +1662,9 @@ private fun SubtitleDrawer(
                         }
                     }
 
+                    // Show search / empty CTA only when:
+                    // - No options loaded yet (stream had no subtitles), OR
+                    // - User is actively typing a query not found in the local list.
                     val showSearchCta = ui.subtitleOptions.isEmpty() || searchQuery.isNotEmpty()
                     if (showSearchCta) {
                         item {
@@ -1702,6 +1705,10 @@ private fun SubtitleDrawer(
                                         ) { Text("Try again", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold) }
                                     }
                                     ui.subtitleUpsellMessage != null -> {
+                                        // Only the ONLINE SEARCH feature requires Premium.
+                                        // Stream subtitles (listed above) are free for everyone.
+                                        Icon(Icons.Default.Search, contentDescription = null,
+                                            tint = Brand.copy(.6f), modifier = Modifier.size(d.iconMd))
                                         Text(ui.subtitleUpsellMessage, color = White60, fontSize = d.textXs,
                                             textAlign = TextAlign.Center, lineHeight = (d.textXs.value * 1.45f).sp)
                                         Box(
@@ -1715,13 +1722,13 @@ private fun SubtitleDrawer(
                                         ) { Text("Upgrade to Premium", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold) }
                                     }
                                     else -> {
-                                        if (ui.subtitleOptions.isEmpty()) {
+                                        if (ui.subtitleOptions.isEmpty() && !ui.isOfflinePlayback) {
                                             Text(
-                                                if (ui.isOfflinePlayback) "No subtitles saved for this download"
-                                                else "No subtitles came with this stream",
+                                                "No subtitles came with this stream",
                                                 color = White40, fontSize = d.textXs, textAlign = TextAlign.Center,
                                             )
                                         }
+                                        // Search Online button — gating is enforced inside the ViewModel
                                         Box(
                                             Modifier.fillMaxWidth()
                                                 .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
@@ -1744,7 +1751,7 @@ private fun SubtitleDrawer(
                                             }
                                         }
                                         if (searchQuery.isEmpty()) {
-                                            Text("Searches for subtitles in your language",
+                                            Text("Search for subtitles in any language",
                                                 color = White40, fontSize = d.textXxs, textAlign = TextAlign.Center)
                                         }
                                     }

@@ -168,9 +168,15 @@ data class GenresData(
 data class StreamSubtitleDto(
     val url: String = "",
     val language: String = "en",
+    val label: String = "",          // human-readable name e.g. "English", "Arabic" from backend
     val enabled: Boolean = false,
 ) {
-    fun toModel() = Subtitle(url = url, language = language, enabled = enabled)
+    fun toModel() = Subtitle(
+        url      = url,
+        language = language,
+        enabled  = enabled,
+        label    = label.takeIf { it.isNotBlank() } ?: language,
+    )
 }
 
 data class StreamItemDto(
@@ -203,10 +209,10 @@ data class StreamData(
 
 // ── Download links ────────────────────────────────────────────────────────────
 data class DownloadLinkDto(
-    val label: String = "Auto",
+    val label: String = "",
     val type: String = "mp4",           // "mp4" | "hls"
     val url: String = "",
-    val language: String = "English",
+    val language: String = "",
     @SerializedName("size_bytes") val sizeBytes: Long = 0,
     val premium: Boolean = false,
 ) {
@@ -231,9 +237,15 @@ data class DownloadData(
 data class SubtitleDto(
     val url: String = "",
     val language: String = "en",
+    val label: String = "",          // human-readable name from backend
     val enabled: Boolean = false,
 ) {
-    fun toModel() = Subtitle(url = url, language = language, enabled = enabled)
+    fun toModel() = Subtitle(
+        url      = url,
+        language = language,
+        enabled  = enabled,
+        label    = label.takeIf { it.isNotBlank() } ?: language,
+    )
 }
 
 // data field inside ApiResponse<SubtitlesData>
