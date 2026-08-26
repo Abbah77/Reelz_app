@@ -13,7 +13,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -42,20 +41,14 @@ import javax.inject.Inject
 // Data structures
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Groups all DownloadItems for the same movie (same mediaId) regardless of quality.
- * A movie card shows ONE entry in the list even if 1080p + 480p are both downloaded.
- */
 data class MovieGroup(
     val mediaId: String,
     val title: String,
     val posterPath: String?,
-    /** All downloads for this movie across every quality. */
     val downloads: List<DownloadItem>,
 ) {
     val doneDownloads: List<DownloadItem> get() = downloads.filter { it.status == DownloadStatus.DONE }
     val totalSize: Long get() = doneDownloads.sumOf { it.sizeBytes }
-    /** The most recently watched/played item, or the highest quality done item. */
     val primaryDownload: DownloadItem get() =
         doneDownloads.maxByOrNull { it.lastPlayedAt }
             ?: doneDownloads.maxByOrNull { it.sizeBytes }
@@ -92,6 +85,7 @@ data class SeriesGroup(
         return lastPlayed?.let { "S%02dE%02d".format(it.season, it.episode) }
     }
     val seasonCount: Int get() = seasons.size
+    val totalSize: Long get() = seasons.sumOf { it.totalSize }
 }
 
 data class SeasonGroup(
@@ -102,10 +96,6 @@ data class SeasonGroup(
     val totalSize: Long get() = episodeGroups.sumOf { eg -> eg.doneDownloads.sumOf { it.sizeBytes } }
 }
 
-/**
- * Groups all DownloadItems for ONE episode across all qualities.
- * E.g. S01E01 might have both 1080p and 480p.
- */
 data class EpisodeGroup(
     val mediaId: String,
     val season: Int,
@@ -139,17 +129,16 @@ class DownloadsViewModel @Inject constructor(
     private val allDownloads: StateFlow<List<DownloadItem>> = repo.observeAll()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    /** Completed movies grouped by tmdbId so multi-resolution shows as one card. */
     val movieGroups: StateFlow<List<MovieGroup>> = allDownloads
         .map { list ->
             list.filter { it.mediaType == "MOVIE" && it.status == DownloadStatus.DONE }
                 .groupBy { it.mediaId }
                 .map { (mediaId, items) ->
                     MovieGroup(
-                        mediaId     = mediaId,
-                        title       = items.first().title,
-                        posterPath  = items.first().posterUrl,
-                        downloads   = items.sortedByDescending { it.sizeBytes },
+                        mediaId    = mediaId,
+                        title      = items.first().title,
+                        posterPath = items.first().posterUrl,
+                        downloads  = items.sortedByDescending { it.sizeBytes },
                     )
                 }
                 .sortedByDescending { it.completedAt }
@@ -160,7 +149,6 @@ class DownloadsViewModel @Inject constructor(
         .map { list -> buildSeriesGroups(list.filter { it.mediaType == "TV" }) }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    /** Active = downloading, queued, paused, or error (not done). */
     val activeDownloads: StateFlow<List<DownloadItem>> = allDownloads
         .map { list ->
             list.filter {
@@ -228,6 +216,111 @@ class DownloadsViewModel @Inject constructor(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Bottom sheet menu data
+// ─────────────────────────────────────────────────────────────────────────────
+
+data class MenuOption(
+    val icon: String,
+    val label: String,
+    val isDestructive: Boolean = false,
+    val onClick: () -> Unit,
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reusable bottom sheet menu (Netflix/YouTube style)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DownloadOptionsSheet(
+    title: String,
+    subtitle: String = "",
+    options: List<MenuOption>,
+    onDismiss: () -> Unit,
+) {
+    val d = LocalDimensions.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState       = sheetState,
+        containerColor   = BgCard,
+        dragHandle       = {
+            Box(
+                Modifier
+                    .padding(top = d.spaceMd)
+                    .size(width = 36.dp, height = 4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(White20),
+            )
+        },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = d.spaceLg),
+        ) {
+            // Title row
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = d.screenHorizPad, vertical = d.spaceMd),
+            ) {
+                Text(
+                    title,
+                    color      = White,
+                    fontSize   = d.textMd,
+                    fontWeight = FontWeight.Bold,
+                    maxLines   = 2,
+                    overflow   = TextOverflow.Ellipsis,
+                )
+                if (subtitle.isNotBlank()) {
+                    Spacer(Modifier.height(d.spaceXxs))
+                    Text(subtitle, color = White40, fontSize = d.textXs)
+                }
+            }
+
+            HorizontalDivider(color = GlassBorder, thickness = 0.5.dp)
+            Spacer(Modifier.height(d.spaceXs))
+
+            options.forEach { opt ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { opt.onClick(); onDismiss() }
+                        .padding(horizontal = d.screenHorizPad, vertical = d.spaceMd),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
+                ) {
+                    // Icon circle
+                    Box(
+                        Modifier
+                            .size(d.iconLg + d.spaceXs)
+                            .clip(CircleShape)
+                            .background(
+                                if (opt.isDestructive) Error.copy(.12f) else GlassSm
+                            ),
+                        Alignment.Center,
+                    ) {
+                        Text(
+                            opt.icon,
+                            fontSize = d.textMd,
+                        )
+                    }
+                    Text(
+                        opt.label,
+                        color      = if (opt.isDestructive) Error else White,
+                        fontSize   = d.textMd,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Screen
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -245,20 +338,17 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
     val showSeries = tab == 0 || tab == 2
     val isEmpty    = movieGroups.isEmpty() && seriesGroups.isEmpty() && activeDownloads.isEmpty()
 
-    // Navigation state: which series expanded, which season selected
     var seriesDetailGroup by remember { mutableStateOf<SeriesGroup?>(null) }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
         if (seriesDetailGroup != null) {
-            // ── Series Detail Page ─────────────────────────────────────────────
             SeriesDetailPage(
-                group    = seriesDetailGroup!!,
-                vm       = vm,
-                ctx      = ctx,
-                onBack   = { seriesDetailGroup = null },
+                group  = seriesDetailGroup!!,
+                vm     = vm,
+                ctx    = ctx,
+                onBack = { seriesDetailGroup = null },
             )
         } else {
-            // ── Root Downloads Page ────────────────────────────────────────────
             LazyColumn(
                 Modifier.fillMaxSize().statusBarsPadding(),
                 contentPadding = PaddingValues(bottom = d.spaceXxl * 3),
@@ -271,22 +361,17 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
                     )
                 }
 
-                // ── Active Queue Strip (horizontal scroll, "View All" button)
                 if (activeDownloads.isNotEmpty()) {
                     item {
                         ActiveQueueStrip(
-                            items    = activeDownloads,
-                            ctx      = ctx,
-                            vm       = vm,
-                            onViewAll = {
-                                // Navigate to full active downloads page
-                                nav.navigate("downloads_active")
-                            },
+                            items     = activeDownloads,
+                            ctx       = ctx,
+                            vm        = vm,
+                            onViewAll = { nav.navigate("downloads_active") },
                         )
                     }
                 }
 
-                // ── Tab filter: All / Movies / Series
                 item {
                     TabFilterBar(
                         selected    = tab,
@@ -298,7 +383,6 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
 
                 if (isEmpty) { item { EmptyDownloadsState() } }
 
-                // ── Movies ──────────────────────────────────────────────────────
                 if (showMovies && movieGroups.isNotEmpty()) {
                     item {
                         SectionLabel(
@@ -309,16 +393,17 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
                     }
                     items(movieGroups, key = { "mg-${it.mediaId}" }) { group ->
                         MovieGroupCard(
-                            group    = group,
-                            onPlay   = { item -> playDownload(ctx, item) },
-                            onDelete = { vm.deleteMovieGroup(group, ctx) },
+                            group           = group,
+                            onPlay          = { item -> playDownload(ctx, item) },
+                            onDelete        = { vm.deleteMovieGroup(group, ctx) },
                             onDeleteQuality = { item -> vm.delete(item, ctx) },
-                            modifier = Modifier.padding(horizontal = d.screenHorizPad).padding(bottom = d.spaceSm + d.spaceXxs),
+                            modifier        = Modifier
+                                .padding(horizontal = d.screenHorizPad)
+                                .padding(bottom = d.spaceSm + d.spaceXxs),
                         )
                     }
                 }
 
-                // ── Series ──────────────────────────────────────────────────────
                 if (showSeries && seriesGroups.isNotEmpty()) {
                     item {
                         SectionLabel(
@@ -332,7 +417,6 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
                             group    = group,
                             onTap    = { seriesDetailGroup = group },
                             onPlay   = {
-                                // Resume last watched episode, or first episode of first season
                                 val lastEp = group.seasons
                                     .flatMap { it.episodeGroups }
                                     .flatMap { it.downloads }
@@ -345,7 +429,9 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
                                 if (toPlay != null) playDownload(ctx, toPlay)
                             },
                             onDelete = { vm.deleteSeries(group, ctx) },
-                            modifier = Modifier.padding(horizontal = d.screenHorizPad).padding(bottom = d.spaceSm + d.spaceXxs),
+                            modifier = Modifier
+                                .padding(horizontal = d.screenHorizPad)
+                                .padding(bottom = d.spaceSm + d.spaceXxs),
                         )
                     }
                 }
@@ -355,7 +441,7 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Series Detail Page (replaces the current screen)
+// Series Detail Page
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -369,12 +455,9 @@ private fun SeriesDetailPage(
     var selectedSeason by remember { mutableStateOf(group.seasons.firstOrNull()?.season ?: 1) }
     val currentSeason = group.seasons.firstOrNull { it.season == selectedSeason } ?: group.seasons.firstOrNull()
     val episodeListState = rememberLazyListState()
-    var showDeleteSeasonDialog by remember { mutableStateOf(false) }
+    var showSeasonMenu by remember { mutableStateOf(false) }
 
-    // When season changes, scroll episode list to top
-    LaunchedEffect(selectedSeason) {
-        episodeListState.scrollToItem(0)
-    }
+    LaunchedEffect(selectedSeason) { episodeListState.scrollToItem(0) }
 
     Column(
         Modifier
@@ -382,14 +465,12 @@ private fun SeriesDetailPage(
             .background(Bg)
             .statusBarsPadding()
     ) {
-        // ── Header row with back button, title, 3-dot menu for season delete ──
         Row(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = d.screenHorizPad, vertical = d.spaceMd),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Back arrow
             Box(
                 Modifier
                     .size(d.iconLg + d.spaceSm)
@@ -403,21 +484,20 @@ private fun SeriesDetailPage(
             Spacer(Modifier.width(d.spaceMd))
             Text(
                 group.title,
-                color = White,
-                fontSize = (d.textXl.value + 1f).sp,
+                color      = White,
+                fontSize   = (d.textXl.value + 1f).sp,
                 fontWeight = FontWeight.Black,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
+                modifier   = Modifier.weight(1f),
             )
-            // Season-level 3-dot menu
             if (currentSeason != null) {
                 Box(
                     Modifier
                         .size(d.iconLg + d.spaceSm)
                         .clip(CircleShape)
                         .background(GlassMd)
-                        .clickable { showDeleteSeasonDialog = true },
+                        .clickable { showSeasonMenu = true },
                     Alignment.Center,
                 ) {
                     Text("⋮", color = White60, fontSize = d.textLg)
@@ -425,7 +505,6 @@ private fun SeriesDetailPage(
             }
         }
 
-        // ── Season selector chips (sticky) ─────────────────────────────────────
         LazyRow(
             contentPadding = PaddingValues(horizontal = d.screenHorizPad),
             horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
@@ -447,8 +526,8 @@ private fun SeriesDetailPage(
                 ) {
                     Text(
                         "Season ${season.season}",
-                        color = if (isSelected) White else White40,
-                        fontSize = d.textSm,
+                        color      = if (isSelected) White else White40,
+                        fontSize   = d.textSm,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                     )
                 }
@@ -457,21 +536,17 @@ private fun SeriesDetailPage(
 
         HorizontalDivider(color = GlassBorder, thickness = 0.5.dp)
 
-        // ── Episode list ────────────────────────────────────────────────────────
         LazyColumn(
             state = episodeListState,
-            contentPadding = PaddingValues(
-                horizontal = d.screenHorizPad,
-                vertical = d.spaceMd,
-            ),
+            contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.spaceMd),
             verticalArrangement = Arrangement.spacedBy(d.spaceSm),
         ) {
             if (currentSeason != null) {
                 items(currentSeason.episodeGroups, key = { "eg-${it.mediaId}-${it.season}-${it.episode}" }) { eg ->
                     EpisodeGroupCard(
-                        eg       = eg,
-                        onPlay   = { item -> playDownload(ctx, item) },
-                        onDelete = { vm.deleteEpisodeGroup(eg, ctx) },
+                        eg              = eg,
+                        onPlay          = { item -> playDownload(ctx, item) },
+                        onDelete        = { vm.deleteEpisodeGroup(eg, ctx) },
                         onDeleteQuality = { item -> vm.delete(item, ctx) },
                     )
                 }
@@ -479,14 +554,18 @@ private fun SeriesDetailPage(
         }
     }
 
-    // Season delete dialog
-    if (showDeleteSeasonDialog && currentSeason != null) {
+    // Season 3-dot menu — bottom sheet options
+    if (showSeasonMenu && currentSeason != null) {
         val seasonSizeStr = formatSize(currentSeason.totalSize)
-        ReelzDeleteDialog(
-            title   = "Delete Season ${currentSeason.season}",
-            message = "Remove all ${currentSeason.episodeGroups.size} episodes of Season ${currentSeason.season}? ($seasonSizeStr)",
-            onDelete  = { vm.deleteSeason(currentSeason, ctx); showDeleteSeasonDialog = false },
-            onDismiss = { showDeleteSeasonDialog = false },
+        DownloadOptionsSheet(
+            title    = "Season ${currentSeason.season}",
+            subtitle = "${currentSeason.episodeGroups.size} episodes · $seasonSizeStr",
+            options  = listOf(
+                MenuOption("🗑", "Delete Season ${currentSeason.season}", isDestructive = true) {
+                    vm.deleteSeason(currentSeason, ctx)
+                },
+            ),
+            onDismiss = { showSeasonMenu = false },
         )
     }
 }
@@ -507,9 +586,9 @@ private fun DownloadsHeader(readyCount: Int, activeCount: Int, onTransfer: () ->
         Column(Modifier.weight(1f)) {
             Text(
                 "Downloads",
-                color = White,
-                fontSize = (d.textXxl.value + 3f).sp,
-                fontWeight = FontWeight.Black,
+                color         = White,
+                fontSize      = (d.textXxl.value + 3f).sp,
+                fontWeight    = FontWeight.Black,
                 letterSpacing = (-0.8).sp,
             )
             Spacer(Modifier.height(d.spaceXxs + 1.dp))
@@ -524,8 +603,8 @@ private fun DownloadsHeader(readyCount: Int, activeCount: Int, onTransfer: () ->
             ) { subtitle ->
                 Text(
                     subtitle,
-                    color = if (activeCount > 0) Brand else if (readyCount > 0) Success else White40,
-                    fontSize = d.textSm,
+                    color      = if (activeCount > 0) Brand else if (readyCount > 0) Success else White40,
+                    fontSize   = d.textSm,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
@@ -548,7 +627,7 @@ private fun DownloadsHeader(readyCount: Int, activeCount: Int, onTransfer: () ->
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Active Queue Strip — horizontal scroll with "View All"
+// Active Queue Strip
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -581,19 +660,18 @@ private fun ActiveQueueStrip(
                 )
                 Text(
                     "ACTIVE",
-                    color = White40,
-                    fontSize = (d.textXxs.value + 1f).sp,
-                    fontWeight = FontWeight.Bold,
+                    color         = White40,
+                    fontSize      = (d.textXxs.value + 1f).sp,
+                    fontWeight    = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 )
             }
-            // View all button
             Text(
                 "View All",
-                color = Brand,
-                fontSize = d.textXs,
+                color      = Brand,
+                fontSize   = d.textXs,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
+                modifier   = Modifier
                     .clip(RoundedCornerShape(d.radiusPill))
                     .clickable(onClick = onViewAll)
                     .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
@@ -633,7 +711,7 @@ private fun ActiveQueueCard(
               else if (item.sizeBytes > 0) item.downloadedBytes.toFloat() / item.sizeBytes
               else 0f
     val animPct by animateFloatAsState(pct.coerceIn(0f, 1f), label = "aq-pct")
-    val cardW = LocalDimensions.current.continueCardWidth + d.spaceLg
+    val cardW = d.continueCardWidth + d.spaceLg
 
     Row(
         Modifier
@@ -645,7 +723,6 @@ private fun ActiveQueueCard(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
     ) {
-        // Poster
         Box(
             Modifier
                 .size(width = d.avatarSm + d.spaceXxs, height = d.avatarSm + d.spaceMd)
@@ -663,21 +740,19 @@ private fun ActiveQueueCard(
         Column(Modifier.weight(1f)) {
             Text(
                 item.title,
-                color = White,
-                fontSize = d.textXs,
+                color      = White,
+                fontSize   = d.textXs,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
             )
             if (item.mediaType == "TV" && item.season > 0) {
                 Text("S${item.season}E${item.episode}", color = White40, fontSize = (d.textXxs.value + 0.5f).sp)
             }
-            // Quality badge on active card
             if (item.quality.isNotBlank()) {
                 Text(item.quality, color = Brand.copy(.8f), fontSize = (d.textXxs.value + 0.5f).sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(d.spaceXxs + 2.dp))
-            // Progress bar
             Box(
                 Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)
             ) {
@@ -687,10 +762,10 @@ private fun ActiveQueueCard(
                         .fillMaxHeight()
                         .background(
                             brush = when {
-                                isError   -> SolidColor(Error)
-                                isPaused  -> SolidColor(White40)
-                                isQueued  -> SolidColor(White20)
-                                else      -> Brush.horizontalGradient(listOf(Brand, Brand2))
+                                isError  -> SolidColor(Error)
+                                isPaused -> SolidColor(White40)
+                                isQueued -> SolidColor(White20)
+                                else     -> Brush.horizontalGradient(listOf(Brand, Brand2))
                             }
                         )
                 )
@@ -703,15 +778,14 @@ private fun ActiveQueueCard(
             ) {
                 Text(
                     when {
-                        isQueued                 -> "Waiting…"
-                        isError                  -> "Failed"
-                        isPaused                 -> "${(pct * 100).toInt()}% · Paused"
-                        else -> "${(pct * 100).toInt()}%"
+                        isQueued -> "Waiting…"
+                        isError  -> "Failed"
+                        isPaused -> "${(pct * 100).toInt()}% · Paused"
+                        else     -> "${(pct * 100).toInt()}%"
                     },
-                    color = if (isDownloading) Success.copy(.85f) else White40,
+                    color    = if (isDownloading) Success.copy(.85f) else White40,
                     fontSize = (d.textXxs.value + 0.5f).sp,
                 )
-                // Pause/Resume icon
                 Row(horizontalArrangement = Arrangement.spacedBy(d.spaceXs)) {
                     Box(
                         Modifier
@@ -724,11 +798,10 @@ private fun ActiveQueueCard(
                         Icon(
                             imageVector = if (isDownloading) IconPause else IconPlay,
                             contentDescription = null,
-                            tint = if (isPaused || isError) Brand else White60,
+                            tint     = if (isPaused || isError) Brand else White60,
                             modifier = Modifier.size(d.iconSm - 4.dp),
                         )
                     }
-                    // Cancel X
                     Box(
                         Modifier
                             .size(d.iconMd + d.spaceXxs)
@@ -785,8 +858,8 @@ private fun TabFilterBar(
                 ) {
                     Text(
                         label,
-                        color = if (isSelected) White else White40,
-                        fontSize = d.textSm,
+                        color      = if (isSelected) White else White40,
+                        fontSize   = d.textSm,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                     )
                     if (count != null && count > 0) {
@@ -799,8 +872,8 @@ private fun TabFilterBar(
                         ) {
                             Text(
                                 "$count",
-                                color = if (isSelected) White else White40,
-                                fontSize = (d.textXxs.value + 0.5f).sp,
+                                color      = if (isSelected) White else White40,
+                                fontSize   = (d.textXxs.value + 0.5f).sp,
                                 fontWeight = FontWeight.Bold,
                             )
                         }
@@ -842,14 +915,9 @@ private fun SectionLabel(title: String, subtitle: String, modifier: Modifier = M
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Universal horizontal card (movie card)
+// Movie Group Card — horizontal layout, standard Netflix/streaming style
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Universal horizontal card — used for MovieGroupCard and EpisodeGroupCard.
- * One card per title regardless of how many qualities are downloaded.
- * Resolution badges are shown inline without scattering.
- */
 @Composable
 fun MovieGroupCard(
     group: MovieGroup,
@@ -859,6 +927,7 @@ fun MovieGroupCard(
     modifier: Modifier = Modifier,
 ) {
     val d = LocalDimensions.current
+    var showMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     val primary = group.primaryDownload
     val doneDownloads = group.doneDownloads
@@ -873,7 +942,6 @@ fun MovieGroupCard(
             .background(BgCard)
             .border(1.dp, Success.copy(.2f), RoundedCornerShape(d.radiusLg - d.spaceXxs))
     ) {
-        // Left accent line — green for done
         Box(
             Modifier
                 .width(3.dp).fillMaxHeight()
@@ -882,10 +950,11 @@ fun MovieGroupCard(
         )
 
         Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
-            // Poster (35-40% width) — tappable to play
+            // Poster
             Box(
                 Modifier
-                    .size(width = d.avatarMd + d.spaceXxs + 2.dp, height = d.avatarLg + d.spaceLg)
+                    .width(d.avatarMd + d.spaceXxs + 2.dp)
+                    .aspectRatio(2f / 3f)
                     .clip(RoundedCornerShape(d.radiusSm + 2.dp))
                     .background(BgRaised)
                     .clickable { onPlay(primary) }
@@ -896,33 +965,26 @@ fun MovieGroupCard(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
-                // Play overlay
                 Box(
                     Modifier.fillMaxSize().background(Color.Black.copy(.35f)),
                     Alignment.Center,
                 ) {
                     Box(
-                        Modifier.size(d.iconLg).clip(CircleShape).background(Color.Black.copy(.55f)).border(1.5.dp, White60, CircleShape),
+                        Modifier.size(d.iconLg).clip(CircleShape)
+                            .background(Color.Black.copy(.55f))
+                            .border(1.5.dp, White60, CircleShape),
                         Alignment.Center,
                     ) {
                         Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp))
                     }
                 }
-                // Watch progress bar at bottom of poster
                 if (hasProgress) {
                     Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(3.dp)
+                        Modifier.fillMaxWidth().height(3.dp)
                             .background(Color.Black.copy(.5f))
                             .align(Alignment.BottomCenter)
                     ) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth(watchFraction)
-                                .fillMaxHeight()
-                                .background(Brand)
-                        )
+                        Box(Modifier.fillMaxWidth(watchFraction).fillMaxHeight().background(Brand))
                     }
                 }
             }
@@ -930,7 +992,6 @@ fun MovieGroupCard(
             Spacer(Modifier.width(d.spaceMd))
 
             Column(Modifier.weight(1f)) {
-                // Title + 3-dot
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -938,35 +999,33 @@ fun MovieGroupCard(
                 ) {
                     Text(
                         primary.title,
-                        color = White,
-                        fontSize = d.textMd,
+                        color      = White,
+                        fontSize   = d.textMd,
                         fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis,
+                        modifier   = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(d.spaceXs))
+                    // 3-dot menu button
                     Box(
-                        Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd).clickable { showDeleteDialog = true },
+                        Modifier
+                            .size(d.iconLg)
+                            .clip(CircleShape)
+                            .background(GlassMd)
+                            .clickable { showMenu = true },
                         Alignment.Center,
                     ) { Text("⋮", color = White60, fontSize = d.textMd) }
                 }
 
                 Spacer(Modifier.height(d.spaceXs))
-
-                // Total size
                 if (group.totalSize > 0) {
                     Text(formatSize(group.totalSize), color = White40, fontSize = d.textXs)
                 }
-
                 Spacer(Modifier.height(d.spaceXs))
-
-                // Resolution badges — all qualities shown inline, no scatter
                 MultiQualityBadges(doneDownloads.map { it.quality })
-
                 Spacer(Modifier.height(d.spaceSm))
 
-                // Downloaded date
                 if (group.completedAt > 0) {
                     val daysAgo = ((System.currentTimeMillis() - group.completedAt) / 86_400_000L).toInt()
                     Text(
@@ -980,8 +1039,6 @@ fun MovieGroupCard(
                 }
 
                 Spacer(Modifier.height(d.spaceSm))
-
-                // Watch progress label or "Not opened"
                 Text(
                     when {
                         hasProgress -> {
@@ -994,351 +1051,12 @@ fun MovieGroupCard(
                         }
                         else -> "Not opened"
                     },
-                    color = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
-                    fontSize = (d.textXxs.value + 1f).sp,
+                    color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
+                    fontSize   = (d.textXxs.value + 1f).sp,
                     fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
                 )
 
                 Spacer(Modifier.height(d.spaceMd))
-
-                // Play button row
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(d.radiusPill))
-                            .background(Brand.copy(.15f))
-                            .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
-                            .clickable { onPlay(primary) }
-                            .padding(horizontal = d.spaceLg, vertical = d.spaceSm),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
-                        ) {
-                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm))
-                            Text("Play", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showDeleteDialog) {
-        MovieDeleteDialog(
-            group     = group,
-            onDeleteQuality = { item -> onDeleteQuality(item); showDeleteDialog = false },
-            onDeleteAll     = { onDelete(); showDeleteDialog = false },
-            onDismiss       = { showDeleteDialog = false },
-        )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Series root card (on Downloads root page)
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun SeriesRootCard(
-    group: SeriesGroup,
-    onTap: () -> Unit,
-    onPlay: () -> Unit,
-    onDelete: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val d = LocalDimensions.current
-    var showDeleteDialog by remember { mutableStateOf(false) }
-
-    Box(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .clickable(onClick = onTap)
-    ) {
-        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
-            // Poster — tap opens series page
-            Box(
-                Modifier
-                    .size(width = d.avatarMd + d.spaceXxs + 2.dp, height = d.avatarLg + d.spaceLg)
-                    .clip(RoundedCornerShape(d.radiusSm + 2.dp))
-                    .background(BgRaised)
-            ) {
-                AsyncImage(
-                    model = group.posterPath,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                // Completion overlay
-                if (group.isFullyDownloaded) {
-                    Box(
-                        Modifier.fillMaxSize().background(Success.copy(.25f)),
-                        Alignment.Center,
-                    ) { Text("✓", color = Success, fontSize = d.textLg, fontWeight = FontWeight.Black) }
-                }
-                // Play icon
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
-                    Box(
-                        Modifier.size(d.iconLg).clip(CircleShape).background(Color.Black.copy(.5f)).border(1.5.dp, White60, CircleShape),
-                        Alignment.Center,
-                    ) { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp)) }
-                }
-            }
-
-            Spacer(Modifier.width(d.spaceMd))
-
-            Column(Modifier.weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Text(
-                        group.title,
-                        color = White,
-                        fontSize = d.textMd,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(d.spaceXs))
-                    Box(
-                        Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd).clickable { showDeleteDialog = true },
-                        Alignment.Center,
-                    ) { Text("⋮", color = White60, fontSize = d.textMd) }
-                }
-
-                Spacer(Modifier.height(d.spaceXs))
-                Text("${group.doneEpisodes} Episodes", color = White40, fontSize = d.textXs)
-                Spacer(Modifier.height(d.spaceXxs))
-                Text("${group.seasonCount} Season${if (group.seasonCount > 1) "s" else ""}", color = White40, fontSize = d.textXs)
-                Spacer(Modifier.height(d.spaceXs))
-
-                if (group.lastWatchedLabel != null) {
-                    Text("Last watched ${group.lastWatchedLabel}", color = White40, fontSize = (d.textXxs.value + 1f).sp)
-                    Spacer(Modifier.height(d.spaceXs))
-                }
-
-                // Status dot + progress bar for series completion
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                ) {
-                    Box(
-                        Modifier.size(d.spaceXs + 1.dp).clip(CircleShape).background(
-                            when {
-                                group.isFullyDownloaded -> Success
-                                group.isAnyActive       -> Brand
-                                else                    -> White40
-                            }
-                        )
-                    )
-                    val pct = if (group.totalEpisodes > 0) group.doneEpisodes.toFloat() / group.totalEpisodes else 0f
-                    Text(
-                        "${group.doneEpisodes}/${group.totalEpisodes} downloaded",
-                        color = White40,
-                        fontSize = (d.textXxs.value + 1f).sp,
-                    )
-                }
-
-                Spacer(Modifier.height(d.spaceSm))
-                val pct = if (group.totalEpisodes > 0) group.doneEpisodes.toFloat() / group.totalEpisodes else 0f
-                Box(
-                    Modifier.fillMaxWidth(0.9f).height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)
-                ) {
-                    Box(
-                        Modifier.fillMaxWidth(pct).fillMaxHeight().background(
-                            if (group.isFullyDownloaded) SolidColor(Success)
-                            else Brush.horizontalGradient(listOf(Brand, Brand2))
-                        )
-                    )
-                }
-
-                Spacer(Modifier.height(d.spaceMd))
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(d.radiusPill))
-                            .background(Brand.copy(.15f))
-                            .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
-                            .clickable(onClick = onPlay)
-                            .padding(horizontal = d.spaceLg, vertical = d.spaceSm),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
-                        ) {
-                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm))
-                            Text("Play", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showDeleteDialog) {
-        ReelzDeleteDialog(
-            title    = "Delete Series",
-            message  = "Remove all downloaded episodes of \"${group.title}\"?",
-            onDelete  = { onDelete(); showDeleteDialog = false },
-            onDismiss = { showDeleteDialog = false },
-        )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Episode group card (inside series detail page)
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun EpisodeGroupCard(
-    eg: EpisodeGroup,
-    onPlay: (DownloadItem) -> Unit,
-    onDelete: () -> Unit,
-    onDeleteQuality: (DownloadItem) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val d = LocalDimensions.current
-    var showDeleteDialog by remember { mutableStateOf(false) }
-    val primary = eg.primaryDownload
-    val doneDownloads = eg.doneDownloads
-
-    val watchFraction = if (eg.durationMs > 0) (eg.watchProgressMs.toFloat() / eg.durationMs).coerceIn(0f, 1f) else 0f
-    val hasProgress = eg.watchProgressMs > 0 && eg.durationMs > 0
-
-    Box(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .background(BgCard)
-            .border(1.dp, if (doneDownloads.isNotEmpty()) Success.copy(.15f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
-    ) {
-        if (doneDownloads.isNotEmpty()) {
-            Box(
-                Modifier.width(3.dp).fillMaxHeight()
-                    .background(Brush.verticalGradient(listOf(Success.copy(.7f), Success.copy(.2f))))
-                    .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
-            )
-        }
-
-        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
-            // Poster — tappable to play
-            Box(
-                Modifier
-                    .size(width = d.avatarMd + d.spaceXxs + 2.dp, height = d.avatarLg + d.spaceLg)
-                    .clip(RoundedCornerShape(d.radiusSm + 2.dp))
-                    .background(BgRaised)
-                    .clickable { onPlay(primary) }
-            ) {
-                AsyncImage(
-                    model = primary.posterUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                // Play overlay
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(.35f)), Alignment.Center) {
-                    Box(
-                        Modifier.size(d.iconLg).clip(CircleShape).background(Color.Black.copy(.55f)).border(1.5.dp, White60, CircleShape),
-                        Alignment.Center,
-                    ) { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp)) }
-                }
-                // Watch progress at bottom of poster
-                if (hasProgress) {
-                    Box(
-                        Modifier.fillMaxWidth().height(3.dp).background(Color.Black.copy(.5f)).align(Alignment.BottomCenter)
-                    ) {
-                        Box(Modifier.fillMaxWidth(watchFraction).fillMaxHeight().background(Brand))
-                    }
-                }
-            }
-
-            Spacer(Modifier.width(d.spaceMd))
-
-            Column(Modifier.weight(1f)) {
-                // Episode label + 3-dot
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "Episode ${eg.episode}${if (eg.episodeName.isNotBlank()) " · ${eg.episodeName}" else ""}",
-                            color = White,
-                            fontSize = d.textSm,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(Modifier.width(d.spaceXs))
-                    Box(
-                        Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd).clickable { showDeleteDialog = true },
-                        Alignment.Center,
-                    ) { Text("⋮", color = White60, fontSize = d.textMd) }
-                }
-
-                Spacer(Modifier.height(d.spaceXs))
-
-                // Total size
-                if (eg.totalSize > 0) {
-                    Text(formatSize(eg.totalSize), color = White40, fontSize = d.textXs)
-                    Spacer(Modifier.height(d.spaceXxs))
-                }
-
-                // Resolution badges
-                MultiQualityBadges(doneDownloads.map { it.quality })
-
-                Spacer(Modifier.height(d.spaceSm))
-
-                // Downloaded date
-                if (primary.completedAt > 0) {
-                    val daysAgo = ((System.currentTimeMillis() - primary.completedAt) / 86_400_000L).toInt()
-                    Text(
-                        when (daysAgo) {
-                            0    -> "Downloaded today"
-                            1    -> "Downloaded yesterday"
-                            else -> "Downloaded $daysAgo days ago"
-                        },
-                        color = White20, fontSize = (d.textXxs.value + 1f).sp,
-                    )
-                    Spacer(Modifier.height(d.spaceXxs))
-                }
-
-                // Watch progress or "Not opened"
-                Text(
-                    when {
-                        hasProgress -> {
-                            val pct = (watchFraction * 100).toInt()
-                            if (pct >= 95) "Watched" else "$pct% watched"
-                        }
-                        eg.lastPlayedAt > 0 -> {
-                            val daysAgo = ((System.currentTimeMillis() - eg.lastPlayedAt) / 86_400_000L).toInt()
-                            "Last played: ${when (daysAgo) { 0 -> "today"; 1 -> "yesterday"; else -> "$daysAgo days ago" }}"
-                        }
-                        else -> "Not opened"
-                    },
-                    color = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
-                    fontSize = (d.textXxs.value + 1f).sp,
-                    fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
-                )
-
-                Spacer(Modifier.height(d.spaceMd))
-
-                // Play button
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Box(
                         Modifier
@@ -1361,18 +1079,405 @@ fun EpisodeGroupCard(
         }
     }
 
+    // 3-dot bottom sheet menu
+    if (showMenu) {
+        val qualityOptions = if (doneDownloads.size > 1)
+            doneDownloads.map { item ->
+                MenuOption("🗑", "Delete ${item.quality} (${formatSize(item.sizeBytes)})", isDestructive = true) {
+                    onDeleteQuality(item)
+                    showMenu = false
+                }
+            }
+        else emptyList()
+
+        DownloadOptionsSheet(
+            title    = primary.title,
+            subtitle = formatSize(group.totalSize),
+            options  = buildList {
+                add(MenuOption("▶", "Play") { onPlay(primary); showMenu = false })
+                addAll(qualityOptions)
+                add(MenuOption("🗑", "Delete All", isDestructive = true) { showDeleteDialog = true; showMenu = false })
+            },
+            onDismiss = { showMenu = false },
+        )
+    }
+
     if (showDeleteDialog) {
-        EpisodeDeleteDialog(
-            eg              = eg,
-            onDeleteQuality = { item -> onDeleteQuality(item); showDeleteDialog = false },
-            onDeleteAll     = { onDelete(); showDeleteDialog = false },
-            onDismiss       = { showDeleteDialog = false },
+        ReelzDeleteDialog(
+            title     = "Delete \"${primary.title}\"?",
+            message   = "This will remove all ${doneDownloads.size} version${if (doneDownloads.size > 1) "s" else ""} (${formatSize(group.totalSize)}) from your device.",
+            onDelete  = { onDelete(); showDeleteDialog = false },
+            onDismiss = { showDeleteDialog = false },
         )
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Multi-quality badge row — shows 480p, 1080p etc cleanly on one row
+// Series root card
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun SeriesRootCard(
+    group: SeriesGroup,
+    onTap: () -> Unit,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val d = LocalDimensions.current
+    var showMenu by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    Box(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .background(BgCard)
+            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .clickable(onClick = onTap)
+    ) {
+        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
+            Box(
+                Modifier
+                    .width(d.avatarMd + d.spaceXxs + 2.dp)
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(d.radiusSm + 2.dp))
+                    .background(BgRaised)
+            ) {
+                AsyncImage(
+                    model = group.posterPath,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                if (group.isFullyDownloaded) {
+                    Box(
+                        Modifier.fillMaxSize().background(Success.copy(.25f)),
+                        Alignment.Center,
+                    ) { Text("✓", color = Success, fontSize = d.textLg, fontWeight = FontWeight.Black) }
+                }
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
+                    Box(
+                        Modifier.size(d.iconLg).clip(CircleShape)
+                            .background(Color.Black.copy(.5f))
+                            .border(1.5.dp, White60, CircleShape),
+                        Alignment.Center,
+                    ) { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp)) }
+                }
+            }
+
+            Spacer(Modifier.width(d.spaceMd))
+
+            Column(Modifier.weight(1f)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text(
+                        group.title,
+                        color      = White,
+                        fontSize   = d.textMd,
+                        fontWeight = FontWeight.Bold,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis,
+                        modifier   = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(d.spaceXs))
+                    Box(
+                        Modifier
+                            .size(d.iconLg)
+                            .clip(CircleShape)
+                            .background(GlassMd)
+                            .clickable(onClick = { showMenu = true }),
+                        Alignment.Center,
+                    ) { Text("⋮", color = White60, fontSize = d.textMd) }
+                }
+
+                Spacer(Modifier.height(d.spaceXs))
+                Text("${group.doneEpisodes} Episodes", color = White40, fontSize = d.textXs)
+                Spacer(Modifier.height(d.spaceXxs))
+                Text("${group.seasonCount} Season${if (group.seasonCount > 1) "s" else ""}", color = White40, fontSize = d.textXs)
+                Spacer(Modifier.height(d.spaceXs))
+
+                if (group.lastWatchedLabel != null) {
+                    Text("Last watched ${group.lastWatchedLabel}", color = White40, fontSize = (d.textXxs.value + 1f).sp)
+                    Spacer(Modifier.height(d.spaceXs))
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+                ) {
+                    Box(
+                        Modifier.size(d.spaceXs + 1.dp).clip(CircleShape).background(
+                            when {
+                                group.isFullyDownloaded -> Success
+                                group.isAnyActive       -> Brand
+                                else                    -> White40
+                            }
+                        )
+                    )
+                    Text(
+                        "${group.doneEpisodes}/${group.totalEpisodes} downloaded",
+                        color    = White40,
+                        fontSize = (d.textXxs.value + 1f).sp,
+                    )
+                }
+
+                Spacer(Modifier.height(d.spaceSm))
+                val pct = if (group.totalEpisodes > 0) group.doneEpisodes.toFloat() / group.totalEpisodes else 0f
+                Box(Modifier.fillMaxWidth(0.9f).height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
+                    Box(
+                        Modifier.fillMaxWidth(pct).fillMaxHeight().background(
+                            if (group.isFullyDownloaded) SolidColor(Success)
+                            else Brush.horizontalGradient(listOf(Brand, Brand2))
+                        )
+                    )
+                }
+
+                Spacer(Modifier.height(d.spaceMd))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(d.radiusPill))
+                            .background(Brand.copy(.15f))
+                            .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
+                            .clickable(onClick = onPlay)
+                            .padding(horizontal = d.spaceLg, vertical = d.spaceSm),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
+                        ) {
+                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm))
+                            Text("Play", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showMenu) {
+        DownloadOptionsSheet(
+            title    = group.title,
+            subtitle = "${group.doneEpisodes} episodes · ${group.seasonCount} season${if (group.seasonCount > 1) "s" else ""}${if (group.totalSize > 0) " · ${formatSize(group.totalSize)}" else ""}",
+            options  = listOf(
+                MenuOption("▶", "Resume Watching") { onPlay(); showMenu = false },
+                MenuOption("📂", "Browse Episodes") { onTap(); showMenu = false },
+                MenuOption("🗑", "Delete All Episodes", isDestructive = true) { showDeleteDialog = true; showMenu = false },
+            ),
+            onDismiss = { showMenu = false },
+        )
+    }
+
+    if (showDeleteDialog) {
+        ReelzDeleteDialog(
+            title     = "Delete Series",
+            message   = "Remove all downloaded episodes of \"${group.title}\"?",
+            onDelete  = { onDelete(); showDeleteDialog = false },
+            onDismiss = { showDeleteDialog = false },
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Episode group card (inside series detail page)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun EpisodeGroupCard(
+    eg: EpisodeGroup,
+    onPlay: (DownloadItem) -> Unit,
+    onDelete: () -> Unit,
+    onDeleteQuality: (DownloadItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val d = LocalDimensions.current
+    var showMenu by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    val primary = eg.primaryDownload
+    val doneDownloads = eg.doneDownloads
+    val label = if (eg.episodeName.isNotBlank()) eg.episodeName else "Episode ${eg.episode}"
+
+    val watchFraction = if (eg.durationMs > 0) (eg.watchProgressMs.toFloat() / eg.durationMs).coerceIn(0f, 1f) else 0f
+    val hasProgress = eg.watchProgressMs > 0 && eg.durationMs > 0
+
+    Box(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .background(BgCard)
+            .border(1.dp, if (doneDownloads.isNotEmpty()) Success.copy(.15f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
+    ) {
+        if (doneDownloads.isNotEmpty()) {
+            Box(
+                Modifier.width(3.dp).fillMaxHeight()
+                    .background(Brush.verticalGradient(listOf(Success.copy(.7f), Success.copy(.2f))))
+                    .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
+            )
+        }
+
+        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
+            Box(
+                Modifier
+                    .width(d.avatarMd + d.spaceXxs + 2.dp)
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(d.radiusSm + 2.dp))
+                    .background(BgRaised)
+                    .clickable { onPlay(primary) }
+            ) {
+                AsyncImage(
+                    model = primary.posterUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(.35f)), Alignment.Center) {
+                    Box(
+                        Modifier.size(d.iconLg).clip(CircleShape)
+                            .background(Color.Black.copy(.55f))
+                            .border(1.5.dp, White60, CircleShape),
+                        Alignment.Center,
+                    ) { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp)) }
+                }
+                if (hasProgress) {
+                    Box(
+                        Modifier.fillMaxWidth().height(3.dp)
+                            .background(Color.Black.copy(.5f))
+                            .align(Alignment.BottomCenter)
+                    ) {
+                        Box(Modifier.fillMaxWidth(watchFraction).fillMaxHeight().background(Brand))
+                    }
+                }
+            }
+
+            Spacer(Modifier.width(d.spaceMd))
+
+            Column(Modifier.weight(1f)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Episode ${eg.episode}${if (eg.episodeName.isNotBlank()) " · ${eg.episodeName}" else ""}",
+                            color      = White,
+                            fontSize   = d.textSm,
+                            fontWeight = FontWeight.Bold,
+                            maxLines   = 2,
+                            overflow   = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.width(d.spaceXs))
+                    Box(
+                        Modifier
+                            .size(d.iconLg)
+                            .clip(CircleShape)
+                            .background(GlassMd)
+                            .clickable { showMenu = true },
+                        Alignment.Center,
+                    ) { Text("⋮", color = White60, fontSize = d.textMd) }
+                }
+
+                Spacer(Modifier.height(d.spaceXs))
+                if (eg.totalSize > 0) {
+                    Text(formatSize(eg.totalSize), color = White40, fontSize = d.textXs)
+                    Spacer(Modifier.height(d.spaceXxs))
+                }
+                MultiQualityBadges(doneDownloads.map { it.quality })
+                Spacer(Modifier.height(d.spaceSm))
+
+                if (primary.completedAt > 0) {
+                    val daysAgo = ((System.currentTimeMillis() - primary.completedAt) / 86_400_000L).toInt()
+                    Text(
+                        when (daysAgo) {
+                            0    -> "Downloaded today"
+                            1    -> "Downloaded yesterday"
+                            else -> "Downloaded $daysAgo days ago"
+                        },
+                        color = White20, fontSize = (d.textXxs.value + 1f).sp,
+                    )
+                    Spacer(Modifier.height(d.spaceXxs))
+                }
+
+                Text(
+                    when {
+                        hasProgress -> {
+                            val pct = (watchFraction * 100).toInt()
+                            if (pct >= 95) "Watched" else "$pct% watched"
+                        }
+                        eg.lastPlayedAt > 0 -> {
+                            val daysAgo = ((System.currentTimeMillis() - eg.lastPlayedAt) / 86_400_000L).toInt()
+                            "Last played: ${when (daysAgo) { 0 -> "today"; 1 -> "yesterday"; else -> "$daysAgo days ago" }}"
+                        }
+                        else -> "Not opened"
+                    },
+                    color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
+                    fontSize   = (d.textXxs.value + 1f).sp,
+                    fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
+                )
+
+                Spacer(Modifier.height(d.spaceMd))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(d.radiusPill))
+                            .background(Brand.copy(.15f))
+                            .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
+                            .clickable { onPlay(primary) }
+                            .padding(horizontal = d.spaceLg, vertical = d.spaceSm),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
+                        ) {
+                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm))
+                            Text("Play", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3-dot bottom sheet menu
+    if (showMenu) {
+        val qualityOptions = if (doneDownloads.size > 1)
+            doneDownloads.map { item ->
+                MenuOption("🗑", "Delete ${item.quality} (${formatSize(item.sizeBytes)})", isDestructive = true) {
+                    onDeleteQuality(item)
+                    showMenu = false
+                }
+            }
+        else emptyList()
+
+        DownloadOptionsSheet(
+            title    = label,
+            subtitle = "S${eg.season.toString().padStart(2,'0')}E${eg.episode.toString().padStart(2,'0')}${if (eg.totalSize > 0) " · ${formatSize(eg.totalSize)}" else ""}",
+            options  = buildList {
+                add(MenuOption("▶", "Play") { onPlay(primary); showMenu = false })
+                addAll(qualityOptions)
+                add(MenuOption("🗑", "Delete Episode", isDestructive = true) { showDeleteDialog = true; showMenu = false })
+            },
+            onDismiss = { showMenu = false },
+        )
+    }
+
+    if (showDeleteDialog) {
+        ReelzDeleteDialog(
+            title     = "Delete Episode",
+            message   = "Remove \"$label\"?",
+            onDelete  = { onDelete(); showDeleteDialog = false },
+            onDismiss = { showDeleteDialog = false },
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-quality badge row
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -1400,203 +1505,6 @@ fun MultiQualityBadges(qualities: List<String>) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Delete Dialogs
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Movie delete dialog:
- * - If multiple qualities: show "Delete this quality" options + "Delete all"
- * - If only one quality: simple "Delete Movie?" confirm
- */
-@Composable
-private fun MovieDeleteDialog(
-    group: MovieGroup,
-    onDeleteQuality: (DownloadItem) -> Unit,
-    onDeleteAll: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val d = LocalDimensions.current
-    val doneDownloads = group.doneDownloads
-
-    if (doneDownloads.size <= 1) {
-        // Simple dialog
-        ReelzDeleteDialog(
-            title    = "Delete Movie",
-            message  = "Remove \"${group.title}\" from your library?",
-            onDelete  = onDeleteAll,
-            onDismiss = onDismiss,
-        )
-        return
-    }
-
-    // Multi-quality dialog
-    var selectedId by remember { mutableStateOf<String?>(null) }
-    var deleteAll  by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor   = BgCard,
-        shape            = RoundedCornerShape(d.radiusLg),
-        title = {
-            Text("Delete Movie", color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
-                doneDownloads.forEach { item ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusSm)).clickable { selectedId = item.id; deleteAll = false }
-                            .padding(vertical = d.spaceXs),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                    ) {
-                        RadioButton(
-                            selected = selectedId == item.id && !deleteAll,
-                            onClick  = { selectedId = item.id; deleteAll = false },
-                            colors   = RadioButtonDefaults.colors(selectedColor = Brand, unselectedColor = White40),
-                        )
-                        Column {
-                            Text("Delete ${item.quality}", color = White60, fontSize = d.textSm)
-                            Text(formatSize(item.sizeBytes), color = White40, fontSize = d.textXs)
-                        }
-                    }
-                }
-                HorizontalDivider(color = GlassBorder, thickness = 0.5.dp)
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusSm)).clickable { deleteAll = true; selectedId = null }
-                        .padding(vertical = d.spaceXs),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                ) {
-                    RadioButton(
-                        selected = deleteAll,
-                        onClick  = { deleteAll = true; selectedId = null },
-                        colors   = RadioButtonDefaults.colors(selectedColor = Error, unselectedColor = White40),
-                    )
-                    Column {
-                        Text("Delete all qualities", color = Error.copy(.85f), fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
-                        Text(formatSize(group.totalSize), color = White40, fontSize = d.textXs)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Box(
-                Modifier.clip(RoundedCornerShape(d.radiusPill))
-                    .background(Error.copy(.15f))
-                    .border(1.dp, Error.copy(.35f), RoundedCornerShape(d.radiusPill))
-                    .clickable {
-                        if (deleteAll) onDeleteAll()
-                        else selectedId?.let { id -> doneDownloads.find { it.id == id }?.let { onDeleteQuality(it) } }
-                    }
-                    .padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
-            ) { Text("Delete", color = Error, fontWeight = FontWeight.Bold, fontSize = d.textSm) }
-        },
-        dismissButton = {
-            Box(
-                Modifier.clip(RoundedCornerShape(d.radiusPill)).background(GlassMd)
-                    .clickable(onClick = onDismiss)
-                    .padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
-            ) { Text("Cancel", color = White60, fontSize = d.textSm) }
-        },
-    )
-}
-
-/**
- * Episode delete dialog — same logic as MovieDeleteDialog
- */
-@Composable
-private fun EpisodeDeleteDialog(
-    eg: EpisodeGroup,
-    onDeleteQuality: (DownloadItem) -> Unit,
-    onDeleteAll: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val d = LocalDimensions.current
-    val doneDownloads = eg.doneDownloads
-    val label = if (eg.episodeName.isNotBlank()) eg.episodeName else "Episode ${eg.episode}"
-
-    if (doneDownloads.size <= 1) {
-        ReelzDeleteDialog(
-            title    = "Delete Episode",
-            message  = "Remove \"$label\"?",
-            onDelete  = onDeleteAll,
-            onDismiss = onDismiss,
-        )
-        return
-    }
-
-    var selectedId by remember { mutableStateOf<String?>(null) }
-    var deleteAll  by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor   = BgCard,
-        shape            = RoundedCornerShape(d.radiusLg),
-        title = {
-            Text("Delete Episode", color = White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
-                doneDownloads.forEach { item ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusSm)).clickable { selectedId = item.id; deleteAll = false }
-                            .padding(vertical = d.spaceXs),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                    ) {
-                        RadioButton(
-                            selected = selectedId == item.id && !deleteAll,
-                            onClick  = { selectedId = item.id; deleteAll = false },
-                            colors   = RadioButtonDefaults.colors(selectedColor = Brand, unselectedColor = White40),
-                        )
-                        Column {
-                            Text("Delete ${item.quality}", color = White60, fontSize = d.textSm)
-                            Text(formatSize(item.sizeBytes), color = White40, fontSize = d.textXs)
-                        }
-                    }
-                }
-                HorizontalDivider(color = GlassBorder, thickness = 0.5.dp)
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusSm)).clickable { deleteAll = true; selectedId = null }
-                        .padding(vertical = d.spaceXs),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                ) {
-                    RadioButton(
-                        selected = deleteAll,
-                        onClick  = { deleteAll = true; selectedId = null },
-                        colors   = RadioButtonDefaults.colors(selectedColor = Error, unselectedColor = White40),
-                    )
-                    Column {
-                        Text("Delete all qualities", color = Error.copy(.85f), fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
-                        Text(formatSize(eg.totalSize), color = White40, fontSize = d.textXs)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Box(
-                Modifier.clip(RoundedCornerShape(d.radiusPill))
-                    .background(Error.copy(.15f))
-                    .border(1.dp, Error.copy(.35f), RoundedCornerShape(d.radiusPill))
-                    .clickable {
-                        if (deleteAll) onDeleteAll()
-                        else selectedId?.let { id -> doneDownloads.find { it.id == id }?.let { onDeleteQuality(it) } }
-                    }
-                    .padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
-            ) { Text("Delete", color = Error, fontWeight = FontWeight.Bold, fontSize = d.textSm) }
-        },
-        dismissButton = {
-            Box(
-                Modifier.clip(RoundedCornerShape(d.radiusPill)).background(GlassMd)
-                    .clickable(onClick = onDismiss)
-                    .padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
-            ) { Text("Cancel", color = White60, fontSize = d.textSm) }
-        },
-    )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Empty state
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1609,7 +1517,6 @@ private fun EmptyDownloadsState() {
             verticalArrangement = Arrangement.spacedBy(d.spaceMd),
             modifier = Modifier.padding(horizontal = d.spaceXxl),
         ) {
-            // Layered rings + icon
             Box(contentAlignment = Alignment.Center) {
                 Box(
                     Modifier.size(d.avatarLg + d.spaceXxl + d.spaceLg)
@@ -1638,23 +1545,23 @@ private fun EmptyDownloadsState() {
             Spacer(Modifier.height(d.spaceXs))
             Text(
                 "Your offline library is empty",
-                color = White,
-                fontSize = d.textXl,
+                color      = White,
+                fontSize   = d.textXl,
                 fontWeight = FontWeight.Bold,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
             )
             Text(
                 "Download movies & shows to watch anywhere — even without Wi-Fi or mobile data.",
-                color = White40,
-                fontSize = d.textSm,
+                color     = White40,
+                fontSize  = d.textSm,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 lineHeight = (d.textSm.value * 1.6f).sp,
             )
             Spacer(Modifier.height(d.spaceXs))
             Text(
                 "Look for the ↓ icon on any title to save it for offline viewing.",
-                color = Brand.copy(.7f),
-                fontSize = d.textXs,
+                color     = Brand.copy(.7f),
+                fontSize  = d.textXs,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 lineHeight = (d.textXs.value * 1.5f).sp,
             )
@@ -1745,24 +1652,17 @@ private fun ReelzDeleteDialog(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Build a play intent for a DownloadItem.
- * Passes all downloaded qualities for this content (tmdbId/season/episode) so the
- * player can show a quality switcher using only locally available files.
- */
 private fun playDownload(ctx: Context, dl: DownloadItem) {
     val base = Intent(ctx, PlayerActivity::class.java).apply {
-        putExtra("mediaId",    dl.mediaId)
-        putExtra("mediaType",  dl.mediaType)
-        putExtra("season",     dl.season)
-        putExtra("episode",    dl.episode)
-        putExtra("title",      dl.title)
-        putExtra("posterUrl", dl.posterUrl)
-        putExtra("downloadId", dl.id)
-        // Hint to player: start from this quality (empty = auto pick highest)
-        putExtra("preferredQuality", dl.quality)
-        // Flag that this is an offline playback
-        putExtra("isOffline", true)
+        putExtra("mediaId",           dl.mediaId)
+        putExtra("mediaType",         dl.mediaType)
+        putExtra("season",            dl.season)
+        putExtra("episode",           dl.episode)
+        putExtra("title",             dl.title)
+        putExtra("posterUrl",         dl.posterUrl)
+        putExtra("downloadId",        dl.id)
+        putExtra("preferredQuality",  dl.quality)
+        putExtra("isOffline",         true)
     }
     when {
         dl.status == DownloadStatus.DONE && dl.filePath.isNotBlank() -> {

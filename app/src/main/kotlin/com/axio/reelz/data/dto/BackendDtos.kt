@@ -297,8 +297,10 @@ data class AppConfigDto(
 data class PremiumConfigDto(
     val enabled: Boolean = false,
     @SerializedName("monthly_price")         val monthlyPrice: Long = 0,
+    @SerializedName("yearly_price")          val yearlyPrice: Long = 0,
     @SerializedName("paystack_monthly_url")  val paystackMonthlyUrl: String = "",
     @SerializedName("paystack_yearly_url")   val paystackYearlyUrl: String = "",
+    @SerializedName("payment_note")          val paymentNote: String = "",
 )
 
 data class AdPlacementsDto(
@@ -348,13 +350,6 @@ data class AuthData(
 data class RefreshData(
     @SerializedName("access_token")  val accessToken: String = "",
     @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
-)
-
-// ── Sync ──────────────────────────────────────────────────────────────────────
-// data field inside ApiResponse<SyncData>
-data class SyncData(
-    // empty — server returns {} as acknowledgement
-    val placeholder: String? = null,
 )
 
 // ── Payment init ──────────────────────────────────────────────────────────────

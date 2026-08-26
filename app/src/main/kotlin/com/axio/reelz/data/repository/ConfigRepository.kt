@@ -73,8 +73,10 @@ class ConfigRepository @Inject constructor(
 
     fun isPremiumEnabled(): Boolean = current().premium.enabled
     fun premiumMonthlyPrice(): Long = current().premium.monthlyPrice
+    fun premiumYearlyPrice(): Long = current().premium.yearlyPrice
     fun paystackMonthlyUrl(): String = current().premium.paystackMonthlyUrl
     fun paystackYearlyUrl(): String = current().premium.paystackYearlyUrl
+    fun premiumPaymentNote(): String = current().premium.paymentNote
 
     // ── Init ──────────────────────────────────────────────────────────────────
 

@@ -22,11 +22,10 @@ import javax.inject.Singleton
  * ENVELOPE RULE: all auth endpoints return ApiResponse<T>.
  *   /auth/google  → ApiResponse<AuthData>
  *   /auth/refresh → ApiResponse<RefreshData>
- *   /auth/sync    → ApiResponse<SyncData>
  *
  * name, email, photo_url come from Google SDK — NOT from backend.
- * /auth/refresh uses refresh_token (not access_token) in Bearer header.
- * /auth/sync syncs history only — watchlist is 100% local (Room DB).
+ * /auth/refresh uses access_token in Bearer header.
+ * Watchlist and history are 100% local (Room DB) — no server sync.
  */
 @Singleton
 class UserRepository @Inject constructor(

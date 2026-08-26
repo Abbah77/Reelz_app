@@ -16,7 +16,7 @@ import retrofit2.http.*
 //                      /api/v1/search, /api/v1/media/{id}, /api/v1/shorts,
 //                      /auth/google
 //    AUTH OPTIONAL:    /api/v1/stream, /api/v1/download, /api/v1/subtitles
-//    AUTH REQUIRED:    /auth/sync, /auth/refresh, /payment/init
+//    AUTH REQUIRED:    /auth/refresh, /payment/init
 //
 //  The app always sends Bearer token when available to enable server-side logging.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,13 +116,6 @@ interface ReelzApi {
         @Header("Authorization") bearerRefreshToken: String,
     ): Response<ApiResponse<RefreshData>>
 
-    // ── Auth — Sync watch history ─────────────────────────────────────────────
-    // Requires access_token. Watchlist is local-only (Room DB).
-    @POST("auth/sync")
-    suspend fun syncHistory(
-        @Header("Authorization") bearerToken: String,
-        @Body body: SyncBody,
-    ): Response<ApiResponse<SyncData>>
 
     // ── Payment ───────────────────────────────────────────────────────────────
     @FormUrlEncoded
@@ -153,16 +146,3 @@ data class GoogleAuthBody(
     val id_token: String,
 )
 
-// Sync body — history only, watchlist is local
-data class SyncBody(
-    val history: List<HistorySyncItem> = emptyList(),
-)
-
-data class HistorySyncItem(
-    val id: String,
-    val season: Int = 0,
-    val episode: Int = 0,
-    val position_ms: Long = 0,
-    val duration_ms: Long = 0,
-    val watched_at: Long = 0,
-)
