@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material3.*
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
@@ -69,13 +68,6 @@ data class SeriesGroup(
     val totalEpisodes: Int get() = seasons.sumOf { it.episodeGroups.size }
     val doneEpisodes: Int get() = seasons.sumOf { s -> s.episodeGroups.count { it.doneDownloads.isNotEmpty() } }
     val isFullyDownloaded: Boolean get() = totalEpisodes > 0 && doneEpisodes == totalEpisodes
-    val isAnyActive: Boolean get() = seasons.any { s ->
-        s.episodeGroups.any { eg ->
-            eg.downloads.any {
-                it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.QUEUED
-            }
-        }
-    }
     val lastWatchedLabel: String? get() {
         val lastPlayed = seasons
             .flatMap { it.episodeGroups }
@@ -129,6 +121,7 @@ class DownloadsViewModel @Inject constructor(
     private val allDownloads: StateFlow<List<DownloadItem>> = repo.observeAll()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    // ── Movies: only DONE items appear in the library grid ───────────────────
     val movieGroups: StateFlow<List<MovieGroup>> = allDownloads
         .map { list ->
             list.filter { it.mediaType == "MOVIE" && it.status == DownloadStatus.DONE }
@@ -145,10 +138,23 @@ class DownloadsViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    // ── Series: only series that have AT LEAST ONE fully done episode appear ─
+    //
+    // BUG FIX: Previously, ALL TV items were grouped (including DOWNLOADING,
+    // QUEUED, PAUSED) so a series appeared in the library immediately after
+    // download started.  Now we only include episodes whose status == DONE,
+    // and we only surface a SeriesGroup when it has at least one done episode.
+    //
     val seriesGroups: StateFlow<List<SeriesGroup>> = allDownloads
-        .map { list -> buildSeriesGroups(list.filter { it.mediaType == "TV" }) }
+        .map { list ->
+            buildSeriesGroups(
+                // Only DONE episodes belong in the library list
+                list.filter { it.mediaType == "TV" && it.status == DownloadStatus.DONE }
+            )
+        }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    // ── Active: any non-DONE, non-cancelled state ─────────────────────────────
     val activeDownloads: StateFlow<List<DownloadItem>> = allDownloads
         .map { list ->
             list.filter {
@@ -172,11 +178,11 @@ class DownloadsViewModel @Inject constructor(
                     .map { (season, seasonEps) ->
                         val episodeGroups = seasonEps
                             .groupBy { it.episode }
-                            .map { (epNum, epItems) ->
+                            .map { (_, epItems) ->
                                 EpisodeGroup(
                                     mediaId     = groupMediaId,
-                                    season      = season,
-                                    episode     = epNum,
+                                    season      = epItems.first().season,
+                                    episode     = epItems.first().episode,
                                     episodeName = epItems.firstOrNull()?.episodeName ?: "",
                                     posterPath  = epItems.firstOrNull()?.posterUrl,
                                     downloads   = epItems.sortedByDescending { it.sizeBytes },
@@ -188,8 +194,11 @@ class DownloadsViewModel @Inject constructor(
                     .sortedBy { it.season }
                 SeriesGroup(groupMediaId, eps.first().title, eps.first().posterUrl, seasons)
             }
+            // Only include series that have at least 1 done episode
+            .filter { g -> g.doneEpisodes > 0 }
             .sortedByDescending { g ->
-                g.seasons.flatMap { it.episodeGroups }.flatMap { it.downloads }.maxOf { it.createdAt }
+                g.seasons.flatMap { it.episodeGroups }.flatMap { it.downloads }
+                    .maxOfOrNull { it.completedAt } ?: 0L
             }
 
     fun delete(item: DownloadItem, ctx: Context) { viewModelScope.launch { repo.delete(ctx, item) } }
@@ -261,7 +270,6 @@ private fun DownloadOptionsSheet(
                 .navigationBarsPadding()
                 .padding(bottom = d.spaceLg),
         ) {
-            // Title row
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -293,7 +301,6 @@ private fun DownloadOptionsSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
                 ) {
-                    // Icon circle
                     Box(
                         Modifier
                             .size(d.iconLg + d.spaceXs)
@@ -303,10 +310,7 @@ private fun DownloadOptionsSheet(
                             ),
                         Alignment.Center,
                     ) {
-                        Text(
-                            opt.icon,
-                            fontSize = d.textMd,
-                        )
+                        Text(opt.icon, fontSize = d.textMd)
                     }
                     Text(
                         opt.label,
@@ -336,7 +340,8 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
 
     val showMovies = tab == 0 || tab == 1
     val showSeries = tab == 0 || tab == 2
-    val isEmpty    = movieGroups.isEmpty() && seriesGroups.isEmpty() && activeDownloads.isEmpty()
+    // Empty = no finished content (active downloads live in the strip, not the library)
+    val isEmpty    = movieGroups.isEmpty() && seriesGroups.isEmpty()
 
     var seriesDetailGroup by remember { mutableStateOf<SeriesGroup?>(null) }
 
@@ -381,7 +386,8 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
                     )
                 }
 
-                if (isEmpty) { item { EmptyDownloadsState() } }
+                if (isEmpty && activeDownloads.isEmpty()) { item { EmptyDownloadsState() } }
+                else if (isEmpty) { item { LibraryPendingState() } }
 
                 if (showMovies && movieGroups.isNotEmpty()) {
                     item {
@@ -554,7 +560,6 @@ private fun SeriesDetailPage(
         }
     }
 
-    // Season 3-dot menu — bottom sheet options
     if (showSeasonMenu && currentSeason != null) {
         val seasonSizeStr = formatSize(currentSeason.totalSize)
         DownloadOptionsSheet(
@@ -707,9 +712,8 @@ private fun ActiveQueueCard(
     val isQueued      = item.status == DownloadStatus.QUEUED
     val isError       = item.status == DownloadStatus.ERROR
 
-    val pct = if (item.totalSegments > 0) item.segmentsDone.toFloat() / item.totalSegments
-              else if (item.sizeBytes > 0) item.downloadedBytes.toFloat() / item.sizeBytes
-              else 0f
+    // Compute progress — prefer segment-based, fall back to byte-based
+    val pct = downloadProgress(item)
     val animPct by animateFloatAsState(pct.coerceIn(0f, 1f), label = "aq-pct")
     val cardW = d.continueCardWidth + d.spaceLg
 
@@ -915,7 +919,7 @@ private fun SectionLabel(title: String, subtitle: String, modifier: Modifier = M
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Movie Group Card — horizontal layout, standard Netflix/streaming style
+// Movie Group Card
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -950,7 +954,6 @@ fun MovieGroupCard(
         )
 
         Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
-            // Poster
             Box(
                 Modifier
                     .width(d.avatarMd + d.spaceXxs + 2.dp)
@@ -965,10 +968,7 @@ fun MovieGroupCard(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
-                Box(
-                    Modifier.fillMaxSize().background(Color.Black.copy(.35f)),
-                    Alignment.Center,
-                ) {
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(.35f)), Alignment.Center) {
                     Box(
                         Modifier.size(d.iconLg).clip(CircleShape)
                             .background(Color.Black.copy(.55f))
@@ -1007,7 +1007,6 @@ fun MovieGroupCard(
                         modifier   = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(d.spaceXs))
-                    // 3-dot menu button
                     Box(
                         Modifier
                             .size(d.iconLg)
@@ -1079,7 +1078,6 @@ fun MovieGroupCard(
         }
     }
 
-    // 3-dot bottom sheet menu
     if (showMenu) {
         val qualityOptions = if (doneDownloads.size > 1)
             doneDownloads.map { item ->
@@ -1195,7 +1193,7 @@ fun SeriesRootCard(
                 }
 
                 Spacer(Modifier.height(d.spaceXs))
-                Text("${group.doneEpisodes} Episodes", color = White40, fontSize = d.textXs)
+                Text("${group.doneEpisodes} Episodes ready", color = White40, fontSize = d.textXs)
                 Spacer(Modifier.height(d.spaceXxs))
                 Text("${group.seasonCount} Season${if (group.seasonCount > 1) "s" else ""}", color = White40, fontSize = d.textXs)
                 Spacer(Modifier.height(d.spaceXs))
@@ -1205,35 +1203,9 @@ fun SeriesRootCard(
                     Spacer(Modifier.height(d.spaceXs))
                 }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                ) {
-                    Box(
-                        Modifier.size(d.spaceXs + 1.dp).clip(CircleShape).background(
-                            when {
-                                group.isFullyDownloaded -> Success
-                                group.isAnyActive       -> Brand
-                                else                    -> White40
-                            }
-                        )
-                    )
-                    Text(
-                        "${group.doneEpisodes}/${group.totalEpisodes} downloaded",
-                        color    = White40,
-                        fontSize = (d.textXxs.value + 1f).sp,
-                    )
-                }
-
-                Spacer(Modifier.height(d.spaceSm))
-                val pct = if (group.totalEpisodes > 0) group.doneEpisodes.toFloat() / group.totalEpisodes else 0f
-                Box(Modifier.fillMaxWidth(0.9f).height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
-                    Box(
-                        Modifier.fillMaxWidth(pct).fillMaxHeight().background(
-                            if (group.isFullyDownloaded) SolidColor(Success)
-                            else Brush.horizontalGradient(listOf(Brand, Brand2))
-                        )
-                    )
+                if (group.totalSize > 0) {
+                    Text(formatSize(group.totalSize), color = White40, fontSize = d.textXs)
+                    Spacer(Modifier.height(d.spaceXs))
                 }
 
                 Spacer(Modifier.height(d.spaceMd))
@@ -1443,7 +1415,6 @@ fun EpisodeGroupCard(
         }
     }
 
-    // 3-dot bottom sheet menu
     if (showMenu) {
         val qualityOptions = if (doneDownloads.size > 1)
             doneDownloads.map { item ->
@@ -1505,7 +1476,7 @@ fun MultiQualityBadges(qualities: List<String>) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Empty state
+// Empty states
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -1569,6 +1540,33 @@ private fun EmptyDownloadsState() {
     }
 }
 
+/** Shown when active downloads exist but nothing is DONE yet. */
+@Composable
+private fun LibraryPendingState() {
+    val d = LocalDimensions.current
+    Box(Modifier.fillMaxWidth().padding(top = d.spaceXxl), Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(d.spaceSm),
+            modifier = Modifier.padding(horizontal = d.spaceXxl),
+        ) {
+            Text(
+                "Downloading…",
+                color      = Brand,
+                fontSize   = d.textLg,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "Your content will appear here once it finishes downloading.",
+                color     = White40,
+                fontSize  = d.textSm,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                lineHeight = (d.textSm.value * 1.5f).sp,
+            )
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared atoms
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1614,7 +1612,7 @@ fun QualityChip(quality: String) {
 }
 
 @Composable fun QualityBadge(quality: String) = QualityChip(quality)
-@Composable fun StatusBadge(status: com.axio.reelz.data.model.DownloadStatus) = StatusPill(status)
+@Composable fun StatusBadge(status: DownloadStatus) = StatusPill(status)
 
 @Composable
 private fun ReelzDeleteDialog(
@@ -1652,17 +1650,30 @@ private fun ReelzDeleteDialog(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Unified progress fraction [0..1] for a DownloadItem.
+ * Prefers segment-based progress for HLS (most accurate), falls back to
+ * byte-based for MP4, then 0.
+ */
+fun downloadProgress(item: DownloadItem): Float = when {
+    item.totalSegments > 0 ->
+        item.segmentsDone.toFloat() / item.totalSegments
+    item.sizeBytes > 0 ->
+        (item.downloadedBytes.toFloat() / item.sizeBytes).coerceIn(0f, 1f)
+    else -> 0f
+}
+
 private fun playDownload(ctx: Context, dl: DownloadItem) {
     val base = Intent(ctx, PlayerActivity::class.java).apply {
-        putExtra("mediaId",           dl.mediaId)
-        putExtra("mediaType",         dl.mediaType)
-        putExtra("season",            dl.season)
-        putExtra("episode",           dl.episode)
-        putExtra("title",             dl.title)
-        putExtra("posterUrl",         dl.posterUrl)
-        putExtra("downloadId",        dl.id)
-        putExtra("preferredQuality",  dl.quality)
-        putExtra("isOffline",         true)
+        putExtra("mediaId",          dl.mediaId)
+        putExtra("mediaType",        dl.mediaType)
+        putExtra("season",           dl.season)
+        putExtra("episode",          dl.episode)
+        putExtra("title",            dl.title)
+        putExtra("posterUrl",        dl.posterUrl)
+        putExtra("downloadId",       dl.id)
+        putExtra("preferredQuality", dl.quality)
+        putExtra("isOffline",        true)
     }
     when {
         dl.status == DownloadStatus.DONE && dl.filePath.isNotBlank() -> {

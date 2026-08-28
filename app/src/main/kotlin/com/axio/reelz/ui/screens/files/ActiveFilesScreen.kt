@@ -116,18 +116,14 @@ fun ActiveFilesScreen(
             if (downloading.isNotEmpty() || queued.isNotEmpty()) {
                 item {
                     ActiveSectionHeader(
-                        label      = "Downloading",
-                        count      = downloading.size + queued.size,
-                        dotColor   = Brand,
-                        pulsing    = downloading.isNotEmpty(),
+                        label    = "Downloading",
+                        count    = downloading.size + queued.size,
+                        dotColor = Brand,
+                        pulsing  = downloading.isNotEmpty(),
                     )
                 }
                 items(downloading + queued, key = { "dl-${it.id}" }) { item ->
-                    ActiveDownloadCard(
-                        item     = item,
-                        ctx      = ctx,
-                        vm       = vm,
-                    )
+                    ActiveDownloadCard(item = item, ctx = ctx, vm = vm)
                 }
             }
 
@@ -228,11 +224,26 @@ private fun ActiveDownloadCard(
 
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    val pct = if (item.totalSegments > 0) item.segmentsDone.toFloat() / item.totalSegments
-              else if (item.sizeBytes > 0) item.downloadedBytes.toFloat() / item.sizeBytes
-              else 0f
+    // Use the unified downloadProgress helper — works for both HLS and MP4
+    val pct    = downloadProgress(item)
     val animPct by animateFloatAsState(pct.coerceIn(0f, 1f), label = "active-pct-${item.id}")
     val pctInt = (pct * 100).toInt()
+
+    // Human-readable size text
+    val sizeText = when {
+        isQueued -> "Queued"
+        isError  -> "Download failed"
+        item.totalSegments > 0 ->
+            // HLS: show segment count as size proxy until sizeBytes is set
+            if (item.sizeBytes > 0)
+                "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
+            else
+                "${item.segmentsDone} / ${item.totalSegments} segments"
+        item.sizeBytes > 0 ->
+            // MP4 byte-based
+            "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
+        else -> if (isPaused) "Paused" else ""
+    }
 
     Box(
         Modifier
@@ -266,8 +277,7 @@ private fun ActiveDownloadCard(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
-                // Progress overlay on poster corner
-                if (!isError) {
+                if (!isError && pctInt > 0) {
                     Box(
                         Modifier
                             .align(Alignment.BottomEnd)
@@ -284,7 +294,6 @@ private fun ActiveDownloadCard(
             Spacer(Modifier.width(d.spaceMd))
 
             Column(Modifier.weight(1f)) {
-                // Title + quality + X button
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -315,7 +324,6 @@ private fun ActiveDownloadCard(
                             )
                         }
                     }
-                    // Cancel button
                     Box(
                         Modifier
                             .size(d.iconLg)
@@ -342,10 +350,10 @@ private fun ActiveDownloadCard(
                             .fillMaxHeight()
                             .background(
                                 brush = when {
-                                    isError   -> SolidColor(Error)
-                                    isPaused  -> SolidColor(White40)
-                                    isQueued  -> SolidColor(White20)
-                                    else      -> Brush.horizontalGradient(listOf(Brand, Brand2))
+                                    isError  -> SolidColor(Error)
+                                    isPaused -> SolidColor(White40)
+                                    isQueued -> SolidColor(White20)
+                                    else     -> Brush.horizontalGradient(listOf(Brand, Brand2))
                                 }
                             )
                     )
@@ -353,7 +361,6 @@ private fun ActiveDownloadCard(
 
                 Spacer(Modifier.height(d.spaceSm - 1.dp))
 
-                // Stats row + action button
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -367,15 +374,16 @@ private fun ActiveDownloadCard(
                                 fontSize = (d.textXxs.value + 1f).sp,
                                 fontWeight = FontWeight.SemiBold,
                             )
-                        }
-                        if (item.sizeBytes > 0) {
+                        } else if (isPaused) {
                             Text(
-                                when {
-                                    isQueued -> "Queued"
-                                    isError  -> "Download failed"
-                                    isPaused -> "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)} · Paused"
-                                    else     -> "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
-                                },
+                                "$pctInt% · Paused",
+                                color = White40,
+                                fontSize = (d.textXxs.value + 1f).sp,
+                            )
+                        }
+                        if (sizeText.isNotBlank()) {
+                            Text(
+                                sizeText,
                                 color = White40,
                                 fontSize = (d.textXxs.value + 1f).sp,
                             )

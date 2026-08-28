@@ -343,18 +343,78 @@ interface DownloadDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(row: DownloadRow)
 
+    /**
+     * Update in-progress download state.
+     * [sizeBytes] is only written when > 0 to avoid clobbering a previously
+     * stored value with zero (e.g. HLS doesn't know total size mid-download).
+     */
     @Query("""
-        UPDATE downloads SET status = :status, downloadedBytes = :bytes,
-        segmentsDone = :done, totalSegments = :total, localPlaylistPath = :playlist
+        UPDATE downloads
+        SET
+            status            = :status,
+            downloadedBytes   = :bytes,
+            segmentsDone      = :done,
+            totalSegments     = :total,
+            localPlaylistPath = :playlist,
+            sizeBytes         = CASE WHEN :sizeBytes > 0 THEN :sizeBytes ELSE sizeBytes END
         WHERE id = :id
     """)
     suspend fun updateProgress(
-        id: String, status: String, bytes: Long,
-        done: Int = 0, total: Int = 0, playlist: String = "",
+        id: String,
+        status: String,
+        bytes: Long,
+        done: Int = 0,
+        total: Int = 0,
+        playlist: String = "",
+        sizeBytes: Long = 0L,
     )
 
-    @Query("UPDATE downloads SET status = :status, filePath = :path, completedAt = :at WHERE id = :id")
-    suspend fun markDone(id: String, status: String, path: String, at: Long)
+    /** Mark an MP4 download complete — sets real file size, path, timestamps. */
+    @Query("""
+        UPDATE downloads
+        SET
+            status          = :status,
+            filePath        = :path,
+            completedAt     = :at,
+            sizeBytes       = :sizeBytes,
+            downloadedBytes = :sizeBytes
+        WHERE id = :id
+    """)
+    suspend fun markDoneMp4(
+        id: String,
+        status: String,
+        path: String,
+        at: Long,
+        sizeBytes: Long,
+    )
+
+    /**
+     * Mark an HLS download complete.
+     * Stores the local m3u8 in both filePath and localPlaylistPath, writes
+     * real sizeBytes (sum of all .ts files), and syncs segmentsDone = totalSegments.
+     */
+    @Query("""
+        UPDATE downloads
+        SET
+            status            = :status,
+            filePath          = :path,
+            localPlaylistPath = :path,
+            completedAt       = :at,
+            sizeBytes         = :sizeBytes,
+            downloadedBytes   = :sizeBytes,
+            segmentsDone      = :done,
+            totalSegments     = :total
+        WHERE id = :id
+    """)
+    suspend fun markDoneHls(
+        id: String,
+        status: String,
+        path: String,
+        at: Long,
+        sizeBytes: Long,
+        done: Int,
+        total: Int,
+    )
 
     @Query("UPDATE downloads SET status = 'PAUSED' WHERE id = :id")
     suspend fun markPaused(id: String)
