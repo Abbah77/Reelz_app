@@ -44,6 +44,13 @@ data class TransferItem(
     val status:    TransferItemStatus = TransferItemStatus.QUEUED,
     val bytesdone: Long    = 0,
     val speedBps:  Long    = 0,
+    // BUG3 FIX: Rich metadata for Xender-style poster display
+    val title:     String  = "",
+    val posterUrl: String  = "",
+    val mediaType: String  = "",
+    val season:    Int     = 0,
+    val episode:   Int     = 0,
+    val quality:   String  = "",
 )
 
 enum class TransferItemStatus { QUEUED, ACTIVE, DONE, CANCELLED, ERROR }
@@ -86,6 +93,11 @@ class TransferManager @Inject constructor(
 
     // ─────────────────────────────────────────────────────────────────────────
 
+    // BUG3 FIX: Track whether we've already started the receive loop for this session.
+    // Without this guard, re-entering Connected state (e.g. from Transferring → Connected)
+    // would spawn a second receive loop that fights the first one for the same stream.
+    @Volatile private var receiveLoopStarted = false
+
     init {
         scope.launch {
             engine.state.collect { es ->
@@ -93,10 +105,30 @@ class TransferManager @Inject constructor(
                 when (es) {
                     is EngineState.Connected -> {
                         peerName = es.peerName
-                        // Receiver side: start listening for incoming files automatically
-                        if (!es.isHost) startReceiveLoop()
+                        // BUG3 FIX: BOTH sides must start a receive loop simultaneously.
+                        //
+                        // Previous code only started the receive loop for !isHost (receiver).
+                        // But the protocol is bidirectional — both the sender AND the receiver
+                        // can enqueue files to send. "isHost" only means "who created the
+                        // ServerSocket / hotspot" — it has nothing to do with who can receive.
+                        //
+                        // Xender's design: once connected, both devices are peers and can
+                        // both send and receive. Each device starts its own receive loop
+                        // listening on the shared socket stream.
+                        //
+                        // The P2pEngine single-stream protocol handles this: the sender writes
+                        // FILE frames and the receiver reads them. When a device has nothing
+                        // more to send it writes DONE. The receive loop runs until it sees DONE
+                        // or the socket closes.
+                        if (!receiveLoopStarted) {
+                            receiveLoopStarted = true
+                            startReceiveLoop()
+                        }
                     }
                     is EngineState.Error, EngineState.Idle -> {
+                        receiveLoopStarted = false
+                        sendJob?.cancel()
+                        sendJob = null
                         // Discard any half-done receive items
                         _receiveQueue.value = _receiveQueue.value.map {
                             if (it.status == TransferItemStatus.ACTIVE)
@@ -203,6 +235,7 @@ class TransferManager @Inject constructor(
     fun disconnect() {
         sendJob?.cancel()
         sendJob = null
+        receiveLoopStarted  = false
         _sendQueue.value    = emptyList()
         _receiveQueue.value = emptyList()
         engine.disconnect()
@@ -228,9 +261,19 @@ class TransferManager @Inject constructor(
                 // Send and await completion
                 val done = CompletableDeferred<Boolean>()
 
+                // BUG3 FIX: build and pass metadata so receiver shows rich poster UI
+                val meta = P2pEngine.FileMetadata(
+                    title     = next.title,
+                    posterUrl = next.posterUrl,
+                    mediaType = next.mediaType,
+                    season    = next.season,
+                    episode   = next.episode,
+                    quality   = next.quality,
+                )
                 engine.sendFile(
                     filePath = next.filePath,
                     fileName = next.fileName,
+                    meta     = meta,
                     onProgress = { sent, total, bps ->
                         updateSendItem(next.id) { it.copy(bytesdone = sent, speedBps = bps) }
                     },
@@ -273,10 +316,20 @@ class TransferManager @Inject constructor(
 
         engine.receiveFiles(
             saveDir = saveDir,
-            onFileStart = { fileName, total ->
-                // Check if this was pre-cancelled (queued cancel)
-                // For simplicity: add as ACTIVE; user can cancel from panel
-                val item = TransferItem(fileName = fileName, sizeBytes = total, status = TransferItemStatus.ACTIVE)
+            // BUG3 FIX: onFileStart now receives the FileMetadata so the UI can show
+            // the movie poster immediately before any bytes have been received.
+            onFileStart = { fileName, total, meta ->
+                val item = TransferItem(
+                    fileName  = fileName,
+                    sizeBytes = total,
+                    status    = TransferItemStatus.ACTIVE,
+                    title     = meta.title.ifBlank { fileName },
+                    posterUrl = meta.posterUrl,
+                    mediaType = meta.mediaType,
+                    season    = meta.season,
+                    episode   = meta.episode,
+                    quality   = meta.quality,
+                )
                 _receiveQueue.value = _receiveQueue.value + item
             },
             onProgress = { received, total, bps, fileName ->
@@ -286,7 +339,8 @@ class TransferManager @Inject constructor(
                     else item
                 }
             },
-            onFileDone = { file ->
+            // BUG3 FIX: onFileDone also receives metadata for history recording
+            onFileDone = { file, meta ->
                 _receiveQueue.value = _receiveQueue.value.map { item ->
                     if (item.fileName == file.name && item.status == TransferItemStatus.ACTIVE)
                         item.copy(status = TransferItemStatus.DONE)

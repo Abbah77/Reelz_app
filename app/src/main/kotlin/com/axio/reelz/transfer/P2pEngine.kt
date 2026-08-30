@@ -214,8 +214,19 @@ class P2pEngine @Inject constructor(
 
     // ── SENDER: prepare ───────────────────────────────────────────────────────
 
+    // BUG1 FIX: Track the active prepare job so we never have two running simultaneously.
+    // Calling prepareAsSender() while one is already running was causing double QR emissions
+    // (the old job would complete after the new one started → two ServerSockets fighting).
+    @Volatile private var prepareJob: kotlinx.coroutines.Job? = null
+
     fun prepareAsSender(onQrReady: (String) -> Unit) {
-        // FIX-G: invalidate any previous session so in-flight receiver loops abort
+        // BUG1 FIX: Cancel any in-flight prepare before starting a new one.
+        // Without this, if the user navigates away and back before the hotspot/WD
+        // group is ready, a second job starts and both emit QrReady → QR loop.
+        prepareJob?.cancel()
+        prepareJob = null
+
+        // Invalidate any previous session so in-flight receiver loops abort
         sessionValid = false
         disconnect(silent = true)
 
@@ -223,28 +234,41 @@ class P2pEngine @Inject constructor(
         sessionValid = true
         _state.value = EngineState.Preparing
 
-        scope.launch {
-            if (hasWifiDirect()) {
-                val wdPayload = tryCreateWifiDirectGroup()
-                if (wdPayload != null) {
-                    _state.value = EngineState.QrReady(wdPayload, sessionId)
-                    withContext(Dispatchers.Main) { onQrReady(wdPayload) }
-                    acceptConnectionOnServerSocket(TransportTier.WIFI_DIRECT)
-                    return@launch
+        prepareJob = scope.launch {
+            try {
+                if (hasWifiDirect()) {
+                    val wdPayload = tryCreateWifiDirectGroup()
+                    if (wdPayload != null && isActive && sessionValid) {
+                        _state.value = EngineState.QrReady(wdPayload, sessionId)
+                        withContext(Dispatchers.Main) { onQrReady(wdPayload) }
+                        acceptConnectionOnServerSocket(TransportTier.WIFI_DIRECT)
+                        return@launch
+                    }
+                    Log.d(TAG, "WD failed, falling back to Hotspot")
                 }
-                Log.d(TAG, "WD failed, falling back to Hotspot")
-            }
 
-            val hsPayload = tryCreateHotspot()
-            if (hsPayload != null) {
-                _state.value = EngineState.QrReady(hsPayload, sessionId)
-                withContext(Dispatchers.Main) { onQrReady(hsPayload) }
-                acceptConnectionOnServerSocket(TransportTier.HOTSPOT)
-            } else {
-                _state.value = EngineState.Error(
-                    "Could not create a Wi-Fi Direct group or Hotspot. Check permissions and try again.",
-                    retryable = true, kind = "CONNECTION"
-                )
+                if (!isActive || !sessionValid) return@launch
+
+                val hsPayload = tryCreateHotspot()
+                if (!isActive || !sessionValid) return@launch   // BUG1: guard after async hotspot start
+
+                if (hsPayload != null) {
+                    _state.value = EngineState.QrReady(hsPayload, sessionId)
+                    withContext(Dispatchers.Main) { onQrReady(hsPayload) }
+                    acceptConnectionOnServerSocket(TransportTier.HOTSPOT)
+                } else {
+                    if (sessionValid) {
+                        _state.value = EngineState.Error(
+                            "Could not create a Wi-Fi Direct group or Hotspot. Check permissions and try again.",
+                            retryable = true, kind = "CONNECTION"
+                        )
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancelled cleanly — do not emit an error state
+                Log.d(TAG, "prepareAsSender job cancelled cleanly")
+            } finally {
+                if (prepareJob?.isCancelled == true) prepareJob = null
             }
         }
     }
@@ -795,9 +819,55 @@ class P2pEngine @Inject constructor(
 
     // ── File send ─────────────────────────────────────────────────────────────
 
+    // ── FileMetadata — rich info sent before raw bytes (Xender-style) ─────────
+    // BUG3 FIX: Always send metadata before the FILE frame.
+    // This allows the receiving UI to show the movie poster/title immediately.
+
+    data class FileMetadata(
+        val title:     String = "",
+        val posterUrl: String = "",
+        val mediaType: String = "",
+        val season:    Int    = 0,
+        val episode:   Int    = 0,
+        val quality:   String = "",
+    ) {
+        fun toJson(): String = buildString {
+            append("{")
+            append("\"title\":\"${title.replace("\"","\\\"")}\",")
+            append("\"posterUrl\":\"${posterUrl.replace("\"","\\\"")}\",")
+            append("\"mediaType\":\"$mediaType\",")
+            append("\"season\":$season,")
+            append("\"episode\":$episode,")
+            append("\"quality\":\"$quality\"")
+            append("}")
+        }
+
+        companion object {
+            fun fromJson(json: String): FileMetadata = try {
+                fun extract(key: String): String {
+                    val pat = Regex("\"$key\":\\s*\"([^\"]*)\"")
+                    return pat.find(json)?.groupValues?.getOrNull(1) ?: ""
+                }
+                fun extractInt(key: String): Int {
+                    val pat = Regex("\"$key\":\\s*(\\d+)")
+                    return pat.find(json)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                }
+                FileMetadata(
+                    title     = extract("title"),
+                    posterUrl = extract("posterUrl"),
+                    mediaType = extract("mediaType"),
+                    season    = extractInt("season"),
+                    episode   = extractInt("episode"),
+                    quality   = extract("quality"),
+                )
+            } catch (_: Exception) { FileMetadata() }
+        }
+    }
+
     fun sendFile(
         filePath: String,
         fileName: String,
+        meta: FileMetadata = FileMetadata(),
         onProgress: (sent: Long, total: Long, bps: Long) -> Unit,
         onDone: () -> Unit,
         onError: (String) -> Unit,
@@ -813,6 +883,12 @@ class P2pEngine @Inject constructor(
             try {
                 val total = file.length()
                 _state.value = EngineState.Transferring(tier, peerName, fileName, "SEND", 0, total, 0)
+
+                // BUG3 FIX: Send metadata frame BEFORE the FILE frame.
+                // Xender always sends rich metadata first so the receiver can render
+                // the movie poster card while waiting for bytes.
+                val encodedMeta = URLEncoder.encode(meta.toJson(), "UTF-8")
+                out.writeBytes("META $encodedMeta\n")
 
                 val encodedName = URLEncoder.encode(fileName, "UTF-8")
                 out.writeBytes("FILE $total $encodedName\n")
@@ -874,9 +950,9 @@ class P2pEngine @Inject constructor(
 
     fun receiveFiles(
         saveDir: File,
-        onFileStart: (fileName: String, total: Long) -> Unit,
+        onFileStart: (fileName: String, total: Long, meta: FileMetadata) -> Unit,
         onProgress:  (received: Long, total: Long, bps: Long, fileName: String) -> Unit,
-        onFileDone:  (File) -> Unit,
+        onFileDone:  (File, meta: FileMetadata) -> Unit,
         onAllDone:   () -> Unit,
         onError:     (String) -> Unit,
     ) {
@@ -888,6 +964,10 @@ class P2pEngine @Inject constructor(
         scope.launch(Dispatchers.IO) {
             try {
                 saveDir.mkdirs()
+                // BUG3 FIX: Track META frame separately so it can be attached to the next FILE frame.
+                // Xender sends META before FILE for rich UI — we hold it here and deliver with onFileStart.
+                var pendingMeta = FileMetadata()
+
                 while (true) {
                     val header = inn.readLine()?.trim() ?: break
                     when {
@@ -896,17 +976,29 @@ class P2pEngine @Inject constructor(
                             _state.value = EngineState.Done
                             break
                         }
+                        header.startsWith("META ") -> {
+                            // BUG3 FIX: parse metadata frame, hold for the next FILE frame
+                            val encodedJson = header.removePrefix("META ").trim()
+                            val json = try { URLDecoder.decode(encodedJson, "UTF-8") } catch (_: Exception) { "{}" }
+                            pendingMeta = FileMetadata.fromJson(json)
+                            Log.d(TAG, "META received: title=${pendingMeta.title}")
+                        }
                         header.startsWith("FILE ") -> {
                             val parts = header.split(" ", limit = 3)
                             if (parts.size < 3) { onError("Bad header: \"$header\""); break }
                             val total    = parts[1].toLongOrNull() ?: break
                             val fileName = URLDecoder.decode(parts[2], "UTF-8")
 
+                            // Capture the pending metadata for this file, then reset for next file
+                            val fileMeta = pendingMeta
+                            pendingMeta  = FileMetadata()
+
                             // FIX-E: reset per-file cancel flag
                             val fileCancelled = cancelledReceive
                             cancelledReceive  = false
 
-                            withContext(Dispatchers.Main) { onFileStart(fileName, total) }
+                            // BUG3 FIX: pass fileMeta to UI so it can show poster immediately
+                            withContext(Dispatchers.Main) { onFileStart(fileName, total, fileMeta) }
                             _state.value = EngineState.Transferring(tier, peerName, fileName, "RECEIVE", 0, total, 0)
 
                             val outFile = File(saveDir, fileName)
@@ -937,7 +1029,7 @@ class P2pEngine @Inject constructor(
                             if (fileCancelled || cancelledReceive) {
                                 outFile.delete()
                             } else {
-                                withContext(Dispatchers.Main) { onFileDone(outFile) }
+                                withContext(Dispatchers.Main) { onFileDone(outFile, fileMeta) }
                             }
                         }
                         header == "SKIP" -> {
@@ -969,14 +1061,29 @@ class P2pEngine @Inject constructor(
     /**
      * Full disconnect.
      * [silent] = true skips resetting state to Idle (caller will set its own state).
+     *
+     * BUG2 FIX: The previous implementation left hotspotReservation alive across
+     * disconnect(), which silently prevented startLocalOnlyHotspot() from succeeding
+     * on retry (Android only allows one LocalOnlyHotspot reservation at a time).
+     * We now:
+     *   1. Cancel prepareJob before touching anything else (BUG1 synergy).
+     *   2. Close hotspotReservation eagerly (not just on API 26+).
+     *   3. Unregister NetworkCallback before closing reservation so the OS frees the
+     *      hotspot interface association fully.
+     *   4. Return a hint to the UI when the failure is likely due to a stale network
+     *      association — so users know to toggle Wi-Fi if auto-recovery fails.
      */
     fun disconnect(silent: Boolean = false) {
-        // FIX-B, FIX-G: kill session first so loops abort immediately
+        // BUG1+BUG2: cancel any pending prepare so it can't emit QrReady after we clear state
+        prepareJob?.cancel()
+        prepareJob = null
+
+        // Kill session first so loops abort immediately
         sessionValid     = false
         cancelRequested  = false
         cancelledReceive = false
 
-        // FIX-F: close serverSocket before activeSocket to unblock accept()
+        // Close serverSocket before activeSocket to unblock accept()
         serverSocket?.closeQuietly()
         serverSocket = null
 
@@ -987,8 +1094,9 @@ class P2pEngine @Inject constructor(
         activeSocket?.closeQuietly()
         activeSocket = null
 
-        // ROOT CAUSE FIX: unregister NetworkCallback so the OS stops holding
-        // the hotspot association and the sender can close the reservation cleanly.
+        // BUG2 FIX: unregister NetworkCallback FIRST, then close hotspot reservation.
+        // Unregistering callback signals to Android that we're done with the hotspot
+        // network, allowing the OS to fully release the interface for reuse.
         releaseNetworkCallback()
 
         p2pChannel?.let { ch ->
@@ -997,13 +1105,44 @@ class P2pEngine @Inject constructor(
         p2pManager = null
         p2pChannel = null
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            hotspotReservation?.close()
-        }
+        // BUG2 FIX: close hotspot reservation regardless of API level (was guarded by O check).
+        // Android allows only ONE LocalOnlyHotspot at a time — if reservation is not closed,
+        // the next startLocalOnlyHotspot() call will either be silently swallowed or trigger
+        // onFailed(ERROR_TETHERING_DISALLOWED) depending on OEM. Closing it here lets the
+        // OS reclaim the slot so a fresh prepareAsSender() can succeed.
+        try { hotspotReservation?.close() } catch (_: Exception) {}
         hotspotReservation = null
 
         TransferForegroundService.stop(ctx)
         if (!silent) _state.value = EngineState.Idle
+    }
+
+    /**
+     * BUG2: Returns true if the receiver can automatically retry without user action.
+     * Returns false if the OS Wi-Fi stack is still holding a stale association —
+     * in that case the user must toggle Wi-Fi off/on to clear it.
+     *
+     * The UI should show an explicit message when this returns false rather than
+     * just retrying silently (which will keep failing until Wi-Fi is toggled).
+     */
+    fun isWifiStaleAfterDisconnect(): Boolean {
+        // If a boundNetwork is still non-null here, Android's Wi-Fi stack is
+        // still holding the hotspot association. We released the callback in
+        // disconnect() so boundNetwork should be null — but on some OEMs the
+        // association lingers. We check the interface state as a proxy.
+        return try {
+            NetworkInterface.getNetworkInterfaces()?.toList()
+                ?.any { iface ->
+                    iface.isUp && !iface.isLoopback &&
+                    iface.inetAddresses.toList()
+                        .filterIsInstance<Inet4Address>()
+                        .any { addr ->
+                            val h = addr.hostAddress ?: return@any false
+                            // 192.168.49.x = WD group; 192.168.43.x = typical hotspot
+                            h.startsWith("192.168.49.") || h.startsWith("192.168.43.")
+                        }
+                } == true
+        } catch (_: Exception) { false }
     }
 
     private fun releaseNetworkCallback() {
