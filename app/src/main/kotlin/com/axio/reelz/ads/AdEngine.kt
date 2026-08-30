@@ -14,7 +14,6 @@ import com.applovin.mediation.ads.MaxRewardedAd
 import com.applovin.mediation.nativeAds.MaxNativeAd
 import com.applovin.mediation.nativeAds.MaxNativeAdLoader
 import com.applovin.mediation.nativeAds.MaxNativeAdView
-import com.applovin.mediation.nativeAds.MaxNativeAdViewBinder
 import com.applovin.sdk.AppLovinSdk
 import com.applovin.sdk.AppLovinSdkConfiguration
 import com.applovin.sdk.AppLovinSdkSettings
@@ -32,7 +31,7 @@ import javax.inject.Singleton
 private const val TAG = "AdEngine"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Native ad state (shared sealed class for both BrowseScreen and ShortsScreen)
+// Native ad state — shared across all native placements
 // ─────────────────────────────────────────────────────────────────────────────
 
 sealed class NativeAdState {
@@ -50,10 +49,19 @@ sealed class NativeAdState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AdEngine — every ID, toggle and frequency value is read live from
-// RemoteConfigRepository. Nothing about ad networks or ad unit IDs is
-// hard-coded; the config has full authority, including the master on/off
-// switch (ads.enabled) and per-placement toggles (ads.placements.*).
+// Mid-roll schedule for video player
+// ─────────────────────────────────────────────────────────────────────────────
+
+data class MidRollSchedule(
+    val shouldInsert: Boolean,
+    val breakpointsMs: List<Long>,
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AdEngine — single source of truth for every ad format.
+//
+// Config authority: RemoteConfigRepository. No hard-coded IDs or thresholds.
+// Premium gate: adsEnabled() checks master switch + per-user premium status.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Singleton
@@ -65,44 +73,36 @@ class AdEngine @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // ── Session state (reset on cold start — intentional) ────────────────────
-    var interstitialShownCount: Int  = 0
+    // ── Session-level counters ───────────────────────────────────────────────
+    var interstitialShownCount: Int = 0
     private var appOpenShownThisSession = false
+    private var backgroundedAtMs: Long  = 0L
 
-    // ── Persistent counters (survive cold starts via AppPreferencesStore) ─────
-    // lastInterstitialTimeMs and totalContentOpens are loaded from DataStore on
-    // first access and written back on each change, so frequency caps are
-    // honoured across app restarts and process deaths.
+    // ── Persistent counters (survive cold starts) ────────────────────────────
     private var _lastInterstitialTimeMs: Long = 0L
     private var _totalContentOpens: Int       = 0
     private var _totalPlayTaps: Int           = 0
-    private var countersLoaded = false
 
     val lastInterstitialTimeMs: Long get() = _lastInterstitialTimeMs
     val totalContentOpens: Int        get() = _totalContentOpens
     val totalPlayTaps: Int            get() = _totalPlayTaps
 
-    /** Call once from Application.onCreate() to warm up persisted counters. */
     fun loadPersistedCounters() {
         scope.launch(Dispatchers.IO) {
             _lastInterstitialTimeMs = appPrefs.getLastInterstitialTimeMs()
             _totalContentOpens      = appPrefs.getTotalContentOpens()
             _totalPlayTaps          = appPrefs.getTotalPlayTaps()
-            countersLoaded          = true
         }
     }
 
-    // ── Preloaded ad objects ──────────────────────────────────────────────────
+    // ── Preloaded ad objects ─────────────────────────────────────────────────
     private var loadedInterstitial: MaxInterstitialAd? = null
     private var loadedRewarded:     MaxRewardedAd?     = null
     private var loadedAppOpen:      MaxAppOpenAd?      = null
 
-    var isInterstitialReady: Boolean = false
-        private set
-    var isRewardedReady: Boolean = false
-        private set
-    var isAppOpenReady: Boolean = false
-        private set
+    var isInterstitialReady: Boolean = false; private set
+    var isRewardedReady: Boolean     = false; private set
+    var isAppOpenReady: Boolean      = false; private set
 
     private lateinit var appContext: Context
 
@@ -110,69 +110,41 @@ class AdEngine @Inject constructor(
     // Config helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun adsConfig() = configRepo.adsConfig()
     private fun ads() = configRepo.adsConfig()
 
-    /**
-     * True only when the remote config master switch, the feature flag, AND the
-     * current user is not premium all agree ads should show. This is the single
-     * chokepoint every ad format (banner, interstitial, native, rewarded, app
-     * open, pre-roll) already calls through — see the functions below — so
-     * premium stopping ads is a one-line change, exactly as designed.
-     */
-    private fun adsEnabled(): Boolean = configRepo.areAdsEnabled(isPremiumUser = sessionRepo.isPremium)
+    /** Single master gate — every placement calls this. */
+    fun adsEnabled(): Boolean = configRepo.areAdsEnabled(isPremiumUser = sessionRepo.isPremium)
 
-    /**
-     * Public read for UI surfaces (feed banners, etc.) that want to offer an
-     * "upgrade to remove ads" nudge. Deliberately reuses the same [adsEnabled]
-     * chokepoint as every actual ad placement, so the banner can never appear
-     * for a user who isn't even seeing ads (already premium, or ads globally
-     * disabled in config) — it would be a confusing, pointless upsell otherwise.
-     */
     fun shouldShowRemoveAdsBanner(): Boolean = adsEnabled()
 
-    private fun interstitialAdUnitId(): String = ads().interstitialId.orEmpty()
-    private fun rewardedAdUnitId(): String     = ads().rewardedId.orEmpty()
-    private fun appOpenAdUnitId(): String      = ads().let { "" }.orEmpty()
-    private fun bannerAdUnitId(): String       = ads().bannerId.orEmpty()
-    private fun nativeAdUnitId(): String       = ads().nativeId.orEmpty()
+    private fun bannerAdUnitId()       = ads().bannerId.orEmpty()
+    private fun nativeAdUnitId()       = ads().nativeId.orEmpty()
+    private fun interstitialAdUnitId() = ads().interstitialId.orEmpty()
+    private fun rewardedAdUnitId()     = ads().rewardedId.orEmpty()
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Init
+    // Initialisation
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Initializes the mediation SDK and preloads ad formats.
-     * No-ops entirely if [adsEnabled] is false or no SDK key is configured yet —
-     * safe to call even before the mediation SDK key has been set.
-     */
     fun initialize(context: Context) {
         appContext = context.applicationContext
+        if (!adsEnabled()) { Log.d(TAG, "Ads disabled — skip init"); return }
 
-        if (!adsEnabled()) {
-            Log.d(TAG, "Ads disabled via remote config — skipping SDK init")
-            return
-        }
-
-        val sdkKey = adsConfig().applovinSdkKey
-        if (sdkKey.isBlank()) {
-            Log.d(TAG, "No mediation SDK key configured yet — skipping SDK init")
-            return
-        }
+        val sdkKey = ads().applovinSdkKey
+        if (sdkKey.isBlank()) { Log.d(TAG, "No SDK key — skip init"); return }
 
         val sdk = AppLovinSdk.getInstance(sdkKey, AppLovinSdkSettings(appContext), appContext)
-        sdk.mediationProvider = adsConfig().mediationProvider.ifBlank { "max" }
+        sdk.mediationProvider = ads().mediationProvider.ifBlank { "max" }
         sdk.initializeSdk { _: AppLovinSdkConfiguration ->
-            Log.d(TAG, "Mediation SDK initialized")
+            Log.d(TAG, "SDK ready")
             preloadAll()
         }
     }
 
     private fun preloadAll() {
-        val placements = adsConfig().placements
-        if (placements.interstitialEnabled) preloadInterstitial()
-        // preloadRewarded() is called from setActivity() once an Activity is available
-        if (placements.appOpenEnabled) preloadAppOpen()
+        val p = ads().placements
+        if (p.interstitialEnabled) preloadInterstitial()
+        if (p.appOpenEnabled)      preloadAppOpen()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -180,97 +152,113 @@ class AdEngine @Inject constructor(
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun preloadInterstitial() {
-        if (!adsEnabled() || !adsConfig().placements.interstitialEnabled) return
-        val unitId = interstitialAdUnitId()
-        if (unitId.isBlank()) return
+        if (!adsEnabled() || !ads().placements.interstitialEnabled) return
+        val id = interstitialAdUnitId(); if (id.isBlank()) return
 
-        val ad = MaxInterstitialAd(unitId, appContext)
+        val ad = MaxInterstitialAd(id, appContext)
         ad.setListener(object : MaxAdListener {
-            override fun onAdLoaded(a: MaxAd) {
-                loadedInterstitial = ad
-                isInterstitialReady = true
-                Log.d(TAG, "Interstitial ready")
-            }
+            override fun onAdLoaded(a: MaxAd)  { loadedInterstitial = ad; isInterstitialReady = true }
             override fun onAdLoadFailed(id: String, err: MaxError) {
                 isInterstitialReady = false
-                Log.w(TAG, "Interstitial failed: ${err.message}, retrying")
-                scope.launch { delay(adsConfig().interstitialFrequency.retryDelayMs); preloadInterstitial() }
+                scope.launch { delay(ads().frequency.retryDelayMs); preloadInterstitial() }
             }
-            override fun onAdDisplayed(a: MaxAd)       {}
-            override fun onAdHidden(a: MaxAd)           { preloadInterstitial() }
-            override fun onAdClicked(a: MaxAd)          {}
-            override fun onAdDisplayFailed(a: MaxAd, e: MaxError) {}
+            override fun onAdDisplayed(a: MaxAd)                  {}
+            override fun onAdHidden(a: MaxAd)                      { preloadInterstitial() }
+            override fun onAdClicked(a: MaxAd)                     {}
+            override fun onAdDisplayFailed(a: MaxAd, e: MaxError)  {}
         })
         ad.loadAd()
     }
 
     private var cachedActivity: Activity? = null
-
     fun setActivity(activity: Activity) {
         cachedActivity = activity
         if (!isRewardedReady && loadedRewarded == null) preloadRewarded()
     }
 
     private fun preloadRewarded() {
-        if (!adsEnabled() || !adsConfig().placements.rewardedEnabled) return
-        val unitId = rewardedAdUnitId()
-        if (unitId.isBlank()) return
-
+        if (!adsEnabled() || !ads().placements.rewardedEnabled) return
+        val id = rewardedAdUnitId(); if (id.isBlank()) return
         val activity = cachedActivity ?: return
-        val ad = MaxRewardedAd.getInstance(unitId, activity)
+
+        val ad = MaxRewardedAd.getInstance(id, activity)
         ad.setListener(object : MaxRewardedAdListener {
-            override fun onAdLoaded(a: MaxAd) {
-                loadedRewarded = ad
-                isRewardedReady = true
-                Log.d(TAG, "Rewarded ready")
-            }
+            override fun onAdLoaded(a: MaxAd) { loadedRewarded = ad; isRewardedReady = true }
             override fun onAdLoadFailed(id: String, err: MaxError) {
                 isRewardedReady = false
-                scope.launch { delay(adsConfig().interstitialFrequency.retryDelayMs); preloadRewarded() }
+                scope.launch { delay(ads().frequency.retryDelayMs); preloadRewarded() }
             }
-            override fun onAdDisplayed(a: MaxAd)       {}
-            override fun onAdHidden(a: MaxAd)           { preloadRewarded() }
-            override fun onAdClicked(a: MaxAd)          {}
-            override fun onAdDisplayFailed(a: MaxAd, e: MaxError) {}
-            override fun onUserRewarded(a: MaxAd, r: MaxReward)   {}
-            override fun onRewardedVideoStarted(a: MaxAd)         {}
-            override fun onRewardedVideoCompleted(a: MaxAd)       {}
+            override fun onAdDisplayed(a: MaxAd)                    {}
+            override fun onAdHidden(a: MaxAd)                        { preloadRewarded() }
+            override fun onAdClicked(a: MaxAd)                       {}
+            override fun onAdDisplayFailed(a: MaxAd, e: MaxError)    {}
+            override fun onUserRewarded(a: MaxAd, r: MaxReward)      {}
+            override fun onRewardedVideoStarted(a: MaxAd)            {}
+            override fun onRewardedVideoCompleted(a: MaxAd)          {}
         })
         ad.loadAd()
     }
 
     private fun preloadAppOpen() {
-        if (!adsEnabled() || !adsConfig().placements.appOpenEnabled) return
-        val unitId = appOpenAdUnitId()
-        if (unitId.isBlank()) return
+        if (!adsEnabled() || !ads().placements.appOpenEnabled) return
+        val id = ads().appOpenId; if (id.isBlank()) return
 
-        val ad = MaxAppOpenAd(unitId, appContext)
+        val ad = MaxAppOpenAd(id, appContext)
         ad.setListener(object : MaxAdListener {
-            override fun onAdLoaded(a: MaxAd) {
-                loadedAppOpen = ad
-                isAppOpenReady = true
-                Log.d(TAG, "App open ready")
-            }
+            override fun onAdLoaded(a: MaxAd)  { loadedAppOpen = ad; isAppOpenReady = true }
             override fun onAdLoadFailed(id: String, err: MaxError) {
                 isAppOpenReady = false
-                scope.launch { delay(adsConfig().interstitialFrequency.retryDelayMs); preloadAppOpen() }
+                scope.launch { delay(ads().frequency.retryDelayMs); preloadAppOpen() }
             }
             override fun onAdDisplayed(a: MaxAd)                    {}
-            override fun onAdHidden(a: MaxAd)                       { isAppOpenReady = false; preloadAppOpen() }
-            override fun onAdClicked(a: MaxAd)                      {}
-            override fun onAdDisplayFailed(a: MaxAd, e: MaxError)   {}
+            override fun onAdHidden(a: MaxAd)                        { isAppOpenReady = false; preloadAppOpen() }
+            override fun onAdClicked(a: MaxAd)                       {}
+            override fun onAdDisplayFailed(a: MaxAd, e: MaxError)    {}
         })
         ad.loadAd()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Frequency cap gate — every threshold comes from remote config
+    // App open — fires on resume after ≥ 15 min in background
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fun onAppBackground() { backgroundedAtMs = System.currentTimeMillis() }
+
+    fun onAppForeground(activity: Activity) {
+        if (!adsEnabled() || !ads().placements.appOpenEnabled) return
+        val elapsed = System.currentTimeMillis() - backgroundedAtMs
+        if (elapsed >= 15 * 60_000L && isAppOpenReady) showAppOpen(activity)
+    }
+
+    fun showAppOpenIfReady(activity: Activity) {
+        if (!adsEnabled() || !ads().placements.appOpenEnabled) return
+        if (appOpenShownThisSession) return
+        showAppOpen(activity)
+    }
+
+    private fun showAppOpen(activity: Activity) {
+        val ad = loadedAppOpen ?: return
+        if (!isAppOpenReady) return
+        appOpenShownThisSession = true; isAppOpenReady = false
+        ad.setListener(object : MaxAdListener {
+            override fun onAdLoaded(a: MaxAd)                    {}
+            override fun onAdLoadFailed(id: String, e: MaxError) {}
+            override fun onAdDisplayed(a: MaxAd)                 {}
+            override fun onAdHidden(a: MaxAd)                    { preloadAppOpen() }
+            override fun onAdClicked(a: MaxAd)                   {}
+            override fun onAdDisplayFailed(a: MaxAd, e: MaxError){ preloadAppOpen() }
+        })
+        ad.showAd()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Interstitial (Guest — psychological + mathematical timing)
     // ─────────────────────────────────────────────────────────────────────────
 
     fun shouldShowInterstitial(): Boolean {
-        if (!adsEnabled() || !adsConfig().placements.interstitialEnabled) return false
-        val freq = adsConfig().interstitialFrequency
-        val now = System.currentTimeMillis()
+        if (!adsEnabled() || !ads().placements.interstitialEnabled) return false
+        val freq = ads().frequency
+        val now  = System.currentTimeMillis()
         return isInterstitialReady
             && _totalContentOpens >= freq.contentOpensBeforeFirst
             && _totalPlayTaps % freq.everyNPlays == 0
@@ -279,203 +267,127 @@ class AdEngine @Inject constructor(
             && interstitialShownCount < freq.maxPerSession
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Show functions — ALWAYS call onDismissed/onFailed so user is never blocked
-    // ─────────────────────────────────────────────────────────────────────────
-
-    fun showInterstitial(
-        activity: Activity,
-        onDismissed: () -> Unit,
-        onFailed: () -> Unit,
-    ) {
+    fun showInterstitial(activity: Activity, onDismissed: () -> Unit, onFailed: () -> Unit) {
         val ad = loadedInterstitial
-        if (ad == null || !isInterstitialReady || !adsEnabled() || !adsConfig().placements.interstitialEnabled) {
+        if (ad == null || !isInterstitialReady || !adsEnabled() || !ads().placements.interstitialEnabled) {
             onFailed(); return
         }
-
         isInterstitialReady = false
-        recordInterstitialShown()   // persists lastInterstitialTimeMs to DataStore
-
+        recordInterstitialShown()
         ad.setListener(object : MaxAdListener {
-            override fun onAdLoaded(a: MaxAd)   {}
-            override fun onAdLoadFailed(id: String, err: MaxError) { onFailed() }
-            override fun onAdDisplayed(a: MaxAd) {}
-            override fun onAdHidden(a: MaxAd)    { onDismissed(); preloadInterstitial() }
-            override fun onAdClicked(a: MaxAd)   {}
-            override fun onAdDisplayFailed(a: MaxAd, e: MaxError) { onFailed(); preloadInterstitial() }
+            override fun onAdLoaded(a: MaxAd)                    {}
+            override fun onAdLoadFailed(id: String, e: MaxError) { onFailed() }
+            override fun onAdDisplayed(a: MaxAd)                 {}
+            override fun onAdHidden(a: MaxAd)                    { onDismissed(); preloadInterstitial() }
+            override fun onAdClicked(a: MaxAd)                   {}
+            override fun onAdDisplayFailed(a: MaxAd, e: MaxError){ onFailed(); preloadInterstitial() }
         })
         ad.showAd(activity)
     }
 
-    fun showRewarded(
-        activity: Activity,
-        onRewarded: () -> Unit,
-        onSkipped: () -> Unit,
-    ) {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Rewarded (Download gating)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fun showRewarded(activity: Activity, onRewarded: () -> Unit, onSkipped: () -> Unit) {
         val ad = loadedRewarded
-        if (ad == null || !isRewardedReady || !adsEnabled() || !adsConfig().placements.rewardedEnabled) {
+        if (ad == null || !isRewardedReady || !adsEnabled() || !ads().placements.rewardedEnabled) {
             onSkipped(); return
         }
-
-        var userEarnedReward = false
-        isRewardedReady = false
-
+        var earned = false; isRewardedReady = false
         ad.setListener(object : MaxRewardedAdListener {
-            override fun onAdLoaded(a: MaxAd)   {}
-            override fun onAdLoadFailed(id: String, err: MaxError) { onSkipped() }
-            override fun onAdDisplayed(a: MaxAd) {}
-            override fun onAdHidden(a: MaxAd)    {
-                if (userEarnedReward) onRewarded() else onSkipped()
-                preloadRewarded()
-            }
-            override fun onAdClicked(a: MaxAd)          {}
-            override fun onAdDisplayFailed(a: MaxAd, e: MaxError) { onSkipped(); preloadRewarded() }
-            override fun onUserRewarded(a: MaxAd, r: MaxReward)   { userEarnedReward = true }
-            override fun onRewardedVideoStarted(a: MaxAd)         {}
-            override fun onRewardedVideoCompleted(a: MaxAd)       {}
+            override fun onAdLoaded(a: MaxAd)                    {}
+            override fun onAdLoadFailed(id: String, e: MaxError) { onSkipped() }
+            override fun onAdDisplayed(a: MaxAd)                 {}
+            override fun onAdHidden(a: MaxAd)                    { if (earned) onRewarded() else onSkipped(); preloadRewarded() }
+            override fun onAdClicked(a: MaxAd)                   {}
+            override fun onAdDisplayFailed(a: MaxAd, e: MaxError){ onSkipped(); preloadRewarded() }
+            override fun onUserRewarded(a: MaxAd, r: MaxReward)  { earned = true }
+            override fun onRewardedVideoStarted(a: MaxAd)        {}
+            override fun onRewardedVideoCompleted(a: MaxAd)      {}
         })
         ad.showAd(activity)
     }
 
-    fun showAppOpenIfReady(activity: Activity) {
-        if (!adsEnabled() || !adsConfig().placements.appOpenEnabled) return
-        if (appOpenShownThisSession) return
-        val ad = loadedAppOpen ?: return
-        if (!isAppOpenReady) return
-
-        appOpenShownThisSession = true
-        isAppOpenReady = false
-
-        ad.setListener(object : MaxAdListener {
-            override fun onAdLoaded(a: MaxAd)   {}
-            override fun onAdLoadFailed(id: String, err: MaxError) {}
-            override fun onAdDisplayed(a: MaxAd) {}
-            override fun onAdHidden(a: MaxAd)    { preloadAppOpen() }
-            override fun onAdClicked(a: MaxAd)   {}
-            override fun onAdDisplayFailed(a: MaxAd, e: MaxError) { preloadAppOpen() }
-        })
-        ad.showAd()
-    }
-
     // ─────────────────────────────────────────────────────────────────────────
-    // Banner / Native ad unit IDs — exposed for the composables that render them
+    // Ad unit ID accessors for composable ad slots
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Returns the configured banner ad unit ID, or null if banners are disabled/unset. */
     fun bannerAdUnitIdOrNull(): String? {
-        if (!adsEnabled() || !adsConfig().placements.bannerEnabled) return null
+        if (!adsEnabled() || !ads().placements.bannerEnabled) return null
         return bannerAdUnitId().takeIf { it.isNotBlank() }
     }
 
-    /** Returns the configured native ad unit ID, or null if native ads are disabled/unset. */
     fun nativeAdUnitIdOrNull(): String? {
-        if (!adsEnabled() || !adsConfig().placements.nativeEnabled) return null
+        if (!adsEnabled() || !ads().placements.nativeEnabled) return null
         return nativeAdUnitId().takeIf { it.isNotBlank() }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Native ad loader (on-demand, not preloaded)
+    // Native ad loader (on-demand, fresh per placement)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Loads a single native ad via MaxNativeAdLoader and maps the result into
-     * [NativeAdState.Loaded] for the Compose UI layer.
-     *
-     * The loader is created fresh per call — native ads are not preloaded
-     * because they are on-demand placements (BrowseScreen feed injection,
-     * ShortsScreen page). A new loader instance is intentional per AppLovin
-     * guidance: reusing a single loader across multiple composable lifecycles
-     * causes double-impression events and memory leaks.
-     *
-     * Failures call [onFailed] so the card/page collapses gracefully — the
-     * caller is never left in a perpetual loading state.
-     */
-    fun loadNativeAd(
-        onLoaded: (NativeAdState.Loaded) -> Unit,
-        onFailed: () -> Unit,
-    ) {
+    fun loadNativeAd(onLoaded: (NativeAdState.Loaded) -> Unit, onFailed: () -> Unit) {
         val unitId = nativeAdUnitIdOrNull()
-        if (unitId == null) {
-            scope.launch(Dispatchers.Main) { onFailed() }
-            return
-        }
+        if (unitId == null) { scope.launch(Dispatchers.Main) { onFailed() }; return }
 
-        // MaxNativeAdLoader must be created on the main thread.
         scope.launch(Dispatchers.Main) {
             val loader = MaxNativeAdLoader(unitId, appContext)
-
             loader.setNativeAdListener(object : com.applovin.mediation.nativeAds.MaxNativeAdListener() {
                 override fun onNativeAdLoaded(view: MaxNativeAdView?, ad: MaxAd) {
-                    val native: MaxNativeAd = ad.nativeAd ?: run {
-                        Log.w(TAG, "Native ad loaded but nativeAd payload is null — unit=$unitId")
-                        onFailed()
-                        return
-                    }
-
-                    val headline = native.title.orEmpty()
-                    val body     = native.body.orEmpty()
-                    val cta      = native.callToAction.orEmpty().ifBlank { "Learn More" }
-                    val icon     = native.icon?.uri?.toString().orEmpty()
-                    val image    = native.mainImage?.uri?.toString().orEmpty()
+                    val native: MaxNativeAd = ad.nativeAd ?: run { onFailed(); return }
+                    val headline   = native.title.orEmpty()
+                    val body       = native.body.orEmpty()
+                    val cta        = native.callToAction.orEmpty().ifBlank { "Learn More" }
+                    val icon       = native.icon?.uri?.toString().orEmpty()
+                    val image      = native.mainImage?.uri?.toString().orEmpty()
                     val advertiser = native.advertiser.orEmpty()
-
-                    // Guard: require at minimum a headline and at least one visual asset.
-                    if (headline.isBlank() || (icon.isBlank() && image.isBlank())) {
-                        Log.w(TAG, "Native ad missing required fields — unit=$unitId, headline='$headline'")
-                        onFailed()
-                        return
-                    }
-
-                    Log.d(TAG, "Native ad loaded — unit=$unitId headline='$headline'")
-                    onLoaded(
-                        NativeAdState.Loaded(
-                            headline       = headline,
-                            body           = body,
-                            callToAction   = cta,
-                            advertiserName = advertiser,
-                            clickUrl       = ad.adReviewCreativeId.orEmpty(), // tracking only; click handled by loader
-                            imageUrl       = image,
-                            iconUrl        = icon,
-                        )
-                    )
+                    if (headline.isBlank() || (icon.isBlank() && image.isBlank())) { onFailed(); return }
+                    onLoaded(NativeAdState.Loaded(headline, body, cta, advertiser,
+                        ad.adReviewCreativeId.orEmpty(), image, icon))
                 }
-
-                override fun onNativeAdLoadFailed(adUnitId: String, error: MaxError) {
-                    Log.w(TAG, "Native ad load failed — unit=$adUnitId code=${error.code} msg=${error.message}")
-                    onFailed()
-                }
-
-                override fun onNativeAdClicked(ad: MaxAd) {
-                    Log.d(TAG, "Native ad clicked — unit=$unitId")
-                }
-
-                override fun onNativeAdExpired(ad: MaxAd) {
-                    Log.d(TAG, "Native ad expired — unit=$unitId")
-                    // Expired ads silently disappear from the UI because the composable
-                    // holds the Loaded state; the user simply sees the existing card
-                    // until they scroll away. We don't push a new Failed state here
-                    // because that would cause the card to collapse mid-scroll.
-                }
+                override fun onNativeAdLoadFailed(adUnitId: String, error: MaxError) { onFailed() }
+                override fun onNativeAdClicked(ad: MaxAd) {}
+                override fun onNativeAdExpired(ad: MaxAd) {}
             })
-
             loader.loadAd()
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // VAST tag URL for IMA pre-roll — fully config driven
+    // VAST / IMA config
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Returns the configured VAST tag URL, or null if pre-roll ads are disabled/unset. */
     fun vastTagUrlOrNull(): String? {
-        if (!adsEnabled() || !adsConfig().placements.prerollEnabled) return null
-        return ads().let { "" }?.takeIf { it.isNotBlank() }
+        if (!adsEnabled() || !ads().placements.prerollEnabled) return null
+        return ads().vastTagUrl.takeIf { it.isNotBlank() }
     }
 
-    /** Pre-roll timing/skip rules from remote config. */
-    fun prerollConfig() = com.axio.reelz.data.dto.AdPrerollConfig(
-        skipOnResume = true, skipOnQualitySwitch = true,
-        showOnMoviesOnly = false, minMinutesBetween = 30L)
+    fun prerollConfig() = AdPrerollConfig(
+        skipOnResume        = true,
+        skipOnQualitySwitch = true,
+        showOnMoviesOnly    = false,
+        minMinutesBetween   = 30L,
+    )
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Mid-roll schedule
+    //  < 60 min  → no mid-roll
+    //  60-120 min → 1 break at ~40 min
+    //  120+ min   → break every 40 min
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fun midRollSchedule(durationMs: Long): MidRollSchedule {
+        if (!adsEnabled() || !ads().placements.prerollEnabled) return MidRollSchedule(false, emptyList())
+        val durationMin = durationMs / 60_000L
+        if (durationMin < 60) return MidRollSchedule(false, emptyList())
+
+        val intervalMs  = 40 * 60_000L
+        val breakpoints = mutableListOf<Long>()
+        var t           = intervalMs
+        while (t < durationMs - (10 * 60_000L)) { breakpoints.add(t); t += intervalMs }
+        return MidRollSchedule(breakpoints.isNotEmpty(), breakpoints)
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Counters

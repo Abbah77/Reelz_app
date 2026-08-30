@@ -122,9 +122,12 @@ sealed class ShortsItem {
 }
 
 private fun buildShortsItemList(videos: List<ShortVideo>): List<ShortsItem> = buildList {
+    // Spec: ad every 10 videos. Pattern:
+    // V V V V V V V V V V AD V V V V V V V V V V AD …
     videos.forEachIndexed { i, v ->
         add(ShortsItem.Video(v))
-        if ((i + 1) % 5 == 0) add(ShortsItem.AdSlot)
+        // After every 10th video (1-indexed) inject an ad slot
+        if ((i + 1) % 10 == 0) add(ShortsItem.AdSlot)
     }
 }
 

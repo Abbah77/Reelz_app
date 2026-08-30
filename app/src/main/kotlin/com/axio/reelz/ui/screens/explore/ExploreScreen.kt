@@ -389,7 +389,7 @@ class ExploreViewModel @Inject constructor(
 
 
 @Composable
-fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
+fun ExploreScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = null, vm: ExploreViewModel = hiltViewModel()) {
     val d = LocalDimensions.current
     val ui by vm.ui.collectAsState()
     var showFilterSheet by remember { mutableStateOf(false) }
@@ -399,6 +399,9 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
         genreIds.size + listOf(yearFrom, yearTo, ratingFrom, runtimeFrom, runtimeTo).count { it != null } +
             (if (sortBy != "popularity.desc") 1 else 0)
     }
+
+    // Guest interstitial — fires occasionally, never on player screens
+    adEngine?.let { com.axio.reelz.ads.GuestInterstitialEffect(it) }
 
     Column(Modifier.fillMaxSize().background(Bg).statusBarsPadding()) {
 
@@ -543,12 +546,24 @@ fun ExploreScreen(nav: NavController, vm: ExploreViewModel = hiltViewModel()) {
                     verticalArrangement   = Arrangement.spacedBy(d.spaceMd),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(ui.results, key = { it.id }) { m ->
-                        MediaPosterCard(
-                            media   = m,
-                            onClick = { nav.navigate(Route.Detail.go(m.id, m.mediaType)) },
-                            modifier = Modifier.aspectRatio(0.65f),
-                        )
+                    // Inject native ad card every 6 rows (18 items) — spans full width
+                    // Same pattern as BrowseScreen: show, skip, show, skip…
+                    val results = ui.results
+                    results.forEachIndexed { idx, m ->
+                        // Native ad full-row span: after item at position 17, 35, 53…
+                        // (end of every 6th row in a 3-column grid = after item [17,35,53…])
+                        if (idx > 0 && idx % 18 == 0 && adEngine != null) {
+                            item(key = "explore_ad_$idx", span = { GridItemSpan(3) }) {
+                                com.axio.reelz.ads.NativeAdCard(adEngine = adEngine)
+                            }
+                        }
+                        item(key = m.id) {
+                            MediaPosterCard(
+                                media   = m,
+                                onClick = { nav.navigate(Route.Detail.go(m.id, m.mediaType)) },
+                                modifier = Modifier.aspectRatio(0.65f),
+                            )
+                        }
                     }
                     // ── Infinite scroll: skeleton grid cards while TMDB loads next page ──
                     // Three skeleton cards (one full row) shimmer independently with

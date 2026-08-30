@@ -2,7 +2,8 @@ package com.axio.reelz.ui.screens.detail
 
 import android.content.Intent
 import com.axio.reelz.ads.AdEngine
-import com.axio.reelz.ads.DetailBannerAd
+import com.axio.reelz.ads.GuestInterstitialEffect
+import com.axio.reelz.ads.ReelzBannerAd
 import com.axio.reelz.ads.routeAdUrl
 import androidx.compose.animation.*
 import androidx.compose.animation.core.LinearEasing
@@ -488,16 +489,26 @@ fun DetailScreen(
             )
         }
 
-        // ── Banner ad — visible at bottom of DetailScreen when configured ─
+        // ── Guest interstitial — psychological timing (not every visit) ──
+        GuestInterstitialEffect(adEngine)
+
+        // ── Banner ad — sticky bottom strip when configured ───────────────
         adEngine.bannerAdUnitIdOrNull()?.let { bannerUnitId ->
-            DetailBannerAd(
+            ReelzBannerAd(
                 adUnitId = bannerUnitId,
-                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                height   = 50.dp,
             )
         }
 
         // ── Download bottom sheet ──────────────────────────────────────
         if (ui.showDownloadSheet) {
+            // Rewarded ad state — fires immediately on quality tap, per spec
+            var pendingDownloadTrack by remember { mutableStateOf<com.axio.reelz.data.model.QualityTrack?>(null) }
+
             DownloadQualitySheet(
                 title              = ui.pendingDownloadTitle,
                 qualities          = ui.downloadQualities,
@@ -506,9 +517,34 @@ fun DetailScreen(
                 maxResolutionHeight = ui.maxDownloadResolutionHeight,
                 alreadyDownloadedQualities = ui.alreadyDownloadedQualities,
                 onDismiss          = { vm.dismissDownloadSheet() },
-                onSelectQuality    = { track -> vm.enqueueDownload(ctx, track) },
+                onSelectQuality    = { track ->
+                    // Spec: rewarded ad fires IMMEDIATELY when user taps quality
+                    // Download starts either way — rewarded is just a gate, not a blocker
+                    if (adEngine.adsEnabled() && adEngine.nativeAdUnitIdOrNull() != null) {
+                        pendingDownloadTrack = track
+                    } else {
+                        vm.enqueueDownload(ctx, track)
+                    }
+                },
                 onLockedQualityTap = { vm.openResolutionLockSheet() },
             )
+
+            // Rewarded ad dialog — fires immediately when quality is selected
+            pendingDownloadTrack?.let { track ->
+                com.axio.reelz.ads.RewardedDownloadAdDialog(
+                    adEngine   = adEngine,
+                    onRewarded = {
+                        vm.enqueueDownload(ctx, track)
+                        pendingDownloadTrack = null
+                    },
+                    onSkipped  = {
+                        // Skip still starts download — user never punished
+                        vm.enqueueDownload(ctx, track)
+                        pendingDownloadTrack = null
+                    },
+                    onDismiss  = { pendingDownloadTrack = null },
+                )
+            }
         }
 
         // ── Resolution locked sheet (free tier tapped an above-cap quality) ──
@@ -706,7 +742,6 @@ fun DownloadQualitySheet(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(d.spaceXxs),
                                     ) {
-                                        Text("✓", color = Success, fontSize = d.textXxs, fontWeight = FontWeight.ExtraBold)
                                         Text(
                                             "Downloaded",
                                             color = Success,

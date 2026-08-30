@@ -238,7 +238,7 @@ class SearchViewModel @Inject constructor(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
+fun SearchScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = null, vm: SearchViewModel = hiltViewModel()) {
     val d = LocalDimensions.current
     val ui by vm.ui.collectAsState()
     val focusReq = remember { FocusRequester() }
@@ -411,6 +411,8 @@ fun SearchScreen(nav: NavController, vm: SearchViewModel = hiltViewModel()) {
                             )
                         }
                     }
+                    // Banner ad — end of search results, clean separator style
+                    adEngine?.let { com.axio.reelz.ads.SearchResultsBanner(it) }
                 }
 
             else ->

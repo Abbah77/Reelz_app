@@ -33,7 +33,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.axio.reelz.ads.AdEngine
+import com.axio.reelz.ads.GuestInterstitialEffect
+import com.axio.reelz.ads.HeroBannerAd
 import com.axio.reelz.ads.NativeAdCard
+import com.axio.reelz.ads.NativeAdRowCard
 import com.axio.reelz.app.Route
 import com.axio.reelz.core.network.NetworkResult
 import com.axio.reelz.data.model.*
@@ -214,10 +217,16 @@ class BrowseViewModel @Inject constructor(
         sections.firstOrNull()?.items?.take(6) ?: emptyList()
 
     private fun buildFeedRows(sections: List<FeedSection>): List<FeedRow> = buildList {
+        // Ad pattern per spec:
+        // Row 1 content → AD → skip row 3 → AD → skip row 5 → AD…
+        // Translated to 0-indexed sections: inject ad after section 0, 2, 4, 6…
+        // i.e. every even section index gets an ad AFTER it.
         sections.forEachIndexed { index, section ->
             if (section.items.isNotEmpty()) {
                 add(FeedRow.Section(section))
-                if ((index + 1) % 3 == 0) add(FeedRow.NativeAdPlacement)
+                // Inject ad after every even-indexed section (0, 2, 4…)
+                // This gives the "show, skip, show, skip…" rhythm
+                if (index % 2 == 0) add(FeedRow.NativeAdPlacement)
             }
         }
     }
@@ -436,7 +445,10 @@ fun BrowseScreen(
                 }
 
                 else -> {
-                    // ── Hero pager ────────────────────────────────────────────
+                    // ── Guest interstitial — psychological timing ──────────────
+                    item(key = "guestInterstitial") { GuestInterstitialEffect(adEngine) }
+
+                    // ── Hero pager — content + 1 native ad slot every 15 min ──
                     if (ui.featured.isNotEmpty()) {
                         item(key = "hero") {
                             HeroBannerPager(
@@ -444,6 +456,7 @@ fun BrowseScreen(
                                 watchlistedIds = ui.watchlistedIds,
                                 onWatchlist    = { viewModel.toggleHeroWatchlist(it) },
                                 onClick        = { goDetail(it.id, it.mediaType) },
+                                adEngine       = adEngine,
                             )
                         }
                     } else if (ui.isLoading) {
@@ -538,17 +551,35 @@ fun BrowseScreen(
                                         SectionHeader(row.section.title, "See All")
                                     }
                                     item(key = "row_${row.section.id}") {
+                                        // Determine if this section row gets an inline ad card
+                                        val sectionIndex = ui.feedRows.indexOf(row)
+                                        val hasInlineAd  = adEngine.shouldShowCardAdAtRow(sectionIndex)
+                                        // Random slot within the row — stable per section ID so it
+                                        // doesn't jump on recomposition
+                                        val adSlotInRow  = (row.section.id.hashCode().and(0x7FFFFFFF) % maxOf(row.section.items.size, 1))
+                                            .coerceIn(1, maxOf(row.section.items.size - 1, 1))
+
                                         LazyRow(
                                             contentPadding = PaddingValues(horizontal = d.screenHorizPad),
                                             horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
                                         ) {
-                                            items(row.section.items, key = { it.id }) { m ->
-                                                MediaRowCard(m, onClick = { goDetail(m.id, m.mediaType) })
+                                            row.section.items.forEachIndexed { itemIdx, m ->
+                                                // Inject native ad at the random slot position
+                                                if (hasInlineAd && itemIdx == adSlotInRow) {
+                                                    item(key = "inline_ad_${row.section.id}") {
+                                                        NativeAdRowCard(adEngine = adEngine)
+                                                    }
+                                                }
+                                                item(key = m.id) {
+                                                    MediaRowCard(m, onClick = { goDetail(m.id, m.mediaType) })
+                                                }
                                             }
                                         }
                                     }
                                 }
                                 is FeedRow.NativeAdPlacement -> {
+                                    // Full-width native ad section (between rows, not inside)
+                                    // Only renders if inline card didn't already show for this row
                                     item(key = "native_ad_$feedRowIdx") { NativeAdCard(adEngine = adEngine) }
                                 }
                                 is FeedRow.InfinitePage -> {
@@ -571,7 +602,7 @@ fun BrowseScreen(
                         if (ui.isLoadingMore) { item(key = "loadMoreSkeleton") { LoadMoreSkeleton() } }
                     }
 
-                    item(key = "adBanner") { AdBannerPlaceholder(Modifier.padding(vertical = d.spaceMd - d.spaceXxs)) }
+                    // No legacy AdBannerPlaceholder — banner ads live in SearchResultsBanner / FilesScreenBanner
                 }
             }
         }
@@ -991,14 +1022,25 @@ fun HeroBannerPager(
     watchlistedIds: Set<String> = emptySet(),
     onWatchlist: (Media) -> Unit = {},
     onClick: (Media) -> Unit,
+    adEngine: AdEngine? = null,
 ) {
     val d = LocalDimensions.current
     val screenH = LocalConfiguration.current.screenHeightDp.dp
-    val pagerState = rememberPagerState { items.size }
 
+    // Build page list: inject native ad slide after every 3 content slides
+    // but only if adEngine is present and ads are enabled
+    val showNativeAd = adEngine?.adsEnabled() == true && adEngine.nativeAdUnitIdOrNull() != null
+    // pageCount: content items + optional 1 ad slot (rotates via pager auto-scroll)
+    val pageCount = items.size + (if (showNativeAd) 1 else 0)
+    val adSlotIndex = if (showNativeAd && items.size >= 3) 3 else -1  // inject at position 3
+
+    val pagerState = rememberPagerState { pageCount }
+
+    // Auto-rotate every 4.5s for content, 15s dwell for ad slot
     LaunchedEffect(pagerState) {
         while (true) {
-            delay(4_500)
+            val isAdSlot = pagerState.currentPage == adSlotIndex
+            delay(if (isAdSlot) 15_000L else 4_500L)
             if (pagerState.pageCount > 0) {
                 pagerState.animateScrollToPage(
                     (pagerState.currentPage + 1) % pagerState.pageCount,
@@ -1010,7 +1052,24 @@ fun HeroBannerPager(
 
     Box(Modifier.fillMaxWidth()) {
         HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
-            val media      = items[page]
+            // Ad slot — renders native hero ad in place of a content slide
+            if (page == adSlotIndex && adEngine != null) {
+                val pageOffset = (pagerState.currentPage - page + pagerState.currentPageOffsetFraction).coerceIn(-1f, 1f)
+                HeroBannerAd(
+                    adEngine = adEngine,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            alpha  = 1f - 0.12f * abs(pageOffset)
+                            scaleX = 1f - 0.03f * abs(pageOffset)
+                            scaleY = 1f - 0.03f * abs(pageOffset)
+                        },
+                )
+                return@HorizontalPager
+            }
+            // Content slide — adjust index when ad slot is before this page
+            val contentIndex = if (adSlotIndex >= 0 && page > adSlotIndex) page - 1 else page
+            val media      = items.getOrNull(contentIndex) ?: return@HorizontalPager
             val pageOffset = (pagerState.currentPage - page + pagerState.currentPageOffsetFraction).coerceIn(-1f, 1f)
             val isWatchlisted = media.id in watchlistedIds
 

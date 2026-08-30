@@ -321,8 +321,20 @@ fun TransferScreen(
 
     DisposableEffect(Unit) { onDispose { vm.reset() } }
 
+    // FIX: switching tabs should only reset if we're idle or in an error state.
+    // If sender is showing a QR (QrReady) and user taps Receive, we must
+    // invalidate the QR so the old ServerSocket is released and no stale
+    // receiver can connect to a session the user has abandoned.
     LaunchedEffect(tab) {
-        if (!isConnected) vm.reset()
+        if (!isConnected) {
+            val state = uiState
+            val shouldReset = state is TransferUiState.Idle
+                || state is TransferUiState.Error
+                || state is TransferUiState.QrReady   // user switched role while QR was showing
+                || state is TransferUiState.Preparing
+                || state is TransferUiState.Connecting
+            if (shouldReset) vm.reset()
+        }
     }
 
     BackHandler(enabled = isConnected) { showDisconnectDialog = true }
@@ -486,8 +498,19 @@ private fun SendTab(uiState: TransferUiState, ctx: Context, vm: TransferViewMode
         if (hasPerms) vm.startAsSender()
     }
 
+    // FIX: guard against double-firing. Only call startAsSender() once per tab
+    // visit. If the user manually resets, they tap "Reset" which calls vm.reset()
+    // and then the user re-lands on SendTab, which sets startedOnce = false.
+    var startedOnce by remember { mutableStateOf(false) }
     LaunchedEffect(hasPerms, uiState) {
-        if (hasPerms && uiState is TransferUiState.Idle) vm.startAsSender()
+        if (hasPerms && uiState is TransferUiState.Idle && !startedOnce) {
+            startedOnce = true
+            vm.startAsSender()
+        }
+        // Allow re-start after an error or explicit reset
+        if (uiState is TransferUiState.Error || uiState is TransferUiState.Idle) {
+            if (startedOnce && uiState is TransferUiState.Idle) startedOnce = false
+        }
     }
 
     Column(
@@ -518,7 +541,7 @@ private fun SendTab(uiState: TransferUiState, ctx: Context, vm: TransferViewMode
                     sessionId    = uiState.sessionId,
                     hotspotSsid  = if (payload?.tier == "HS") payload.ssid else null,
                     hotspotPass  = if (payload?.tier == "HS") payload.password else null,
-                    onReset      = { vm.reset() },
+                    onReset      = { startedOnce = false; vm.reset() },
                 )
             }
             is TransferUiState.Error -> ErrorCard(

@@ -1,21 +1,16 @@
 package com.axio.reelz.ads
 
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -23,30 +18,25 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.axio.reelz.ui.theme.BgCard
-import com.axio.reelz.ui.theme.BgSurface
-import com.axio.reelz.ui.theme.Primary
-import com.axio.reelz.ui.theme.White60
+import com.axio.reelz.ui.theme.*
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Full-width native ad card — injected between BrowseScreen feed rows
+// NativeAdCard — injected between feed rows, blends 100% with MediaRowCard style.
 //
-// Design intent: polished, native-feeling card that blends with the feed
-// rather than screaming "advertisement". Clean hierarchy:
-//   1. Full-bleed 16:9 media image draws the eye
-//   2. Icon + headline + body give context
-//   3. CTA button is the only action — tap-target is the button, not the card,
-//      to prevent accidental clicks on scroll
+// Design goals (TikTok / Instagram native-ad standard):
+//   • Same visual weight and card dimensions as real content cards
+//   • Media image fills same space as a movie poster
+//   • "Sponsored" label is the only disclosure — subtle, present, honest
+//   • CTA button is the only interactive surface — no accidental taps
+//   • Shimmer skeleton matches loaded geometry exactly — zero layout shift
+//   • Silent failure: Failed state = zero height, no dead space visible
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 fun NativeAdCard(adEngine: AdEngine) {
-    // Stable key so LaunchedEffect doesn't re-fire on recomposition.
-    // Using adEngine identity as the key means a new AdEngine (if ever swapped)
-    // correctly triggers a reload, but normal recompositions don't.
     var adState by remember { mutableStateOf<NativeAdState>(NativeAdState.Loading) }
-    var showBrowserSheet by remember { mutableStateOf(false) }
-    var browserUrl by remember { mutableStateOf("") }
+    var showBrowser by remember { mutableStateOf(false) }
+    var browserUrl  by remember { mutableStateOf("") }
     val context = LocalContext.current
 
     LaunchedEffect(adEngine) {
@@ -57,240 +47,391 @@ fun NativeAdCard(adEngine: AdEngine) {
     }
 
     when (val state = adState) {
-        is NativeAdState.Loading -> NativeAdSkeleton()
-        is NativeAdState.Failed  -> { /* Collapse silently — no dead space */ }
-        is NativeAdState.Loaded  -> {
-            NativeAdContent(
-                ad = state,
-                onCtaClick = {
-                    routeAdUrl(context, state.clickUrl) { url ->
-                        browserUrl = url
-                        showBrowserSheet = true
-                    }
-                },
-            )
-        }
+        is NativeAdState.Loading -> NativeAdCardSkeleton()
+        is NativeAdState.Failed  -> { /* Collapse silently — zero dead space */ }
+        is NativeAdState.Loaded  -> NativeAdCardContent(
+            ad         = state,
+            onCtaClick = {
+                routeAdUrl(context, state.clickUrl) { url ->
+                    browserUrl = url; showBrowser = true
+                }
+            },
+        )
     }
 
-    if (showBrowserSheet) {
-        ReelzBrowserSheet(url = browserUrl, onDismiss = { showBrowserSheet = false })
+    if (showBrowser) {
+        ReelzBrowserSheet(url = browserUrl, onDismiss = { showBrowser = false })
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Loaded card — clean, editorial look
+// Loaded state — pixel-perfect match with MediaRowCard
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun NativeAdContent(
+private fun NativeAdCardContent(
     ad: NativeAdState.Loaded,
     onCtaClick: () -> Unit,
 ) {
-    // Subtle elevation separates the card from the feed without a harsh border
+    val d = com.axio.reelz.ui.theme.LocalDimensions.current
+
+    // Outer wrapper matches the full row width including padding — same as a real feed row
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .shadow(
-                elevation = 8.dp,
-                shape     = RoundedCornerShape(16.dp),
-                ambientColor  = Color.Black.copy(alpha = 0.5f),
-                spotColor     = Color.Black.copy(alpha = 0.5f),
-            )
-            .clip(RoundedCornerShape(16.dp))
-            .background(BgSurface)
-            // Single outer border, barely visible — creates card edge without neon outline
-            .border(
-                width = 0.5.dp,
-                color = Color.White.copy(alpha = 0.07f),
-                shape = RoundedCornerShape(16.dp),
-            ),
+            .padding(vertical = d.spaceMd - d.spaceXxs),
     ) {
-        // ── Media image (16:9) ─────────────────────────────────────────────
-        // No clipping needed — parent column's clip already handles the radius.
-        // Top corners are rounded by the parent; image fills top of card.
-        Box(modifier = Modifier.fillMaxWidth()) {
-            AsyncImage(
-                model              = ad.imageUrl,
-                contentDescription = null,
-                contentScale       = ContentScale.Crop,
-                modifier           = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f),
+        // ── Row header — "Sponsored" line styled exactly like a section header ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+        ) {
+            // Accent bar identical to SectionHeader accent
+            Box(
+                Modifier
+                    .width(d.sectionAccentWidth)
+                    .height(d.sectionAccentHeight)
+                    .clip(RoundedCornerShape(d.spaceXxs))
+                    .background(Brush.verticalGradient(listOf(Brand2, Brand)))
             )
-
-            // Subtle scrim so the "Sponsored" chip is always legible
+            Text(
+                text       = ad.headline,
+                color      = White,
+                fontSize   = d.textMd + 1.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
+                modifier   = Modifier.weight(1f),
+            )
+            // "Sponsored" badge — compact, non-intrusive
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.Black.copy(alpha = 0.40f), Color.Transparent)
-                        )
-                    )
-            )
-
-            // "Sponsored" label — top-left, understated
-            Text(
-                text       = "Sponsored",
-                color      = Color.White.copy(alpha = 0.75f),
-                fontSize   = 10.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 0.5.sp,
-                modifier   = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 10.dp, top = 8.dp)
                     .clip(RoundedCornerShape(4.dp))
-                    .background(Color.Black.copy(alpha = 0.25f))
+                    .background(Color.White.copy(alpha = 0.07f))
+                    .border(0.5.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
                     .padding(horizontal = 6.dp, vertical = 2.dp),
-            )
+            ) {
+                Text(
+                    text          = "Sponsored",
+                    color         = White40,
+                    fontSize      = 9.sp,
+                    fontWeight    = FontWeight.Medium,
+                    letterSpacing = 0.3.sp,
+                )
+            }
         }
 
-        // ── Advertiser info row + CTA ──────────────────────────────────────
+        // ── Horizontal scroll row — same LazyRow shape as MediaRowCard rows ──
+        // Single featured ad card that matches the poster card dimensions
         Row(
-            modifier  = Modifier
-                .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
-            verticalAlignment   = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier              = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
         ) {
-            // App icon with soft background so transparent icons still read
-            AsyncImage(
-                model              = ad.iconUrl,
-                contentDescription = null,
-                contentScale       = ContentScale.Crop,
-                modifier           = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(BgCard),
-            )
+            Spacer(Modifier.width(d.screenHorizPad))
 
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text       = ad.headline,
-                    color      = Color.White,
-                    fontSize   = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines   = 1,
-                    overflow   = TextOverflow.Ellipsis,
-                )
-                if (ad.body.isNotBlank()) {
-                    Text(
-                        text     = ad.body,
-                        color    = White60,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+            // Primary media card — same width as MediaRowCard
+            Box(
+                modifier = Modifier
+                    .width(d.cardPosterWidth)
+                    .clickable(onClick = onCtaClick),
+            ) {
+                // Poster image — same aspect ratio as content cards
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(0.68f)
+                        .clip(RoundedCornerShape(d.radiusMd))
+                        .background(BgRaised),
+                ) {
+                    if (ad.imageUrl.isNotBlank()) {
+                        AsyncImage(
+                            model              = ad.imageUrl,
+                            contentDescription = null,
+                            contentScale       = ContentScale.Crop,
+                            modifier           = Modifier.fillMaxSize(),
+                        )
+                    } else if (ad.iconUrl.isNotBlank()) {
+                        AsyncImage(
+                            model              = ad.iconUrl,
+                            contentDescription = null,
+                            contentScale       = ContentScale.Crop,
+                            modifier           = Modifier.fillMaxSize(),
+                        )
+                    }
+                    // Bottom gradient scrim — same as MediaRowCard
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.verticalGradient(
+                                0f to Color.Transparent,
+                                0.6f to Color.Transparent,
+                                1f to Color.Black.copy(alpha = 0.72f),
+                            )
+                        )
                     )
+                    // Advertiser icon — bottom-left like content badges
+                    if (ad.iconUrl.isNotBlank() && ad.imageUrl.isNotBlank()) {
+                        AsyncImage(
+                            model              = ad.iconUrl,
+                            contentDescription = null,
+                            contentScale       = ContentScale.Crop,
+                            modifier           = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(8.dp)
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(BgCard),
+                        )
+                    }
+                }
+
+                // Card info below — matches MediaRowCard text layout
+                Column(
+                    modifier = Modifier.padding(top = d.spaceSm),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text       = ad.headline,
+                        color      = White80,
+                        fontSize   = d.textSm,
+                        fontWeight = FontWeight.Medium,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis,
+                        lineHeight = (d.textSm.value * 1.35f).sp,
+                    )
+                    if (ad.advertiserName.isNotBlank()) {
+                        Text(
+                            text     = ad.advertiserName,
+                            color    = Brand.copy(0.7f),
+                            fontSize = d.textXxs,
+                        )
+                    }
                 }
             }
 
-            // CTA — the ONLY clickable element; card body is intentionally non-tappable
-            // to prevent accidental opens during scroll
-            Button(
-                onClick = onCtaClick,
-                colors  = ButtonDefaults.buttonColors(containerColor = Primary),
-                shape   = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
-                modifier = Modifier.height(36.dp),
+            // ── Wide info card — sits next to the poster like a "wide card" variant ──
+            Box(
+                modifier = Modifier
+                    .width(220.dp)
+                    .clickable(onClick = onCtaClick),
             ) {
-                Text(
-                    text       = ad.callToAction,
-                    fontSize   = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color      = Color.White,
-                    maxLines   = 1,
-                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(0.68f)
+                        .clip(RoundedCornerShape(d.radiusMd))
+                        .background(BgSurface)
+                        .border(0.5.dp, GlassBorder, RoundedCornerShape(d.radiusMd))
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text       = ad.headline,
+                            color      = White,
+                            fontSize   = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines   = 2,
+                            overflow   = TextOverflow.Ellipsis,
+                            lineHeight = 20.sp,
+                        )
+                        if (ad.body.isNotBlank()) {
+                            Text(
+                                text       = ad.body,
+                                color      = White60,
+                                fontSize   = 12.sp,
+                                maxLines   = 4,
+                                overflow   = TextOverflow.Ellipsis,
+                                lineHeight = 17.sp,
+                            )
+                        }
+                    }
+                    Button(
+                        onClick        = onCtaClick,
+                        colors         = ButtonDefaults.buttonColors(containerColor = Brand),
+                        shape          = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                        modifier       = Modifier.height(34.dp),
+                    ) {
+                        Text(
+                            text       = ad.callToAction,
+                            fontSize   = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = Color.White,
+                        )
+                    }
+                }
             }
+
+            Spacer(Modifier.width(d.screenHorizPad))
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shimmer skeleton — matches loaded card geometry exactly so there's no
-// layout jump when the real ad arrives. Screen-width-aware shimmer travel.
+// Skeleton — matches loaded layout geometry for zero-shift appearance
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun NativeAdSkeleton() {
-    // Use a large fixed sweep so shimmer is visible across any screen width
-    // without needing BoxWithConstraints overhead.
-    val sweepPx = 900f
-    val transition = rememberInfiniteTransition(label = "native_ad_shimmer")
-    val translateAnim by transition.animateFloat(
-        initialValue  = -sweepPx,
-        targetValue   = sweepPx * 2f,
-        animationSpec = infiniteRepeatable(
-            animation  = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "native_ad_shimmer_x",
-    )
-    val brush = Brush.linearGradient(
-        colors = listOf(
-            Color.White.copy(alpha = 0.03f),
-            Color.White.copy(alpha = 0.10f),
-            Color.White.copy(alpha = 0.03f),
-        ),
-        start = Offset(translateAnim, 0f),
-        end   = Offset(translateAnim + sweepPx, 0f),
-    )
+private fun NativeAdCardSkeleton() {
+    val d = com.axio.reelz.ui.theme.LocalDimensions.current
+    val brush = shimmerBrush()
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(BgSurface),
-    ) {
-        // Media placeholder — same 16:9 ratio as loaded card
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .background(brush)
-        )
-
+    Column(Modifier.fillMaxWidth().padding(vertical = d.spaceMd - d.spaceXxs)) {
+        // Header skeleton
         Row(
-            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = d.screenHorizPad, vertical = d.sectionVertPad),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
         ) {
-            // Icon placeholder
-            Box(
-                Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(brush)
-            )
+            Box(Modifier.width(d.sectionAccentWidth).height(d.sectionAccentHeight).clip(RoundedCornerShape(d.spaceXxs)).background(brush))
+            Box(Modifier.width(140.dp).height(13.dp).clip(RoundedCornerShape(4.dp)).background(brush))
+        }
+        // Card row skeleton
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
+            horizontalArrangement = Arrangement.spacedBy(d.spaceMd - d.spaceXxs),
+        ) {
+            Box(Modifier.width(d.cardPosterWidth).aspectRatio(0.68f).clip(RoundedCornerShape(d.radiusMd)).background(brush))
+            Box(Modifier.width(220.dp).aspectRatio(0.68f).clip(RoundedCornerShape(d.radiusMd)).background(brush))
+        }
+    }
+}
 
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared shimmer brush
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+internal fun shimmerBrush(): Brush {
+    val sweep  = 900f
+    val trans  = rememberInfiniteTransition(label = "shimmer")
+    val offset by trans.animateFloat(
+        initialValue  = -sweep,
+        targetValue   = sweep * 2f,
+        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart),
+        label         = "shimmerX",
+    )
+    return Brush.linearGradient(
+        colors = listOf(Color.White.copy(alpha = 0.03f), Color.White.copy(alpha = 0.09f), Color.White.copy(alpha = 0.03f)),
+        start  = Offset(offset, 0f),
+        end    = Offset(offset + sweep, 0f),
+    )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NativeAdRowCard — single-card variant that slots into a LazyRow at any index.
+//
+// Pixel-perfect match of MediaRowCard — same width (cardRowWidth), same height,
+// same corner radius, same border. The ONLY visible difference:
+//   • Title shows the ad headline (not a movie title)
+//   • A tiny "Sponsored" label replaces the genre/year metadata
+// This is the TikTok/Instagram approach: the card IS the feed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+fun NativeAdRowCard(adEngine: AdEngine) {
+    var adState    by remember { mutableStateOf<NativeAdState>(NativeAdState.Loading) }
+    var showBrowser by remember { mutableStateOf(false) }
+    var browserUrl  by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val d = com.axio.reelz.ui.theme.LocalDimensions.current
+
+    LaunchedEffect(adEngine) {
+        adEngine.loadNativeAd(
+            onLoaded = { ad -> adState = ad },
+            onFailed = { adState = NativeAdState.Failed },
+        )
+    }
+
+    when (val state = adState) {
+        is NativeAdState.Loading -> {
+            // Loading skeleton — exact MediaRowCard dimensions
+            val brush = shimmerBrush()
+            Column(Modifier.width(d.cardRowWidth)) {
                 Box(
                     Modifier
-                        .fillMaxWidth(0.58f)
-                        .height(14.dp)
-                        .clip(RoundedCornerShape(4.dp))
+                        .fillMaxWidth()
+                        .height(d.cardRowHeight)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(d.radiusMd))
                         .background(brush)
                 )
+                androidx.compose.foundation.layout.Spacer(Modifier.height(d.spaceSm))
+                Box(Modifier.fillMaxWidth(0.8f).height(11.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp)).background(brush))
+                androidx.compose.foundation.layout.Spacer(Modifier.height(3.dp))
+                Box(Modifier.fillMaxWidth(0.5f).height(9.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp)).background(brush))
+            }
+        }
+        is NativeAdState.Failed -> { /* Silent — slot simply disappears */ }
+        is NativeAdState.Loaded -> {
+            Column(
+                modifier = Modifier
+                    .width(d.cardRowWidth)
+                    .clickable {
+                        routeAdUrl(context, state.clickUrl) { url -> browserUrl = url; showBrowser = true }
+                    },
+            ) {
+                // Card image — same dimensions as MediaRowCard poster
                 Box(
                     Modifier
-                        .fillMaxWidth(0.85f)
-                        .height(11.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(brush)
+                        .fillMaxWidth()
+                        .height(d.cardRowHeight)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(d.radiusMd))
+                        .border(
+                            com.axio.reelz.ui.theme.LocalDimensions.current.borderThin,
+                            GlassBorder,
+                            androidx.compose.foundation.shape.RoundedCornerShape(d.radiusMd),
+                        )
+                        .background(BgRaised),
+                ) {
+                    val imgUrl = state.imageUrl.ifBlank { state.iconUrl }
+                    if (imgUrl.isNotBlank()) {
+                        AsyncImage(
+                            model              = imgUrl,
+                            contentDescription = null,
+                            contentScale       = ContentScale.Crop,
+                            modifier           = Modifier.fillMaxSize(),
+                        )
+                    }
+                    // Bottom gradient + "Sponsored" badge — same position as rating chips on real cards
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.verticalGradient(0f to Color.Transparent, 0.55f to Color.Transparent, 1f to Color.Black.copy(0.7f))
+                        )
+                    )
+                    Text(
+                        text          = "Sponsored",
+                        color         = White40,
+                        fontSize      = 9.sp,
+                        fontWeight    = FontWeight.Medium,
+                        letterSpacing = 0.2.sp,
+                        modifier      = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(start = 6.dp, bottom = 5.dp),
+                    )
+                }
+
+                androidx.compose.foundation.layout.Spacer(Modifier.height(d.spaceSm))
+
+                // Title — styled identically to MediaRowCard title
+                Text(
+                    text       = state.headline,
+                    color      = White80,
+                    fontSize   = d.textSm,
+                    fontWeight = FontWeight.Medium,
+                    maxLines   = 2,
+                    overflow   = TextOverflow.Ellipsis,
+                    lineHeight = (d.textSm.value * 1.35f).sp,
                 )
             }
 
-            // CTA placeholder
-            Box(
-                Modifier
-                    .width(72.dp)
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(brush)
-            )
+            if (showBrowser) {
+                ReelzBrowserSheet(url = browserUrl, onDismiss = { showBrowser = false })
+            }
         }
     }
 }

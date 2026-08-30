@@ -54,8 +54,18 @@ class MainActivity : ComponentActivity() {
         ConfigSyncWorker.schedule(this)
         if (isColdStart) {
             isColdStart = false
+            // Cold start: show app-open if configured and available
             adEngine.showAppOpenIfReady(this)
+        } else {
+            // Subsequent resumes: fire app-open only if ≥ 15 min in background
+            adEngine.onAppForeground(this)
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Record when we went to background — used to gate the 15-min app-open threshold
+        adEngine.onAppBackground()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

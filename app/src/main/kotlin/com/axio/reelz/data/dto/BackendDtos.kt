@@ -327,6 +327,8 @@ data class AdsConfigDto(
     @SerializedName("interstitial_id")     val interstitialId: String = "",
     @SerializedName("rewarded_id")         val rewardedId: String = "",
     @SerializedName("native_id")           val nativeId: String = "",
+    @SerializedName("app_open_id")         val appOpenId: String = "",
+    @SerializedName("vast_tag_url")        val vastTagUrl: String = "",
     @SerializedName("mediation_provider")  val mediationProvider: String = "max",
     val placements: AdPlacementsDto = AdPlacementsDto(),
     val frequency: AdFrequencyDto = AdFrequencyDto(),

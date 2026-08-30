@@ -163,13 +163,13 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
             popExitTransition   = { fadeOut(tween(200)) + scaleOut(tween(200), 0.96f) },
         ) {
             composable(Route.Browse.path)    { BrowseScreen(nav, adEngine, browseVm, browseListState) }
-            composable(Route.Explore.path)   { ExploreScreen(nav) }
+            composable(Route.Explore.path)   { ExploreScreen(nav, adEngine) }
             composable(Route.Shorts.path)    { ShortsScreen(nav, adEngine, shortsVm) }
-            composable(Route.Downloads.path)       { FilesScreen(nav) }
+            composable(Route.Downloads.path)       { FilesScreen(nav, adEngine) }
             composable(Route.DownloadsActive.path) { com.axio.reelz.ui.screens.files.ActiveFilesScreen(nav) }
             composable(Route.Transfer.path)  { TransferScreen(nav) }
             composable(Route.Profile.path)   { ProfileScreen(nav) }
-            composable(Route.Search.path)    { SearchScreen(nav) }
+            composable(Route.Search.path)    { SearchScreen(nav, adEngine) }
             composable(Route.Premium.path)   { PremiumScreen(nav) }
             composable(Route.Settings.path)  { com.axio.reelz.ui.screens.settings.SettingsScreen(nav) }
             composable("settings_storage")   { com.axio.reelz.ui.screens.settings.StorageUsageScreen(nav) }

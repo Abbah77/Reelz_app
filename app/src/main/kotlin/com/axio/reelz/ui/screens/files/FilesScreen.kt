@@ -329,7 +329,7 @@ private fun DownloadOptionsSheet(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
+fun FilesScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = null, vm: DownloadsViewModel = hiltViewModel()) {
     val d               = LocalDimensions.current
     val ctx             = LocalContext.current
     val movieGroups     by vm.movieGroups.collectAsState()
@@ -386,7 +386,13 @@ fun FilesScreen(nav: NavController, vm: DownloadsViewModel = hiltViewModel()) {
                     )
                 }
 
-                if (isEmpty && activeDownloads.isEmpty()) { item { EmptyDownloadsState() } }
+                if (isEmpty && activeDownloads.isEmpty()) {
+                    item { EmptyDownloadsState() }
+                    // Banner ad — shown when no active downloads (non-intrusive placement)
+                    adEngine?.let { engine ->
+                        item { com.axio.reelz.ads.FilesScreenBanner(engine) }
+                    }
+                }
                 else if (isEmpty) { item { LibraryPendingState() } }
 
                 if (showMovies && movieGroups.isNotEmpty()) {

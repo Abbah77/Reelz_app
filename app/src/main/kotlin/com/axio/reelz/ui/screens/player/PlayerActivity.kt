@@ -59,7 +59,9 @@ import com.google.ads.interactivemedia.v3.api.ImaSdkSettings
 import com.google.ads.interactivemedia.v3.api.player.VideoAdPlayer
 import com.google.ads.interactivemedia.v3.api.player.VideoProgressUpdate
 import com.axio.reelz.ads.AdEngine
-import com.axio.reelz.ads.ImaPreRollView
+import com.axio.reelz.ads.PlayerVideoAd
+import com.axio.reelz.ads.VideoAdType
+import com.axio.reelz.ads.VastTagProvider
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.ui.components.*
 import com.axio.reelz.ui.theme.*
@@ -733,13 +735,19 @@ fun PlayerScreen(
             }
         }
 
-        // ── IMA Pre-roll ad overlay ───────────────────────────────────────
+        // ── Video ad overlay — pre/mid/post roll ─────────────────────────
+        // Renders over the player surface; IMA handles the actual ad video.
+        // Silent on failure: onError() always calls preRollCompleted() so
+        // playback is never blocked regardless of ad SDK state.
         if (ui.isPreRollPlaying && ui.preRollVastUrl != null) {
-            ImaPreRollView(
-                vastUrl         = ui.preRollVastUrl!!,
-                onAdCompleted   = { vm.preRollCompleted() },
-                onAdError       = { vm.preRollCompleted() },
-                modifier        = Modifier.fillMaxSize(),
+            PlayerVideoAd(
+                vastUrl     = ui.preRollVastUrl!!,
+                adType      = VideoAdType.PRE_ROLL,
+                config      = com.axio.reelz.data.dto.AdPrerollConfig(),
+                onCompleted = { vm.preRollCompleted() },
+                onSkipped   = { vm.preRollCompleted() },
+                onError     = { vm.preRollCompleted() },
+                modifier    = Modifier.fillMaxSize(),
             )
         }
 
