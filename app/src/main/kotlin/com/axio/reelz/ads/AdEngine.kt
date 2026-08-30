@@ -323,6 +323,17 @@ class AdEngine @Inject constructor(
         return nativeAdUnitId().takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Returns true if a native inline card ad should be injected into the feed row
+     * at [rowIndex]. Ads are shown every 3rd section row (rows 2, 5, 8, …) when
+     * native ads are enabled, ensuring a non-intrusive density.
+     */
+    fun shouldShowCardAdAtRow(rowIndex: Int): Boolean {
+        if (!adsEnabled() || !ads().placements.nativeEnabled) return false
+        if (nativeAdUnitId().isBlank()) return false
+        return rowIndex > 0 && rowIndex % 3 == 2
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Native ad loader (on-demand, fresh per placement)
     // ─────────────────────────────────────────────────────────────────────────

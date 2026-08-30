@@ -100,7 +100,7 @@ private fun NativeAdCardContent(
             Text(
                 text       = ad.headline,
                 color      = White,
-                fontSize   = d.textMd + 1.sp,
+                fontSize   = (d.textMd.value + 1f).sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines   = 1,
                 overflow   = TextOverflow.Ellipsis,
