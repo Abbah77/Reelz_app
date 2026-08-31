@@ -2,6 +2,7 @@ package com.axio.reelz.ui.screens.player
 
 import android.app.Activity
 import android.app.PictureInPictureParams
+import android.content.Intent
 import android.content.Context
 import android.media.AudioManager
 import android.os.Build
@@ -17,6 +18,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.*
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,6 +31,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
@@ -408,6 +411,15 @@ class PlayerActivity : ComponentActivity() {
     // ── Automatic PiP: triggered when user presses Home or switches apps ──────
     // Section 3: only enter PiP if global toggle is ON and playing.
     // Back button does NOT trigger this path.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // singleTop: Android delivers a new Intent to the existing instance instead of
+        // recreating the Activity. This is exactly what happens when the user taps the
+        // PiP floating window — we simply ignore the re-delivery because the VM and
+        // ExoPlayer are still alive and playing. No restart, no state loss.
+        setIntent(intent)
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (vm.shouldAutoPip()) {
@@ -514,9 +526,12 @@ private enum class GestureType { NONE, VOLUME, BRIGHTNESS, SEEK }
 // ─────────────────────────────────────────────────────────────────────────────
 
 private enum class DrawerWidthTier(val fraction: Float) {
-    COMPACT(0.30f),   // Speed / Quality — narrow, just enough for labels
-    STANDARD(0.36f),  // Settings
-    WIDE(0.42f),      // Subtitles — needs a bit more for search + language names
+    // Width values derived relative to base fractions — no hardcoded dp.
+    // Device screen width comes from LocalConfiguration.current.screenWidthDp in PlayerSideDrawer.
+    SPEED(0.15f),     // Speed: 50% narrower than old COMPACT (0.30 * 0.50 = 0.15)
+    COMPACT(0.21f),   // Quality: 30% narrower (0.30 * 0.70 = 0.21)
+    STANDARD(0.36f),  // Settings: unchanged
+    WIDE(0.315f),     // Subtitles: 25% narrower (0.42 * 0.75 = 0.315)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -569,6 +584,18 @@ fun PlayerScreen(
     var gestureValue     by remember { mutableStateOf(0f) }
     var gestureAnchorPos by remember { mutableStateOf(0f) }
     val gestureVisible   by remember { derivedStateOf { gestureType != GestureType.NONE } }
+
+    // ── Double-tap seek state ─────────────────────────────────────────────
+    var doubleTapSeekDir  by remember { mutableStateOf(0) }  // -1=back, +1=fwd, 0=none
+    var doubleTapCount    by remember { mutableStateOf(0) }  // number of taps accumulated
+    val doubleTapAlpha    by animateFloatAsState(if (doubleTapSeekDir != 0) 1f else 0f, tween(120), label = "dtAlpha")
+    LaunchedEffect(doubleTapSeekDir, doubleTapCount) {
+        if (doubleTapSeekDir != 0) {
+            delay(700)
+            doubleTapSeekDir = 0
+            doubleTapCount   = 0
+        }
+    }
 
     val audioManager = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val maxVolume    = remember { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat() }
@@ -672,17 +699,31 @@ fun PlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .then(gestureModifier)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
-                // Taps inside PiP mode should exit PiP and open settings (Bug 2)
-                if (ui.isPipActive) {
-                    vm.onPipModeChanged(false)
-                    vm.openSettingsDrawer()
-                    return@clickable
-                }
-                if (!ui.isLocked && !ui.showSubtitleDrawer &&
-                    !ui.isSpeedDrawerOpen && !ui.isQualityDrawerOpen && !ui.isSettingsDrawerOpen
-                ) vm.toggleControls()
-                else if (ui.showSubtitleDrawer) vm.closeSubtitleDrawer()
+            .pointerInput(ui.isLocked, ui.isPipActive, ui.showSubtitleDrawer,
+                          ui.isSpeedDrawerOpen, ui.isQualityDrawerOpen, ui.isSettingsDrawerOpen) {
+                detectTapGestures(
+                    onTap = {
+                        if (ui.isPipActive) {
+                            vm.onPipModeChanged(false)
+                            vm.openSettingsDrawer()
+                            return@detectTapGestures
+                        }
+                        if (!ui.isLocked && !ui.showSubtitleDrawer &&
+                            !ui.isSpeedDrawerOpen && !ui.isQualityDrawerOpen && !ui.isSettingsDrawerOpen
+                        ) vm.toggleControls()
+                        else if (ui.showSubtitleDrawer) vm.closeSubtitleDrawer()
+                    },
+                    onDoubleTap = { offset ->
+                        if (ui.isLocked || ui.isPipActive) return@detectTapGestures
+                        val screenW = size.width.toFloat()
+                        val seekDir  = if (offset.x < screenW / 2f) -1 else 1
+                        val seekMs   = 10_000L * seekDir
+                        vm.seekTo((vm.exoPlayer?.currentPosition ?: 0L) + seekMs)
+                        // Accumulate double-tap count for same direction
+                        if (doubleTapSeekDir == seekDir) doubleTapCount++
+                        else { doubleTapSeekDir = seekDir; doubleTapCount = 1 }
+                    },
+                )
             }
     ) {
         // ── Video surface ─────────────────────────────────────────────────
@@ -811,6 +852,85 @@ fun PlayerScreen(
                             BrandButton("Retry", onClick = { vm.retry() })
                         }
                     }
+                }
+            }
+        }
+
+        // ── Network stall spinner — shown mid-playback without pausing/hiding controls ──
+        // Unlike Buffering state (initial load), this fires only when the player
+        // stalls WHILE already playing. User did NOT pause intentionally.
+        AnimatedVisibility(
+            visible = ui.isNetworkStalling && ui.state is PlayerState.Playing,
+            enter   = fadeIn(tween(300)),
+            exit    = fadeOut(tween(600)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            Box(
+                Modifier
+                    .size(d.avatarLg)
+                    .clip(CircleShape)
+                    .background(Color(0xAA000000))
+                    .border(d.borderThin, GlassBorderMd, CircleShape),
+                Alignment.Center,
+            ) {
+                CinematicSpinner(size = d.spinnerMd)
+            }
+        }
+
+        // ── Double-tap seek feedback — modern ripple effect ──────────────────
+        if (doubleTapAlpha > 0f) {
+            val isForward = doubleTapSeekDir > 0
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .alpha(doubleTapAlpha),
+            ) {
+                // Semi-circle glow on the tapped side
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.42f)
+                        .align(if (isForward) Alignment.CenterEnd else Alignment.CenterStart)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = if (isForward)
+                                    listOf(Color.Transparent, Brand.copy(.18f))
+                                else
+                                    listOf(Brand.copy(.18f), Color.Transparent),
+                            )
+                        )
+                )
+                // Label: "+10s" or "−10s" × tap count
+                val label = if (isForward) "+${doubleTapCount * 10}s" else "−${doubleTapCount * 10}s"
+                Column(
+                    Modifier
+                        .align(if (isForward) Alignment.CenterEnd else Alignment.CenterStart)
+                        .padding(horizontal = d.spaceXl + d.spaceMd),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(d.spaceXxs),
+                ) {
+                    // Animated chevrons  >>>  or  <<<
+                    Row(horizontalArrangement = Arrangement.spacedBy((-d.spaceMd + d.spaceXxs))) {
+                        repeat(3) { i ->
+                            val chevAlpha by animateFloatAsState(
+                                if (doubleTapSeekDir != 0) (1f - i * 0.28f) else 0f,
+                                tween(80, delayMillis = i * 40), label = "chev$i"
+                            )
+                            Text(
+                                if (isForward) "›" else "‹",
+                                color = White.copy(alpha = chevAlpha),
+                                fontSize = (d.textXxl.value + 4f).sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                    Text(
+                        label,
+                        color      = White,
+                        fontSize   = d.textSm,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.3.sp,
+                    )
                 }
             }
         }
@@ -1152,99 +1272,113 @@ private fun MinimalSeekBar(
 ) {
     val d        = LocalDimensions.current
     val density  = LocalDensity.current
-    val progress = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-    val buffered = (bufferedMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    val progress = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    val buffered = if (durationMs > 0) (bufferedMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
 
-    // Animate thumb visibility: only reveal it while the user is dragging
-    var isDragging by remember { mutableStateOf(false) }
-    val thumbAlpha by animateFloatAsState(
-        targetValue   = if (isDragging) 1f else 0f,
-        animationSpec = tween(150),
-        label         = "thumbAlpha"
+    var isDragging     by remember { mutableStateOf(false) }
+    var dragFraction   by remember { mutableStateOf(progress) }
+
+    // Keep dragFraction in sync when not dragging
+    LaunchedEffect(progress, isDragging) { if (!isDragging) dragFraction = progress }
+
+    // Track height expands slightly while dragging — MX Player style
+    val trackH by animateDpAsState(
+        targetValue   = if (isDragging) d.progressBarHeight * 1.9f else d.progressBarHeight,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 600f),
+        label         = "trackH",
     )
-    val trackHeightPx = with(density) { d.progressBarHeight.toPx() }
-    val touchTargetPx = with(density) { 28.dp.toPx() } // invisible touch target taller than the line
+    // Scrubber (thumb) — always visible, grows on drag
+    val thumbSize by animateDpAsState(
+        targetValue   = if (isDragging) d.spaceMd + d.spaceSm else d.spaceMd - d.spaceXxs,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 500f),
+        label         = "thumbSz",
+    )
+    val thumbGlowAlpha by animateFloatAsState(if (isDragging) 0.25f else 0f, tween(180), "thumbGlow")
 
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(0.dp),
-    ) {
-        // ── Time labels ───────────────────────────────────────────────────
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                formatMs(positionMs),
-                color      = White60,
-                fontSize   = d.textXs,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                formatMs(durationMs),
-                color      = White40,
-                fontSize   = d.textXs,
-                fontWeight = FontWeight.Normal,
-            )
+    // Scrub-time label — show elapsed time under thumb while dragging
+    val scrubLabel = if (isDragging) formatMs((dragFraction * durationMs).toLong()) else null
+
+    val touchTargetPx = with(density) { 36.dp.toPx() }
+
+    Column(Modifier.fillMaxWidth()) {
+        // ── Time labels ────────────────────────────────────────────────────────
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(formatMs(positionMs), color = White60, fontSize = d.textXs, fontWeight = FontWeight.Medium)
+            if (scrubLabel != null) {
+                Text(scrubLabel, color = Brand, fontSize = d.textXs, fontWeight = FontWeight.SemiBold)
+            }
+            Text(formatMs(durationMs), color = White40, fontSize = d.textXs)
         }
 
         Spacer(Modifier.height(d.spaceXs))
 
-        // ── Progress track + invisible drag target ─────────────────────────
+        // ── Track + scrubber ──────────────────────────────────────────────────
         Box(
             Modifier
                 .fillMaxWidth()
-                // tall invisible touch area so swipes register easily
                 .height(with(density) { touchTargetPx.toDp() })
                 .pointerInput(durationMs) {
                     detectHorizontalDragGestures(
-                        onDragStart = { isDragging = true },
-                        onDragEnd   = { isDragging = false },
+                        onDragStart = { offset ->
+                            isDragging = true
+                            dragFraction = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        },
+                        onDragEnd   = {
+                            onSeek((dragFraction * durationMs).toLong())
+                            isDragging = false
+                        },
                         onDragCancel = { isDragging = false },
                         onHorizontalDrag = { change, _ ->
                             change.consume()
-                            val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                            onSeek((fraction * durationMs).toLong())
-                        }
+                            dragFraction = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        },
                     )
                 },
             contentAlignment = Alignment.CenterStart,
         ) {
-            // Track background
+            // Background track
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(d.progressBarHeight)
+                    .height(trackH)
                     .align(Alignment.Center)
-                    .clip(RoundedCornerShape(d.spaceXxs))
-                    .background(White.copy(alpha = 0.12f))
+                    .clip(RoundedCornerShape(trackH / 2))
+                    .background(White.copy(alpha = 0.14f))
             ) {
                 // Buffered layer
+                Box(Modifier.fillMaxWidth(buffered).fillMaxHeight().background(White.copy(.25f)))
+                // Played layer — brand gradient (uses dragFraction when scrubbing for live preview)
                 Box(
                     Modifier
-                        .fillMaxWidth(buffered)
-                        .fillMaxHeight()
-                        .background(White.copy(alpha = 0.22f))
-                )
-                // Played layer — brand gradient
-                Box(
-                    Modifier
-                        .fillMaxWidth(progress)
+                        .fillMaxWidth(if (isDragging) dragFraction else progress)
                         .fillMaxHeight()
                         .background(Brush.horizontalGradient(listOf(Brand, Brand2)))
                 )
             }
 
-            // Thumb dot — appears on drag
-            Box(
-                Modifier
-                    .fillMaxWidth(progress)
-                    .wrapContentWidth(Alignment.End)
-                    .size(d.spaceMd + d.spaceXxs)
-                    .graphicsLayer { alpha = thumbAlpha }
-                    .clip(CircleShape)
-                    .background(Brand2)
-            )
+            // Scrubber dot — always rendered, aligned to played position
+            val displayFraction = if (isDragging) dragFraction else progress
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                Box(Modifier.fillMaxWidth(displayFraction), contentAlignment = Alignment.CenterEnd) {
+                    // Glow halo (only while dragging)
+                    if (thumbGlowAlpha > 0f) {
+                        Box(
+                            Modifier
+                                .size(thumbSize * 2.4f)
+                                .clip(CircleShape)
+                                .background(Brand.copy(thumbGlowAlpha))
+                        )
+                    }
+                    // Thumb dot
+                    Box(
+                        Modifier
+                            .size(thumbSize)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .border((d.progressBarHeight / 2).coerceAtMost(2.dp), Brand, CircleShape)
+                    )
+                }
+            }
         }
     }
 }
@@ -1489,7 +1623,7 @@ private fun SubtitleDrawer(
     ) {
         Box(
             Modifier
-                .fillMaxWidth(DrawerWidthTier.WIDE.fraction)  // adaptive — set via DrawerWidthTier enum
+                .fillMaxWidth(DrawerWidthTier.WIDE.fraction)
                 .fillMaxHeight()
                 .align(Alignment.CenterEnd)
                 .offset(x = offsetX)
@@ -1888,23 +2022,30 @@ private fun SubtitleRow(
 @Composable
 private fun SubtitleTogglePill(enabled: Boolean) {
     val d = LocalDimensions.current
-    val trackColor  by animateColorAsState(if (enabled) Brand else GlassBorderMd, label = "track")
-    val thumbTravel = d.spaceXl - d.spaceSm
-    val thumbOffset by animateDpAsState(if (enabled) thumbTravel else 0.dp, label = "thumb")
-    val trackW = d.spaceXxl - d.spaceXs
-    val trackH = d.spaceLg
-    val thumbSz = trackH - d.spaceSm
+    // Proper pill toggle — track is proportional to d.spaceLg, thumb fills height minus 2*d.spaceXxs
+    // Sizes computed from dimension tokens so it adapts across devices
+    val trackH  = d.spaceLg + d.spaceXxs        // track height
+    val trackW  = trackH * 1.9f                  // track width = 1.9× height (standard toggle ratio)
+    val thumbSz = trackH - d.spaceXs             // thumb slightly smaller than track height
+    val travel  = trackW - thumbSz - d.spaceXxs  // how far thumb travels
+
+    val trackBg  by animateColorAsState(if (enabled) Brand.copy(.9f) else Color(0xFF3A3A3C), label = "trackBg")
+    val thumbOff by animateDpAsState(if (enabled) travel else d.spaceXxs / 2, animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f), label = "thumb")
+
     Box(
-        Modifier.width(trackW).height(trackH)
+        Modifier
+            .width(trackW)
+            .height(trackH)
             .clip(RoundedCornerShape(trackH / 2))
-            .background(trackColor.copy(alpha = 0.35f))
-            .border(d.borderThin, trackColor, RoundedCornerShape(trackH / 2))
+            .background(trackBg)
     ) {
         Box(
-            Modifier.size(thumbSz)
-                .offset(x = d.spaceXs + thumbOffset, y = d.spaceXs)
+            Modifier
+                .size(thumbSz)
+                .offset(x = thumbOff, y = (trackH - thumbSz) / 2)
                 .clip(CircleShape)
-                .background(if (enabled) Brand else White40)
+                .background(Color.White)
+                .shadow(2.dp, CircleShape),
         )
     }
 }

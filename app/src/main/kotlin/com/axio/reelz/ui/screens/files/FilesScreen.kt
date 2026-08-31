@@ -959,11 +959,12 @@ fun MovieGroupCard(
                 .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
         )
 
-        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
+        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.CenterVertically) {
+            // Slim poster — same proportional thumb used in ActiveDownloadCard
             Box(
                 Modifier
                     .width(d.avatarMd + d.spaceXxs + 2.dp)
-                    .aspectRatio(2f / 3f)
+                    .height(d.avatarLg + d.spaceXxs)
                     .clip(RoundedCornerShape(d.radiusSm + 2.dp))
                     .background(BgRaised)
                     .clickable { onPlay(primary) }
@@ -1001,14 +1002,14 @@ fun MovieGroupCard(
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         primary.title,
                         color      = White,
                         fontSize   = d.textMd,
                         fontWeight = FontWeight.Bold,
-                        maxLines   = 2,
+                        maxLines   = 1,
                         overflow   = TextOverflow.Ellipsis,
                         modifier   = Modifier.weight(1f),
                     )
@@ -1023,60 +1024,46 @@ fun MovieGroupCard(
                     ) { Text("⋮", color = White60, fontSize = d.textMd) }
                 }
 
-                Spacer(Modifier.height(d.spaceXs))
-                if (group.totalSize > 0) {
-                    Text(formatSize(group.totalSize), color = White40, fontSize = d.textXs)
-                }
-                Spacer(Modifier.height(d.spaceXs))
-                MultiQualityBadges(doneDownloads.map { it.quality })
-                Spacer(Modifier.height(d.spaceSm))
-
-                if (group.completedAt > 0) {
-                    val daysAgo = ((System.currentTimeMillis() - group.completedAt) / 86_400_000L).toInt()
-                    Text(
-                        when (daysAgo) {
-                            0    -> "Downloaded today"
-                            1    -> "Downloaded yesterday"
-                            else -> "Downloaded $daysAgo days ago"
-                        },
-                        color = White20, fontSize = (d.textXxs.value + 1f).sp,
-                    )
-                }
-
-                Spacer(Modifier.height(d.spaceSm))
-                Text(
-                    when {
-                        hasProgress -> {
-                            val pct = (watchFraction * 100).toInt()
-                            if (pct >= 95) "Watched" else "$pct% watched"
+                Spacer(Modifier.height(d.spaceXxs))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        if (group.totalSize > 0) {
+                            Text(formatSize(group.totalSize), color = White40, fontSize = d.textXs)
                         }
-                        group.lastPlayedAt > 0 -> {
-                            val daysAgo = ((System.currentTimeMillis() - group.lastPlayedAt) / 86_400_000L).toInt()
-                            "Last played: ${when (daysAgo) { 0 -> "today"; 1 -> "yesterday"; else -> "$daysAgo days ago" }}"
-                        }
-                        else -> "Not opened"
-                    },
-                    color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
-                    fontSize   = (d.textXxs.value + 1f).sp,
-                    fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
-                )
-
-                Spacer(Modifier.height(d.spaceMd))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        MultiQualityBadges(doneDownloads.map { it.quality })
+                        Spacer(Modifier.height(d.spaceXxs))
+                        Text(
+                            when {
+                                hasProgress -> {
+                                    val pct = (watchFraction * 100).toInt()
+                                    if (pct >= 95) "Watched" else "$pct% watched"
+                                }
+                                group.lastPlayedAt > 0 -> "Played recently"
+                                else -> "Not opened"
+                            },
+                            color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
+                            fontSize   = (d.textXxs.value + 1f).sp,
+                            fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(d.radiusPill))
                             .background(Brand.copy(.15f))
                             .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
                             .clickable { onPlay(primary) }
-                            .padding(horizontal = d.spaceLg, vertical = d.spaceSm),
+                            .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 2.dp),
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
                         ) {
-                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm))
-                            Text("Play", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
+                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm - 1.dp))
+                            Text("Play", color = Brand, fontSize = d.textXs, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1140,11 +1127,12 @@ fun SeriesRootCard(
             .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
             .clickable(onClick = onTap)
     ) {
-        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
+        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.CenterVertically) {
+            // Slim poster — same height as ActiveDownloadCard
             Box(
                 Modifier
                     .width(d.avatarMd + d.spaceXxs + 2.dp)
-                    .aspectRatio(2f / 3f)
+                    .height(d.avatarLg + d.spaceXxs)
                     .clip(RoundedCornerShape(d.radiusSm + 2.dp))
                     .background(BgRaised)
             ) {
@@ -1176,14 +1164,14 @@ fun SeriesRootCard(
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         group.title,
                         color      = White,
                         fontSize   = d.textMd,
                         fontWeight = FontWeight.Bold,
-                        maxLines   = 2,
+                        maxLines   = 1,
                         overflow   = TextOverflow.Ellipsis,
                         modifier   = Modifier.weight(1f),
                     )
@@ -1198,38 +1186,39 @@ fun SeriesRootCard(
                     ) { Text("⋮", color = White60, fontSize = d.textMd) }
                 }
 
-                Spacer(Modifier.height(d.spaceXs))
-                Text("${group.doneEpisodes} Episodes ready", color = White40, fontSize = d.textXs)
                 Spacer(Modifier.height(d.spaceXxs))
-                Text("${group.seasonCount} Season${if (group.seasonCount > 1) "s" else ""}", color = White40, fontSize = d.textXs)
-                Spacer(Modifier.height(d.spaceXs))
-
-                if (group.lastWatchedLabel != null) {
-                    Text("Last watched ${group.lastWatchedLabel}", color = White40, fontSize = (d.textXxs.value + 1f).sp)
-                    Spacer(Modifier.height(d.spaceXs))
-                }
-
-                if (group.totalSize > 0) {
-                    Text(formatSize(group.totalSize), color = White40, fontSize = d.textXs)
-                    Spacer(Modifier.height(d.spaceXs))
-                }
-
-                Spacer(Modifier.height(d.spaceMd))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            buildString {
+                                append("${group.doneEpisodes} ep · ${group.seasonCount} season${if (group.seasonCount > 1) "s" else ""}")
+                                if (group.totalSize > 0) append(" · ${formatSize(group.totalSize)}")
+                            },
+                            color = White40, fontSize = d.textXs,
+                        )
+                        if (group.lastWatchedLabel != null) {
+                            Spacer(Modifier.height(d.spaceXxs))
+                            Text("Last: ${group.lastWatchedLabel}", color = White40, fontSize = (d.textXxs.value + 1f).sp)
+                        }
+                    }
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(d.radiusPill))
                             .background(Brand.copy(.15f))
                             .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
                             .clickable(onClick = onPlay)
-                            .padding(horizontal = d.spaceLg, vertical = d.spaceSm),
+                            .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 2.dp),
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
                         ) {
-                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm))
-                            Text("Play", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
+                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm - 1.dp))
+                            Text("Play", color = Brand, fontSize = d.textXs, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1297,11 +1286,12 @@ fun EpisodeGroupCard(
             )
         }
 
-        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.Top) {
+        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.CenterVertically) {
+            // 16:9 thumbnail — same slim height as all other cards
             Box(
                 Modifier
                     .width(d.avatarMd + d.spaceXxs + 2.dp)
-                    .aspectRatio(16f / 9f)
+                    .height(d.avatarLg + d.spaceXxs)
                     .clip(RoundedCornerShape(d.radiusSm + 2.dp))
                     .background(BgRaised)
                     .clickable { onPlay(primary) }
@@ -1337,18 +1327,17 @@ fun EpisodeGroupCard(
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "Episode ${eg.episode}${if (eg.episodeName.isNotBlank()) " · ${eg.episodeName}" else ""}",
-                            color      = White,
-                            fontSize   = d.textSm,
-                            fontWeight = FontWeight.Bold,
-                            maxLines   = 2,
-                            overflow   = TextOverflow.Ellipsis,
-                        )
-                    }
+                    Text(
+                        "E${eg.episode}${if (eg.episodeName.isNotBlank()) " · ${eg.episodeName}" else ""}",
+                        color      = White,
+                        fontSize   = d.textSm,
+                        fontWeight = FontWeight.Bold,
+                        maxLines   = 1,
+                        overflow   = TextOverflow.Ellipsis,
+                        modifier   = Modifier.weight(1f),
+                    )
                     Spacer(Modifier.width(d.spaceXs))
                     Box(
                         Modifier
@@ -1360,60 +1349,51 @@ fun EpisodeGroupCard(
                     ) { Text("⋮", color = White60, fontSize = d.textMd) }
                 }
 
-                Spacer(Modifier.height(d.spaceXs))
-                if (eg.totalSize > 0) {
-                    Text(formatSize(eg.totalSize), color = White40, fontSize = d.textXs)
-                    Spacer(Modifier.height(d.spaceXxs))
-                }
-                MultiQualityBadges(doneDownloads.map { it.quality })
-                Spacer(Modifier.height(d.spaceSm))
-
-                if (primary.completedAt > 0) {
-                    val daysAgo = ((System.currentTimeMillis() - primary.completedAt) / 86_400_000L).toInt()
-                    Text(
-                        when (daysAgo) {
-                            0    -> "Downloaded today"
-                            1    -> "Downloaded yesterday"
-                            else -> "Downloaded $daysAgo days ago"
-                        },
-                        color = White20, fontSize = (d.textXxs.value + 1f).sp,
-                    )
-                    Spacer(Modifier.height(d.spaceXxs))
-                }
-
-                Text(
-                    when {
-                        hasProgress -> {
-                            val pct = (watchFraction * 100).toInt()
-                            if (pct >= 95) "Watched" else "$pct% watched"
+                Spacer(Modifier.height(d.spaceXxs))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+                        ) {
+                            if (eg.totalSize > 0) {
+                                Text(formatSize(eg.totalSize), color = White40, fontSize = d.textXs)
+                            }
+                            MultiQualityBadges(doneDownloads.map { it.quality })
                         }
-                        eg.lastPlayedAt > 0 -> {
-                            val daysAgo = ((System.currentTimeMillis() - eg.lastPlayedAt) / 86_400_000L).toInt()
-                            "Last played: ${when (daysAgo) { 0 -> "today"; 1 -> "yesterday"; else -> "$daysAgo days ago" }}"
-                        }
-                        else -> "Not opened"
-                    },
-                    color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
-                    fontSize   = (d.textXxs.value + 1f).sp,
-                    fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
-                )
-
-                Spacer(Modifier.height(d.spaceMd))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        Spacer(Modifier.height(d.spaceXxs))
+                        Text(
+                            when {
+                                hasProgress -> {
+                                    val pct = (watchFraction * 100).toInt()
+                                    if (pct >= 95) "Watched" else "$pct% watched"
+                                }
+                                eg.lastPlayedAt > 0 -> "Played recently"
+                                else -> "Not opened"
+                            },
+                            color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
+                            fontSize   = (d.textXxs.value + 1f).sp,
+                            fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(d.radiusPill))
                             .background(Brand.copy(.15f))
                             .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
                             .clickable { onPlay(primary) }
-                            .padding(horizontal = d.spaceLg, vertical = d.spaceSm),
+                            .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 2.dp),
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXs),
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
                         ) {
-                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm))
-                            Text("Play", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold)
+                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm - 1.dp))
+                            Text("Play", color = Brand, fontSize = d.textXs, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

@@ -99,6 +99,7 @@ import com.google.zxing.common.HybridBinarizer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
@@ -276,7 +277,7 @@ class TransferViewModel @Inject constructor(
                 sizeBytes = dl.sizeBytes,
                 // BUG3 FIX: carry metadata so receiver shows poster/title card
                 title     = dl.title,
-                posterUrl = dl.posterUrl,
+                posterUrl = dl.posterUrl ?: "",
                 mediaType = dl.mediaType,
                 season    = dl.season,
                 episode   = dl.episode,

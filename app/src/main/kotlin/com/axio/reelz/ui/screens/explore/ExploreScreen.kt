@@ -270,23 +270,26 @@ class ExploreViewModel @Inject constructor(
                 }
                 // All retries exhausted
                 if (cacheMore.isNotEmpty()) {
-                    // Show what cache gave us, swallow TMDB error silently
+                    // Show what cache gave us; don't mark hasMore=false so user can retry on next scroll
                     _ui.update {
                         it.copy(
                             results       = (it.results + cacheMore)
                                 .associateBy<Media, String> { item -> item.id }.values.toList(),
                             isLoading     = false,
                             isLoadingMore = false,
-                            hasMore       = false,
+                            hasMore       = true,  // allow retry — we don't know if TMDB has more
                         )
                     }
                 } else {
-                    // Nothing to show at all — show a dismissable error, no crash
+                    // Network/TMDB failure with no cache — reset isLoadingMore but keep hasMore
+                    // intact so scroll-to-bottom will retry next time. Only set hasMore=false when
+                    // the backend explicitly returns an empty page (handled above in the success path).
                     _ui.update {
                         it.copy(
                             isLoading     = false,
                             isLoadingMore = false,
-                            error         = friendlyExploreError(lastException!!),
+                            // Don't set error for pagination failures — it replaces the whole screen
+                            // error = friendlyExploreError(lastException!!),
                         )
                     }
                 }
@@ -534,8 +537,12 @@ fun ExploreScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = n
                 val gridState = rememberLazyGridState()
                 LaunchedEffect(gridState, ui.results.size) {
                     snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+                        .distinctUntilChanged()
                         .collect { lastVisible ->
-                            if (lastVisible >= ui.results.size - 6) vm.loadMore()
+                            if (lastVisible >= ui.results.size - 6 && !ui.isLoadingMore && ui.hasMore) {
+                                delay(200)
+                                if (!ui.isLoadingMore && ui.hasMore) vm.loadMore()
+                            }
                         }
                 }
                 LazyVerticalGrid(

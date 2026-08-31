@@ -70,8 +70,9 @@
 
         <activity
             android:name=".ui.screens.player.PlayerActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|pictureInPictureMode"
             android:exported="false"
+            android:launchMode="singleTop"
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.Reelz.Player"
             android:supportsPictureInPicture="true" />

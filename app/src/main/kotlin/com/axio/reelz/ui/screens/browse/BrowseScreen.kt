@@ -290,7 +290,9 @@ class BrowseViewModel @Inject constructor(
                     }
                 }
                 else -> {
-                    isInfiniteExhausted = true
+                    // Network or server error — do NOT mark as exhausted.
+                    // The next time the user scrolls near the bottom it will retry.
+                    // Only mark exhausted when the backend explicitly returns no more items.
                     _ui.update { it.copy(isLoadingMore = false) }
                 }
             }
@@ -387,14 +389,30 @@ fun BrowseScreen(
             val info  = listState.layoutInfo
             val total = info.totalItemsCount
             if (total == 0) false
-            else { val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0; lastVisible >= total - 8 }
+            else {
+                val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                lastVisible >= total - 8
+            }
         }
     }
 
-    LaunchedEffect(shouldLoadMore, ui.isLoadingMore, ui.isGenreLoading) {
+    // Debounced effect — waits 200ms after scroll settles before firing to avoid rapid duplicate calls
+    LaunchedEffect(shouldLoadMore) {
         if (shouldLoadMore && !ui.isLoadingMore && !ui.isGenreLoading) {
-            if (ui.selectedGenreId != null) { /* genre pagination handled separately */ }
-            else viewModel.loadMoreInfinite()
+            delay(200)
+            if (shouldLoadMore && !ui.isLoadingMore && !ui.isGenreLoading) {
+                if (ui.selectedGenreId != null) { /* genre pagination handled separately */ }
+                else viewModel.loadMoreInfinite()
+            }
+        }
+    }
+
+    // Secondary trigger: fire whenever feedRows count changes and we're still near the bottom
+    // This catches the case where content was just added but the user hasn't scrolled yet
+    LaunchedEffect(ui.feedRows.size, ui.isLoadingMore) {
+        if (!ui.isLoadingMore && ui.feedRows.isNotEmpty() && shouldLoadMore && ui.selectedGenreId == null) {
+            delay(400)
+            if (!ui.isLoadingMore && shouldLoadMore) viewModel.loadMoreInfinite()
         }
     }
 

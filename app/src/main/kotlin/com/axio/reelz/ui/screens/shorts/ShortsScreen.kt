@@ -91,7 +91,7 @@ private const val LOAD_MORE_THRESHOLD = 5
 private const val BUFFER_SPINNER_DELAY_MS = 800L
 
 // 300 MB disk cache — scrolling back to a seen video is instant, zero network.
-private const val SHORTS_CACHE_MAX_BYTES = 300L * 1024 * 1024
+private const val SHORTS_CACHE_MAX_BYTES = 150L * 1024 * 1024  // 150 MB — large enough for smooth scrolling, small enough to avoid forever-stale content
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Disk cache singleton (must be process-wide — Media3 throws if opened twice)
@@ -99,12 +99,27 @@ private const val SHORTS_CACHE_MAX_BYTES = 300L * 1024 * 1024
 
 private object ShortsDiskCache {
     @Volatile private var instance: SimpleCache? = null
+
     fun get(context: Context): SimpleCache = instance ?: synchronized(this) {
-        instance ?: SimpleCache(
-            File(context.cacheDir, "shorts_media_cache"),
+        instance ?: build(context).also { instance = it }
+    }
+
+    private fun build(context: Context): SimpleCache {
+        val dir = File(context.cacheDir, "shorts_media_cache")
+        return SimpleCache(
+            dir,
             LeastRecentlyUsedCacheEvictor(SHORTS_CACHE_MAX_BYTES),
             StandaloneDatabaseProvider(context),
-        ).also { instance = it }
+        )
+    }
+
+    /** Call on app foreground to release stale instance if cache dir was cleared. */
+    fun releaseIfStale() {
+        synchronized(this) {
+            val current = instance ?: return
+            if (!current.isClosed) return
+            instance = null
+        }
     }
 }
 
@@ -263,12 +278,29 @@ class ShortsViewModel @Inject constructor(
         if (!append) _ui.update { it.copy(discLoading = true, error = null) }
         else         _ui.update { it.copy(discLoadingMore = true) }
         viewModelScope.launch {
-            val filtered = if (category?.source == null) _ui.value.forYouVideos
-                           else _ui.value.forYouVideos.filter { it.source == category.source }
+            // If forYou hasn't loaded yet, kick it off and wait
+            val baseVideos = if (_ui.value.forYouVideos.isEmpty()) {
+                // Trigger forYou fetch if not already in flight
+                if (!_ui.value.forYouLoading) loadForYou()
+                // Wait until forYou is done (up to 10s)
+                val deadline = System.currentTimeMillis() + 10_000L
+                while (_ui.value.forYouLoading && System.currentTimeMillis() < deadline) {
+                    delay(100)
+                }
+                _ui.value.forYouVideos
+            } else {
+                _ui.value.forYouVideos
+            }
+
+            val filtered = if (category?.source == null) baseVideos
+                           else baseVideos.filter { it.source == category.source }
+
             if (!append) _ui.update { it.copy(
                 discVideos  = filtered,
                 discLoading = false,
-                error       = if (filtered.isEmpty()) "No videos in \"${category?.label ?: "All"}\"" else null,
+                error       = if (filtered.isEmpty() && baseVideos.isNotEmpty())
+                                  "No videos in \"${category?.label ?: "All"}\""
+                              else null,
             )}
             else _ui.update { it.copy(discVideos = it.discVideos + filtered, discLoadingMore = false) }
         }
@@ -511,8 +543,6 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     }
 
     var isMuted    by remember { mutableStateOf(false) }
-    var showSearch by remember { mutableStateOf(false) }
-    var searchText by remember { mutableStateOf("") }
 
     // ── Build flat item list, filtering dead videos ──────────────────────────
     val rawItems by remember(ui.feedMode, ui.forYouVideos, ui.discVideos, deadIds) {
@@ -557,13 +587,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     }
 
     LaunchedEffect(isMuted)      { pool.setMuted(isMuted) }
-    LaunchedEffect(showSearch) {
-        if (showSearch) pool.pauseActive()
-        else {
-            val v = (rawItems.getOrNull(currentPage) as? ShortsItem.Video)?.video
-            if (v != null) pool.activate(rawItems, currentPage, LOOKAHEAD_PAGES, v, isMuted)
-        }
-    }
+
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
 
@@ -581,7 +605,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             else -> VerticalPager(
                 state                   = pagerState,
                 modifier                = Modifier.fillMaxSize(),
-                userScrollEnabled       = !showSearch,
+                userScrollEnabled       = true,
                 beyondViewportPageCount = LOOKAHEAD_PAGES,
                 key = { idx -> (rawItems.getOrNull(idx) as? ShortsItem.Video)?.video?.id ?: "ad_$idx" },
                 // TikTok-grade fling physics:
@@ -611,76 +635,16 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
             }
         }
 
-        // ── Top overlay ──────────────────────────────────────────────────────
+        // ── Top overlay: feed toggle (TikTok-style centered) + discovery chips ─
         Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = d.spaceSm)) {
 
-            AnimatedVisibility(
-                visible = showSearch,
-                enter = fadeIn(tween(180)) + slideInVertically(tween(200)) { -it },
-                exit  = fadeOut(tween(140)) + slideOutVertically(tween(160)) { -it },
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = d.spaceLg, vertical = d.spaceSm),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
-                ) {
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(Color(0xCC000000))
-                            .border(1.dp, GlassBorderMd, RoundedCornerShape(24.dp))
-                            .padding(horizontal = d.screenHorizPad, vertical = d.spaceMd),
-                    ) {
-                        if (searchText.isEmpty()) Text("Search videos…", color = White40, fontSize = d.textMd)
-                        androidx.compose.foundation.text.BasicTextField(
-                            value         = searchText,
-                            onValueChange = { searchText = it },
-                            textStyle     = androidx.compose.ui.text.TextStyle(color = White, fontSize = d.textMd),
-                            singleLine    = true,
-                            modifier      = Modifier.fillMaxWidth(),
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                imeAction = androidx.compose.ui.text.input.ImeAction.Search
-                            ),
-                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                                onSearch = { vm.search(searchText); showSearch = false }
-                            ),
-                        )
-                    }
-                    Box(
-                        Modifier
-                            .size(d.avatarSm + d.spaceSm).clip(CircleShape).background(GlassMd)
-                            .clickable { showSearch = false; searchText = "" },
-                        Alignment.Center,
-                    ) { Icon(IconClose, null, tint = White, modifier = Modifier.size(d.iconMd - 2.dp)) }
-                }
-            }
-
-            AnimatedVisibility(visible = !showSearch, enter = fadeIn(tween(160)), exit = fadeOut(tween(120))) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    Box(
-                        Modifier
-                            .padding(start = d.screenHorizPad)
-                            .size(d.avatarSm + d.spaceXs)
-                            .clip(CircleShape)
-                            .background(Color(0x88000000))
-                            .border(d.borderThin, GlassBorderMd, CircleShape)
-                            .clickable { showSearch = true },
-                        Alignment.Center,
-                    ) { Icon(IconSearch, null, tint = White, modifier = Modifier.size(d.iconMd - 4.dp)) }
-                    Spacer(Modifier.weight(1f))
-                    FeedToggle(feedMode = ui.feedMode, onSwitch = { vm.switchMode(it) })
-                    Spacer(Modifier.weight(1f))
-                    Spacer(Modifier.size(d.iconXl).padding(end = d.screenHorizPad))
-                }
+            // FeedToggle — centered exactly as TikTok, no search button
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                FeedToggle(feedMode = ui.feedMode, onSwitch = { vm.switchMode(it) })
             }
 
             AnimatedVisibility(
-                visible = !showSearch && ui.feedMode == FeedMode.DISCOVERY,
+                visible = ui.feedMode == FeedMode.DISCOVERY,
                 enter   = fadeIn(tween(200)) + expandVertically(tween(220)),
                 exit    = fadeOut(tween(150)) + shrinkVertically(tween(170)),
             ) {
@@ -944,7 +908,8 @@ fun ShortVideoPage(
         Column(
             Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = d.screenHorizPad, bottom = d.spaceXxl * 3),
+                .navigationBarsPadding()
+                .padding(end = d.screenHorizPad, bottom = d.spaceXxl + d.spaceLg),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(d.spaceXl - d.spaceXxs),
         ) {
@@ -954,11 +919,16 @@ fun ShortVideoPage(
             TikTokAction(icon = if (isMuted) IconVolumeOff else IconVolumeOn, tint = if (isMuted) Color(0xFFFF9A00) else Color.White, locked = false, onClick = onMute)
         }
 
-        // ── Bottom-left: title + source ──────────────────────────────────────
+        // ── Bottom-left metadata: title + source (TikTok exact positioning) ──
         Column(
             Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = d.screenHorizPad, end = d.avatarLg + d.spaceLg, bottom = d.spaceXxl * 3),
+                .navigationBarsPadding()
+                .padding(
+                    start  = d.screenHorizPad,
+                    end    = d.avatarLg + d.spaceXl,   // leave room for action rail
+                    bottom = d.spaceXxl + d.spaceLg,   // consistent with action rail
+                ),
             verticalArrangement = Arrangement.spacedBy(d.spaceXxs),
         ) {
             if (!video.source.isNullOrBlank()) {
@@ -985,7 +955,10 @@ fun ShortVideoPage(
 
         // ── Thin progress bar — TikTok-style scrub indicator ────────────────
         if (isActive && activePlayer != null) {
-            VideoProgressBar(player = activePlayer, modifier = Modifier.align(Alignment.BottomCenter))
+            VideoProgressBar(
+                player   = activePlayer,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+            )
         }
     }
 }

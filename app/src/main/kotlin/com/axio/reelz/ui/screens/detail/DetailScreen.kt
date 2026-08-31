@@ -175,6 +175,13 @@ class DetailViewModel @Inject constructor(
          * instead of IconDownloadCloud on the episode/movie download button.
          */
         val downloadedKeys: Set<String> = emptySet(),
+        /**
+         * Non-null when a network/internal error occurred fetching download links.
+         * Null when backend explicitly returned an empty list (true "no streams").
+         * This distinction drives the sheet's error message — only a backend-confirmed
+         * empty list should say "no downloadable streams found".
+         */
+        val downloadFetchError: String? = null,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -322,6 +329,7 @@ class DetailViewModel @Inject constructor(
                 alreadyDownloadedQualities  = emptySet(),
                 isResolvingQualities        = true,
                 downloadEnqueued            = false,
+                downloadFetchError          = null,
                 pendingDownloadSeason       = season,
                 pendingDownloadEpisode      = episode,
                 pendingDownloadTitle        = episodeTitle.ifBlank { detail.title },
@@ -344,29 +352,49 @@ class DetailViewModel @Inject constructor(
                 id = id, mediaType = mediaType,
                 season = season, episode = episode,
             )
-            val links = (dlResult as? com.axio.reelz.core.network.NetworkResult.Success)?.data
-            if (!links.isNullOrEmpty()) {
-                // Convert DownloadLink → QualityTrack for the download picker UI.
-                // Render exactly what the backend sends — no filtering, no inference.
-                val tracks = links.map { l ->
-                    QualityTrack(label = l.label, url = l.url, estimatedSizeBytes = l.sizeBytes)
+            when (dlResult) {
+                is com.axio.reelz.core.network.NetworkResult.Success -> {
+                    val links = dlResult.data
+                    if (!links.isNullOrEmpty()) {
+                        // Convert DownloadLink → QualityTrack for the download picker UI.
+                        // Render exactly what the backend sends — no filtering, no inference.
+                        val tracks = links.map { l ->
+                            QualityTrack(label = l.label, url = l.url, estimatedSizeBytes = l.sizeBytes)
+                        }
+                        val linkTypeMap = links.associate { it.url to it.type }
+                        preResolvedLinkTypes.clear()
+                        preResolvedLinkTypes.putAll(linkTypeMap)
+                        _ui.update {
+                            it.copy(
+                                downloadQualities    = tracks,
+                                downloadLinks        = links,
+                                isResolvingQualities = false,
+                                downloadFetchError   = null,
+                            )
+                        }
+                    } else {
+                        // Backend explicitly said there are no streams — the only case
+                        // where we should tell the user "no streams found".
+                        _ui.update {
+                            it.copy(
+                                downloadQualities    = emptyList(),
+                                isResolvingQualities = false,
+                                downloadFetchError   = null, // null = backend confirmed empty
+                            )
+                        }
+                    }
                 }
-                val linkTypeMap = links.associate { it.url to it.type }
-                preResolvedLinkTypes.clear()
-                preResolvedLinkTypes.putAll(linkTypeMap)
-                _ui.update {
-                    it.copy(
-                        downloadQualities    = tracks,
-                        downloadLinks        = links,
-                        isResolvingQualities = false,
-                    )
-                }
-            } else {
-                _ui.update {
-                    it.copy(
-                        downloadQualities    = emptyList(),
-                        isResolvingQualities = false,
-                    )
+                else -> {
+                    // Network error, timeout, or internal failure — NOT a "no streams" message.
+                    // The user should retry; we don't know if streams exist.
+                    val errMsg = (dlResult as? com.axio.reelz.core.network.NetworkResult.Error)?.message
+                    _ui.update {
+                        it.copy(
+                            downloadQualities    = emptyList(),
+                            isResolvingQualities = false,
+                            downloadFetchError   = errMsg ?: "Something went wrong. Please try again.",
+                        )
+                    }
                 }
             }
         }
@@ -513,6 +541,7 @@ fun DetailScreen(
                 title              = ui.pendingDownloadTitle,
                 qualities          = ui.downloadQualities,
                 isLoading          = ui.isResolvingQualities,
+                fetchError         = ui.downloadFetchError,
                 enqueued           = ui.downloadEnqueued,
                 maxResolutionHeight = ui.maxDownloadResolutionHeight,
                 alreadyDownloadedQualities = ui.alreadyDownloadedQualities,
@@ -566,6 +595,13 @@ fun DownloadQualitySheet(
     title: String,
     qualities: List<QualityTrack>,
     isLoading: Boolean,
+    /**
+     * Non-null = a network/internal error occurred. Null = either still loading
+     * or backend responded (with or without streams).
+     * Only when fetchError == null AND qualities.isEmpty() AND !isLoading do we
+     * say "no downloadable streams found" — because the backend confirmed it.
+     */
+    fetchError: String? = null,
     enqueued: Boolean,
     onDismiss: () -> Unit,
     onSelectQuality: (QualityTrack) -> Unit,
@@ -661,7 +697,27 @@ fun DownloadQualitySheet(
                     Spacer(Modifier.height(d.spaceLg))
                 }
 
-                // ── No streams ─────────────────────────────────────────────────
+                // ── Network / internal error — never say "no streams found" ───
+                !showList && fetchError != null -> {
+                    Spacer(Modifier.height(d.spaceSm + 1.dp))
+                    Icon(IconError, null, tint = Warning, modifier = Modifier.size(d.spinnerMd + 6.dp))
+                    Spacer(Modifier.height(d.spaceMd))
+                    Text("Couldn't load download options", color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(d.spaceXs))
+                    Text(
+                        "This might be a network issue. Please check your connection and try again.",
+                        color = White60, fontSize = d.textSm,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        lineHeight = (d.textSm.value * 1.5f).sp,
+                    )
+                    Spacer(Modifier.height(d.spaceLg))
+                    BrandButton("Retry", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(d.spaceSm))
+                }
+
+                // ── Backend confirmed no streams ────────────────────────────────
+                // Only shown when isResolvingQualities = false AND fetchError = null
+                // AND qualities is empty — meaning backend explicitly returned []
                 !showList -> {
                     Spacer(Modifier.height(d.spaceSm + 1.dp))
                     Icon(IconError, null, tint = White40, modifier = Modifier.size(d.spinnerMd + 6.dp))

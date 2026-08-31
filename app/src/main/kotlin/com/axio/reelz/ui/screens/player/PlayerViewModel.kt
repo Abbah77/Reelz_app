@@ -100,6 +100,13 @@ data class PlayerUiState(
     val selectedSubtitle: String               = "Off",
     val preRollVastUrl: String?                = null,
     val isPreRollPlaying: Boolean              = false,
+    /**
+     * True when the player is buffering WHILE already playing (network stall).
+     * Unlike PlayerState.Buffering (which covers initial load), this specifically
+     * indicates mid-playback stalling so the UI can show a non-intrusive spinner
+     * without pausing or hiding controls — the user did NOT pause intentionally.
+     */
+    val isNetworkStalling: Boolean             = false,
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -628,16 +635,33 @@ class PlayerViewModel @Inject constructor(
                 p.addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
                         when (state) {
-                            Player.STATE_BUFFERING -> _ui.update { it.copy(state = PlayerState.Buffering) }
-                            Player.STATE_READY     -> _ui.update { it.copy(
-                                state = if (p.playWhenReady) PlayerState.Playing else PlayerState.Paused,
-                                durationMs = p.duration.coerceAtLeast(0)) }
-                            Player.STATE_ENDED     -> _ui.update { it.copy(state = PlayerState.Idle) }
+                            Player.STATE_BUFFERING -> {
+                                // If we were already playing, this is a mid-playback network stall —
+                                // don't switch to Buffering state (which hides controls) but instead
+                                // set isNetworkStalling so the UI can show a non-intrusive spinner.
+                                val wasPlaying = _ui.value.state is PlayerState.Playing
+                                if (wasPlaying) {
+                                    _ui.update { it.copy(isNetworkStalling = true) }
+                                } else {
+                                    _ui.update { it.copy(state = PlayerState.Buffering, isNetworkStalling = false) }
+                                }
+                            }
+                            Player.STATE_READY -> {
+                                _ui.update { it.copy(
+                                    state = if (p.playWhenReady) PlayerState.Playing else PlayerState.Paused,
+                                    durationMs = p.duration.coerceAtLeast(0),
+                                    isNetworkStalling = false,
+                                ) }
+                            }
+                            Player.STATE_ENDED -> _ui.update { it.copy(state = PlayerState.Idle, isNetworkStalling = false) }
                             else -> {}
                         }
                     }
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
-                        _ui.update { it.copy(state = if (isPlaying) PlayerState.Playing else PlayerState.Paused) }
+                        _ui.update { it.copy(
+                            state = if (isPlaying) PlayerState.Playing else PlayerState.Paused,
+                            isNetworkStalling = if (isPlaying) false else _ui.value.isNetworkStalling,
+                        ) }
                     }
                     override fun onPlayerError(error: PlaybackException) { handleError(error) }
                     override fun onTracksChanged(tracks: Tracks) {

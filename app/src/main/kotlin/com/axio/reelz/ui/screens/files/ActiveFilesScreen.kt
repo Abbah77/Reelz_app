@@ -229,19 +229,16 @@ private fun ActiveDownloadCard(
     val animPct by animateFloatAsState(pct.coerceIn(0f, 1f), label = "active-pct-${item.id}")
     val pctInt = (pct * 100).toInt()
 
-    // Human-readable size text
+    // Human-readable size text — always show bytes (never segment counts)
     val sizeText = when {
         isQueued -> "Queued"
         isError  -> "Download failed"
-        item.totalSegments > 0 ->
-            // HLS: show segment count as size proxy until sizeBytes is set
-            if (item.sizeBytes > 0)
-                "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
-            else
-                "${item.segmentsDone} / ${item.totalSegments} segments"
         item.sizeBytes > 0 ->
-            // MP4 byte-based
+            // Both HLS and MP4: show downloaded/total in MB or GB
             "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
+        item.downloadedBytes > 0 ->
+            // Total unknown (HLS with no size info yet) — show only downloaded
+            "${formatSize(item.downloadedBytes)} downloaded"
         else -> if (isPaused) "Paused" else ""
     }
 
