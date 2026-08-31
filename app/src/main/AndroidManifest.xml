@@ -70,7 +70,7 @@
 
         <activity
             android:name=".ui.screens.player.PlayerActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|pictureInPictureMode"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
             android:exported="false"
             android:launchMode="singleTop"
             android:screenOrientation="sensorLandscape"
