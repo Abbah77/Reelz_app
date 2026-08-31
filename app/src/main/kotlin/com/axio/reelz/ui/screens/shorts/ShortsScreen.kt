@@ -116,8 +116,8 @@ private object ShortsDiskCache {
     /** Call on app foreground to release stale instance if cache dir was cleared. */
     fun releaseIfStale() {
         synchronized(this) {
-            val current = instance ?: return
-            if (!current.isClosed) return
+            // SimpleCache doesn't expose isClosed; just release and let get() rebuild if needed.
+            try { instance?.release() } catch (_: Exception) {}
             instance = null
         }
     }

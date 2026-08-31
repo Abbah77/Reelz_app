@@ -31,6 +31,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -1293,7 +1294,7 @@ private fun MinimalSeekBar(
         animationSpec = spring(dampingRatio = 0.55f, stiffness = 500f),
         label         = "thumbSz",
     )
-    val thumbGlowAlpha by animateFloatAsState(if (isDragging) 0.25f else 0f, tween(180), "thumbGlow")
+    val thumbGlowAlpha by animateFloatAsState(if (isDragging) 0.25f else 0f, tween(180), label = "thumbGlow")
 
     // Scrub-time label — show elapsed time under thumb while dragging
     val scrubLabel = if (isDragging) formatMs((dragFraction * durationMs).toLong()) else null
