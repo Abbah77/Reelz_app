@@ -56,15 +56,9 @@ import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ads.ShortsNativeAdPage
 import com.axio.reelz.data.model.ShortVideo
 import com.axio.reelz.ui.components.CinematicSpinner
-import com.axio.reelz.ui.components.IconBookmark
-import com.axio.reelz.ui.components.IconBookmarkFilled
-import com.axio.reelz.ui.components.IconComment
-import com.axio.reelz.ui.components.IconHeart
-import com.axio.reelz.ui.components.IconHeartFilled
-import com.axio.reelz.ui.components.IconLock
-import com.axio.reelz.ui.components.IconSearch
 import com.axio.reelz.ui.components.IconVolumeOff
 import com.axio.reelz.ui.components.IconVolumeOn
+import com.axio.reelz.ui.components.IconSearch
 import com.axio.reelz.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -477,6 +471,114 @@ private val IconPause: ImageVector get() = ImageVector.Builder("Pause", 24.dp, 2
     }
 }.build()
 
+// ── "Unavailable" action icons from composables.com ──────────────────────────
+// Used to show that Like, Comment, and Bookmark are not yet available.
+// They are displayed as static pictures — no click logic, no badge.
+
+private var _IconHeartOff: ImageVector? = null
+private val IconHeartOff: ImageVector get() {
+    if (_IconHeartOff != null) return _IconHeartOff!!
+    _IconHeartOff = ImageVector.Builder("heart-off", 24.dp, 24.dp, 24f, 24f).apply {
+        path(fill = SolidColor(Color.Transparent), stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(10.5f, 4.893f)
+            arcToRelative(5.5f, 5.5f, 0f, false, true, 1.091f, 0.931f)
+            arcToRelative(0.56f, 0.56f, 0f, false, false, 0.818f, 0f)
+            arcTo(5.49f, 5.49f, 0f, false, true, 22f, 9.5f)
+            curveToRelative(0f, 1.872f, -1.002f, 3.356f, -2.187f, 4.655f)
+        }
+        path(fill = SolidColor(Color.Transparent), stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(16.967f, 16.967f)
+            lineToRelative(-3.459f, 3.346f)
+            arcToRelative(2f, 2f, 0f, false, true, -3f, 0.019f)
+            lineTo(5f, 15f)
+            curveToRelative(-1.5f, -1.5f, -3f, -3.2f, -3f, -5.5f)
+            arcToRelative(5.5f, 5.5f, 0f, false, true, 2.747f, -4.761f)
+        }
+        path(fill = SolidColor(Color.Transparent), stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(2f, 2f); lineToRelative(20f, 20f)
+        }
+    }.build()
+    return _IconHeartOff!!
+}
+
+private var _IconCommentOff: ImageVector? = null
+private val IconCommentOff: ImageVector get() {
+    if (_IconCommentOff != null) return _IconCommentOff!!
+    _IconCommentOff = ImageVector.Builder("message-square-off", 24.dp, 24.dp, 24f, 24f).apply {
+        path(fill = SolidColor(Color.Transparent), stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(19f, 19f)
+            horizontalLineTo(6.828f)
+            arcToRelative(2f, 2f, 0f, false, false, -1.414f, 0.586f)
+            lineToRelative(-2.202f, 2.202f)
+            arcTo(0.7f, 0.7f, 0f, false, true, 2f, 21.286f)
+            verticalLineTo(5f)
+            arcToRelative(2f, 2f, 0f, false, true, 1.184f, -1.826f)
+        }
+        path(fill = SolidColor(Color.Transparent), stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(2f, 2f); lineToRelative(20f, 20f)
+        }
+        path(fill = SolidColor(Color.Transparent), stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+            moveTo(8.656f, 3f)
+            horizontalLineTo(20f)
+            arcToRelative(2f, 2f, 0f, false, true, 2f, 2f)
+            verticalLineToRelative(11.344f)
+        }
+    }.build()
+    return _IconCommentOff!!
+}
+
+private var _IconBookmarkOff: ImageVector? = null
+private val IconBookmarkOff: ImageVector get() {
+    if (_IconBookmarkOff != null) return _IconBookmarkOff!!
+    _IconBookmarkOff = ImageVector.Builder("bookmark-off", 24.dp, 24.dp, 24f, 24f).apply {
+        path(fill = SolidColor(Color.White)) {
+            moveTo(3.28034f, 2.21968f)
+            curveTo(2.98745f, 1.92678f, 2.51257f, 1.92677f, 2.21968f, 2.21966f)
+            curveTo(1.92678f, 2.51255f, 1.92677f, 2.98743f, 2.21966f, 3.28032f)
+            lineTo(5.00752f, 6.06823f)
+            curveTo(5.00423f, 6.12813f, 5.00256f, 6.18846f, 5.00256f, 6.24918f)
+            verticalLineTo(21.2451f)
+            curveTo(5.00256f, 21.8563f, 5.69444f, 22.2109f, 6.19058f, 21.8539f)
+            lineTo(12.0018f, 17.673f)
+            lineTo(17.8129f, 21.8539f)
+            curveTo(18.3091f, 22.2109f, 19.001f, 21.8563f, 19.001f, 21.2451f)
+            verticalLineTo(20.062f)
+            lineTo(20.7194f, 21.7805f)
+            curveTo(21.0123f, 22.0734f, 21.4872f, 22.0734f, 21.7801f, 21.7805f)
+            curveTo(22.073f, 21.4876f, 22.073f, 21.0127f, 21.7801f, 20.7198f)
+            lineTo(3.28034f, 2.21968f)
+            close()
+            moveTo(17.501f, 18.5619f)
+            verticalLineTo(19.7816f)
+            lineTo(12.4398f, 16.1402f)
+            curveTo(12.1781f, 15.952f, 11.8254f, 15.952f, 11.5637f, 16.1402f)
+            lineTo(6.50256f, 19.7816f)
+            verticalLineTo(7.56331f)
+            lineTo(17.501f, 18.5619f)
+            close()
+            moveTo(17.501f, 6.24918f)
+            verticalLineTo(14.3192f)
+            lineTo(19.001f, 15.8192f)
+            verticalLineTo(6.24918f)
+            curveTo(19.001f, 4.45426f, 17.5459f, 2.99918f, 15.751f, 2.99918f)
+            horizontalLineTo(8.25256f)
+            curveTo(7.65756f, 2.99918f, 7.0999f, 3.15908f, 6.62021f, 3.43824f)
+            lineTo(7.75336f, 4.57142f)
+            curveTo(7.91155f, 4.52442f, 8.07911f, 4.49918f, 8.25256f, 4.49918f)
+            horizontalLineTo(15.751f)
+            curveTo(16.7175f, 4.49918f, 17.501f, 5.28269f, 17.501f, 6.24918f)
+            close()
+        }
+    }.build()
+    return _IconBookmarkOff!!
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Feed toggle  (TikTok "Following / For You" style)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -621,9 +723,7 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                         isActive     = page == pagerState.currentPage,
                         isMuted      = isMuted,
                         isLiked      = item.video.id in liked,
-                        isSaved      = item.video.id in saved,
                         onLike       = { vm.toggleLike(item.video.id) },
-                        onSave       = { vm.toggleSave(item.video.id) },
                         onMute       = { isMuted = !isMuted },
                         onPauseToggle = {
                             if (pool.activePlayer.isPlaying) pool.pauseActive()
@@ -716,9 +816,7 @@ fun ShortVideoPage(
     isActive: Boolean,
     isMuted: Boolean,
     isLiked: Boolean,
-    isSaved: Boolean,
     onLike: () -> Unit,
-    onSave: () -> Unit,
     onMute: () -> Unit,
     onPauseToggle: () -> Unit,
 ) {
@@ -908,29 +1006,51 @@ fun ShortVideoPage(
         Column(
             Modifier
                 .align(Alignment.BottomEnd)
-                .navigationBarsPadding()
                 .padding(end = d.screenHorizPad, bottom = d.spaceXxl + d.spaceLg),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(d.spaceXl - d.spaceXxs),
         ) {
-            TikTokAction(icon = if (isLiked) IconHeartFilled else IconHeart, tint = if (isLiked) Color(0xFFFF2D55) else Color.White, locked = false, onClick = onLike)
-            TikTokAction(icon = IconComment,       tint = Color.White, locked = true, onClick = {})
-            TikTokAction(icon = if (isSaved) IconBookmarkFilled else IconBookmark, tint = if (isSaved) Color(0xFF0A84FF) else Color.White, locked = false, onClick = onSave)
+            // Like — unavailable, shown as static "heart-off" picture
+            Icon(
+                IconHeartOff,
+                contentDescription = null,
+                tint     = Color.White.copy(alpha = 0.55f),
+                modifier = Modifier
+                    .size(d.avatarSm)
+                    .padding(d.spaceXxs),
+            )
+            // Comment — unavailable, shown as static "message-square-off" picture
+            Icon(
+                IconCommentOff,
+                contentDescription = null,
+                tint     = Color.White.copy(alpha = 0.55f),
+                modifier = Modifier
+                    .size(d.avatarSm)
+                    .padding(d.spaceXxs),
+            )
+            // Bookmark — unavailable, shown as static "bookmark-off" picture
+            Icon(
+                IconBookmarkOff,
+                contentDescription = null,
+                tint     = Color.White.copy(alpha = 0.55f),
+                modifier = Modifier
+                    .size(d.avatarSm)
+                    .padding(d.spaceXxs),
+            )
+            // Mute/unmute — fully functional, unchanged
             TikTokAction(icon = if (isMuted) IconVolumeOff else IconVolumeOn, tint = if (isMuted) Color(0xFFFF9A00) else Color.White, locked = false, onClick = onMute)
         }
 
         // ── Bottom-left metadata: title + source ─────────────────────────────
-        // Sits just above the progress bar (which itself sits above the nav bar).
-        // We use windowInsetsPadding for the nav bar so the text stays the same
-        // distance above the bar on every screen density — no hardcoded dp values.
+        // Scaffold already pads the content area by the nav bar height, so no
+        // extra inset padding needed here — just sit above the 2dp progress bar.
         Column(
             Modifier
                 .align(Alignment.BottomStart)
-                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.navigationBars)
                 .padding(
                     start  = d.screenHorizPad,
-                    end    = d.avatarLg + d.spaceXl + d.screenHorizPad, // room for action rail
-                    bottom = d.spaceXxl + d.spaceLg + 2.dp,              // sit above the 2dp bar
+                    end    = d.avatarLg + d.spaceXl + d.screenHorizPad,
+                    bottom = d.spaceXxl + d.spaceLg + 2.dp,
                 ),
             verticalArrangement = Arrangement.spacedBy(d.spaceXxs),
         ) {
@@ -986,13 +1106,13 @@ private fun VideoProgressBar(player: ExoPlayer, modifier: Modifier = Modifier) {
         }
     }
 
-    // navigationBarsPadding() applies a bottom padding equal to the nav bar height.
-    // By NOT applying it here, the 2dp bar sits at the very bottom of the screen
-    // content area — i.e. directly on top of the navigation bar, TikTok-style.
+    // TikTok places the bar at the very bottom edge of the video — the bar's
+    // bottom edge touches the top line of the tab bar, zero gap.
+    // The parent Box is edge-to-edge (no inset padding), so aligning to
+    // BottomCenter with no extra modifier here places the bar exactly there.
     Box(
         modifier
             .fillMaxWidth()
-            .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.navigationBars)
             .height(2.dp)
             .background(Color.White.copy(alpha = 0.25f))
     ) {
@@ -1006,7 +1126,7 @@ private fun VideoProgressBar(player: ExoPlayer, modifier: Modifier = Modifier) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Action button
+// Action button — used only for mute/unmute
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -1015,39 +1135,17 @@ private fun TikTokAction(icon: ImageVector, tint: Color, locked: Boolean, onClic
     var pressed by remember { mutableStateOf(false) }
     val scale   by animateFloatAsState(if (pressed) 1.25f else 1f, spring(0.4f, 700f), label = "s")
 
-    Box(modifier = Modifier.size(d.avatarSm + d.spaceMd), contentAlignment = Alignment.Center) {
-        Icon(
-            icon, null,
-            tint = if (locked) tint.copy(alpha = 0.4f) else tint,
-            modifier = Modifier
-                .size(d.avatarSm)
-                .scale(scale)
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
-                    pressed = true; onClick()
-                },
-        )
-        if (locked) {
-            // Modern "Coming Soon" badge — small pill with a flag-style appearance
-            // so users immediately understand this feature is unavailable yet.
-            Box(
-                Modifier
-                    .align(Alignment.BottomEnd)
-                    .clip(RoundedCornerShape(50))
-                    .background(Color(0xDD1A1A2E))
-                    .border(0.5.dp, Color(0xFF5B7FFF).copy(alpha = 0.6f), RoundedCornerShape(50))
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "Soon",
-                    color      = Color(0xFF8BAEFF),
-                    fontSize   = 6.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.3.sp,
-                )
-            }
-        }
-    }
+    Icon(
+        icon, null,
+        tint = tint,
+        modifier = Modifier
+            .size(d.avatarSm)
+            .scale(scale)
+            .padding(d.spaceXxs)
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                pressed = true; onClick()
+            },
+    )
     LaunchedEffect(pressed) { if (pressed) { delay(200); pressed = false } }
 }
 
