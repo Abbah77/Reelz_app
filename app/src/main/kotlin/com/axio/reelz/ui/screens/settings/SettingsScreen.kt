@@ -169,7 +169,6 @@ private val termsSections = listOf(
     LegalSection("8", "Advertising", "8.1 Advertising on Free Tier\n\nUsers who do not subscribe to Premium may be shown advertisements (\"Ads\") within the Service. Ads may be served by third-party advertising partners (\"Ad Partners\") and may be targeted based on non-personally identifiable information.\n\n8.2 Ad Partner Terms\n\nAd Partners may collect and process information in accordance with their own privacy policies and terms of service. We encourage you to review the privacy policies of our Ad Partners. We are not responsible for the content, accuracy, or practices of any Ad Partners.\n\n8.3 Changes to Advertising\n\nWe reserve the right to change advertising providers, methods, formats, frequency, and targeting criteria at any time without notice. We do not guarantee the absence of Ads for any user, including Premium subscribers, in contexts where Ads are not covered by the Premium subscription (e.g., Third-Party Content that includes its own advertising)."),
     LegalSection("9", "Disclaimers and Limitations of Liability", "9.1 Disclaimer of Warranties\n\nTO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SERVICE IS PROVIDED ON AN \"AS IS,\" \"AS AVAILABLE,\" AND \"WITH ALL FAULTS\" BASIS. WE EXPRESSLY DISCLAIM ALL WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, QUIET ENJOYMENT, ACCURACY, NON-INFRINGEMENT, AND ANY WARRANTIES ARISING OUT OF COURSE OF DEALING, USAGE, OR TRADE PRACTICE.\n\nWITHOUT LIMITING THE FOREGOING, WE DO NOT WARRANT THAT: (A) THE SERVICE WILL MEET YOUR REQUIREMENTS; (B) THE SERVICE WILL BE UNINTERRUPTED, TIMELY, SECURE, OR ERROR-FREE; (C) THE RESULTS THAT MAY BE OBTAINED FROM THE USE OF THE SERVICE WILL BE ACCURATE, RELIABLE, OR COMPLETE; (D) THE QUALITY OF ANY PRODUCTS, SERVICES, INFORMATION, OR OTHER MATERIAL OBTAINED THROUGH THE SERVICE WILL MEET YOUR EXPECTATIONS; OR (E) ANY ERRORS IN THE SERVICE WILL BE CORRECTED.\n\n9.2 Limitation of Liability\n\nTO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL AXIO STUDIO, ITS AFFILIATES, LICENSORS, SERVICE PROVIDERS, EMPLOYEES, AGENTS, OFFICERS, OR DIRECTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO: LOSS OF PROFITS, LOSS OF REVENUE, LOSS OF DATA, LOSS OF GOODWILL, BUSINESS INTERRUPTION, COMPUTER FAILURE OR MALFUNCTION, OR ANY OTHER INTANGIBLE LOSSES, ARISING OUT OF OR RELATING TO YOUR ACCESS TO, USE OF, OR INABILITY TO USE THE SERVICE, WHETHER BASED ON WARRANTY, CONTRACT, TORT (INCLUDING NEGLIGENCE), STATUTE, OR ANY OTHER LEGAL THEORY, AND WHETHER OR NOT WE HAVE BEEN INFORMED OF THE POSSIBILITY OF SUCH DAMAGE.\n\n9.3 Cap on Liability\n\nNOTWITHSTANDING ANYTHING TO THE CONTRARY IN THESE TERMS, OUR TOTAL LIABILITY TO YOU FOR ALL CLAIMS ARISING OUT OF OR RELATING TO THESE TERMS OR THE SERVICE, WHETHER IN CONTRACT, TORT, OR OTHERWISE, SHALL NOT EXCEED THE GREATER OF: (A) THE AMOUNT YOU HAVE PAID TO US FOR THE SERVICE IN THE TWELVE (12) MONTHS PRIOR TO THE EVENT GIVING RISE TO LIABILITY; OR (B) ONE HUNDRED UNITED STATES DOLLARS (US$100.00).\n\n9.4 Exclusions\n\nSOME JURISDICTIONS DO NOT ALLOW THE EXCLUSION OR LIMITATION OF CERTAIN WARRANTIES OR LIABILITIES. ACCORDINGLY, SOME OF THE ABOVE LIMITATIONS MAY NOT APPLY TO YOU. IN SUCH CASES, OUR LIABILITY WILL BE LIMITED TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW."),
     LegalSection("10", "Indemnification", "You agree to defend, indemnify, and hold harmless Axio Studio, its affiliates, licensors, service providers, employees, agents, officers, and directors from and against any and all claims, liabilities, damages, judgments, awards, losses, costs, expenses, or fees (including reasonable attorneys' fees) arising out of or relating to: (a) your violation of these Terms; (b) your use of the Service; (c) your violation of any third-party rights, including intellectual property rights or privacy rights; or (d) your violation of any applicable law, regulation, or convention."),
-    LegalSection("11", "Governing Law and Dispute Resolution", "11.1 Governing Law\n\nThese Terms and any dispute arising out of or relating to these Terms or the Service shall be governed by and construed in accordance with the laws of the Federal Republic of Nigeria, without regard to its conflict of law principles. However, if you are a consumer residing in a jurisdiction that mandates the application of local consumer protection laws, such laws shall apply to the extent required and shall not be displaced by this choice of law provision.\n\n11.2 Informal Dispute Resolution\n\nBefore filing any formal legal proceeding, you agree to attempt to resolve any dispute informally by contacting us at axio.founder@gmail.com with the subject line \"REELZ DISPUTE.\" We will make good faith efforts to resolve the dispute within sixty (60) days of receiving your notice.\n\n11.3 Arbitration Agreement\n\nAny dispute, controversy, or claim arising out of or relating to these Terms or the Service, including the formation, interpretation, breach, termination, or validity thereof, shall be finally resolved by binding arbitration administered by the Lagos Court of Arbitration (\"LCA\") in accordance with its Arbitration Rules. The seat of arbitration shall be Lagos, Nigeria. The language of arbitration shall be English. The arbitral tribunal shall consist of one (1) arbitrator. The award of the arbitral tribunal shall be final and binding on the parties.\n\n11.4 Class Action Waiver\n\nYOU AGREE THAT ANY PROCEEDINGS, WHETHER IN ARBITRATION OR COURT, WILL BE CONDUCTED ONLY ON AN INDIVIDUAL BASIS AND NOT IN A CLASS, CONSOLIDATED, OR REPRESENTATIVE ACTION. YOU WAIVE ANY RIGHT TO PARTICIPATE IN A CLASS ACTION AGAINST AXIO STUDIO. If a court or arbitrator determines that this class action waiver is unenforceable, the arbitration agreement in Section 11.3 shall be void as to that dispute.\n\n11.5 Exceptions to Arbitration\n\nNotwithstanding the arbitration agreement in Section 11.3, either party may bring an action in a court of competent jurisdiction: (a) for injunctive or other equitable relief to prevent irreparable harm; (b) for claims that are not subject to arbitration under applicable law; or (c) for claims within the jurisdictional limits of a small claims court."),
     LegalSection("12", "Termination", "12.1 Termination by You\n\nYou may terminate these Terms at any time by discontinuing all use of the Service and deleting your Account in accordance with Section 2.4.\n\n12.2 Termination by Us\n\nWe may suspend or terminate your access to the Service, in whole or in part, at any time and for any reason, with or without notice, including but not limited to: (a) breach of these Terms; (b) suspected fraudulent, abusive, or illegal activity; (c) non-payment of fees; (d) prolonged inactivity; or (e) to protect the security, integrity, or operation of the Service.\n\n12.3 Effect of Termination\n\nUpon termination of these Terms for any reason: (a) all licenses and rights granted to you under these Terms will immediately cease; (b) you must immediately cease all use of the Service; (c) we may delete your Account and associated data in accordance with our data retention policies; and (d) Sections 6 (Intellectual Property Rights), 9 (Disclaimers and Limitations of Liability), 10 (Indemnification), 11 (Governing Law and Dispute Resolution), and 14 (Miscellaneous) shall survive termination."),
     LegalSection("13", "Data Retention and Deletion", "13.1 Data Retention\n\nWe retain personal information for as long as necessary to fulfill the purposes for which it was collected, including to provide the Service, comply with legal obligations, resolve disputes, and enforce our agreements. Specific retention periods are detailed in our Privacy Policy.\n\n13.2 Account Deletion\n\nUpon receipt of a verified Account deletion request, we will delete your personal information from our active systems within a reasonable timeframe, subject to: (a) legal obligations requiring retention; (b) the need to resolve disputes or enforce agreements; and (c) technical limitations preventing complete deletion from backup systems. Anonymized or aggregated data that does not identify you may be retained indefinitely."),
     LegalSection("14", "Miscellaneous", "14.1 Entire Agreement\n\nThese Terms, together with our Privacy Policy and any other policies referenced herein, constitute the entire agreement between you and Axio Studio regarding the Service and supersede all prior or contemporaneous agreements, understandings, negotiations, and discussions, whether oral or written.\n\n14.2 Severability\n\nIf any provision of these Terms is held to be invalid, illegal, or unenforceable by a court of competent jurisdiction, such provision shall be modified to the minimum extent necessary to make it valid and enforceable, or if modification is not possible, such provision shall be severed from these Terms, and the remaining provisions shall continue in full force and effect.\n\n14.3 Waiver\n\nNo waiver of any provision of these Terms shall be effective unless in writing and signed by the party against whom the waiver is sought to be enforced. No failure or delay by either party in exercising any right, power, or privilege under these Terms shall operate as a waiver thereof, nor shall any single or partial exercise of any right, power, or privilege preclude any other or further exercise thereof.\n\n14.4 Assignment\n\nYou may not assign, transfer, or delegate these Terms or any of your rights or obligations hereunder without our prior written consent. We may assign, transfer, or delegate these Terms or any of our rights or obligations hereunder without restriction. These Terms shall be binding upon and inure to the benefit of the parties and their respective successors and permitted assigns.\n\n14.5 Force Majeure\n\nWe shall not be liable for any failure or delay in performing our obligations under these Terms where such failure or delay results from causes beyond our reasonable control, including but not limited to: acts of God, war, terrorism, riots, embargoes, acts of civil or military authorities, fire, floods, accidents, strikes, shortages of transportation, facilities, fuel, energy, labor, or materials, pandemics, epidemics, or failures of telecommunications networks or infrastructure.\n\n14.6 Headings\n\nThe headings and subheadings in these Terms are for convenience only and shall not affect the interpretation of these Terms.\n\n14.7 Contact Information\n\nIf you have any questions, concerns, or comments regarding these Terms, please contact us at:\n\nAxio Studio\nEmail: axio.founder@gmail.com\nSubject Line: REELZ\n\nWe will make reasonable efforts to respond to your inquiry within a reasonable timeframe."),
@@ -288,6 +287,45 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = hiltViewModel()) 
 @Composable
 fun StorageUsageScreen(nav: NavController) {
     val d = LocalDimensions.current
+    val context = LocalContext.current
+
+    // ── Read real storage info ────────────────────────────────────────────────
+    val storageInfo = remember {
+        val stat = android.os.StatFs(android.os.Environment.getExternalStorageDirectory().path)
+        val totalBytes  = stat.totalBytes
+        val freeBytes   = stat.availableBytes
+        val usedBytes   = totalBytes - freeBytes
+
+        // Reelz-specific: size of the downloads directory
+        val reelzDir = context.getExternalFilesDir(null)
+            ?.parentFile?.parentFile?.let { java.io.File(it, "reelz_downloads") }
+            ?: context.getExternalFilesDir("reelz_downloads")
+        val reelzBytes = reelzDir?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+
+        mapOf(
+            "totalBytes"  to totalBytes,
+            "freeBytes"   to freeBytes,
+            "usedBytes"   to usedBytes,
+            "reelzBytes"  to reelzBytes,
+        )
+    }
+
+    fun formatBytes(bytes: Long): String {
+        val gb = bytes / 1_073_741_824.0
+        val mb = bytes / 1_048_576.0
+        return when {
+            gb >= 1.0 -> "%.1f GB".format(gb)
+            mb >= 1.0 -> "%.0f MB".format(mb)
+            else      -> "${bytes / 1024} KB"
+        }
+    }
+
+    val totalBytes  = storageInfo["totalBytes"]  ?: 0L
+    val freeBytes   = storageInfo["freeBytes"]   ?: 0L
+    val usedBytes   = storageInfo["usedBytes"]   ?: 0L
+    val reelzBytes  = storageInfo["reelzBytes"]  ?: 0L
+    val usedFraction = if (totalBytes > 0) usedBytes.toFloat() / totalBytes else 0f
+
     Column(
         Modifier
             .fillMaxSize()
@@ -304,40 +342,58 @@ fun StorageUsageScreen(nav: NavController) {
                 .padding(top = d.spaceLg, bottom = d.spaceXxl + d.spaceLg),
             verticalArrangement = Arrangement.spacedBy(d.spaceMd)
         ) {
-            // Hero icon card
+            // ── Hero icon card with usage bar ─────────────────────────────────
             Box(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(d.radiusLg))
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(BrandDim.copy(alpha = 0.5f), BgCard)
-                        )
-                    )
+                    .background(Brush.verticalGradient(listOf(BrandDim.copy(alpha = 0.5f), BgCard)))
                     .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusLg))
                     .padding(d.spaceLg),
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(d.spaceSm)) {
+                Column(verticalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(d.avatarMd)
+                                .clip(RoundedCornerShape(d.radiusMd))
+                                .background(GlassMd)
+                                .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd)),
+                            Alignment.Center,
+                        ) { Icon(IconStorage, null, tint = Brand2, modifier = Modifier.size(d.iconMd)) }
+                        Column {
+                            Text("Device Storage", color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "${formatBytes(usedBytes)} used of ${formatBytes(totalBytes)}",
+                                color = White60, fontSize = d.textSm,
+                            )
+                        }
+                    }
+                    // Usage bar
                     Box(
                         Modifier
-                            .size(d.avatarMd)
-                            .clip(RoundedCornerShape(d.radiusMd))
-                            .background(GlassMd)
-                            .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd)),
-                        Alignment.Center,
-                    ) { Icon(IconStorage, null, tint = Brand2, modifier = Modifier.size(d.iconMd)) }
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(White.copy(alpha = 0.12f))
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(usedFraction.coerceIn(0f, 1f))
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(50))
+                                .background(
+                                    Brush.horizontalGradient(listOf(Brand2, Brand))
+                                )
+                        )
+                    }
                     Text(
-                        "Storage information will appear here soon.",
-                        color = White,
-                        fontSize = d.textMd,
-                        fontWeight = FontWeight.SemiBold,
-                        lineHeight = (d.textMd.value * 1.5f).sp,
-                    )
-                    Text(
-                        "Total space, used space, available space, and a per-download breakdown will be shown in this section.",
-                        color = White60,
-                        fontSize = d.textSm,
-                        lineHeight = (d.textSm.value * 1.6f).sp,
+                        "${(usedFraction * 100).toInt()}% used",
+                        color = White40,
+                        fontSize = d.textXs,
                     )
                 }
             }
@@ -345,9 +401,10 @@ fun StorageUsageScreen(nav: NavController) {
             Spacer(Modifier.height(d.spaceXs))
 
             listOf(
-                "Total Device Storage" to "—",
-                "Used by Reelz Downloads" to "—",
-                "Available Space" to "—",
+                "Total Device Storage"     to formatBytes(totalBytes),
+                "Used by System & Apps"    to formatBytes(usedBytes - reelzBytes),
+                "Used by Reelz Downloads"  to formatBytes(reelzBytes),
+                "Available Space"          to formatBytes(freeBytes),
             ).forEach { (label, value) ->
                 Row(
                     Modifier
@@ -360,7 +417,7 @@ fun StorageUsageScreen(nav: NavController) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(label, color = White80, fontSize = d.textSm, fontWeight = FontWeight.Medium)
-                    Text(value, color = White40, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
+                    Text(value, color = Brand2, fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

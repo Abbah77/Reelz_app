@@ -169,19 +169,43 @@ class ReelzDownloadService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
-    private fun buildNotification(text: String, progress: Int, isActive: Boolean): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun buildNotification(text: String, progress: Int, isActive: Boolean): Notification {
+        // Tapping the notification opens the app's downloads section
+        val openIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("open_tab", "downloads")
+        }
+        val pendingIntent = if (openIntent != null) {
+            android.app.PendingIntent.getActivity(
+                this, 0, openIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+        } else null
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_reelz_logo)
             .setContentTitle("Reelz Downloads")
             .setContentText(text)
             .setProgress(100, progress, !isActive && progress == 0)
             .setOngoing(isActive)
             .setOnlyAlertOnce(true)
+            // Show notification even if permission was not explicitly granted (silent channel)
+            // The foreground service itself keeps the download alive regardless.
+            .setSilent(true)
+            .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
             .build()
+    }
 
     private fun updateNotification(text: String, progress: Int, isActive: Boolean) {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildNotification(text, progress, isActive))
+        // If POST_NOTIFICATIONS was denied we cannot show the notification bar update,
+        // but the foreground service — and therefore the download — keeps running.
+        // Android guarantees the startForeground() call works even without the
+        // POST_NOTIFICATIONS permission (the mandatory foreground-service notification
+        // is exempt from that permission on API 33+).
+        runCatching {
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTIFICATION_ID, buildNotification(text, progress, isActive))
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -280,39 +280,68 @@ private val IconTimerOff: ImageVector
         )
     }.build()
 
+// Clean, precise settings cog — matches every other icon in the player UI.
+// The previous path data was malformed and produced a hand-drawn-looking stroke.
 private val IconSettings: ImageVector
     get() = ImageVector.Builder("Settings", 24.dp, 24.dp, 24f, 24f).apply {
+        // Outer gear body
         addPath(
             pathData = PathData {
-                // cog outline
-                moveTo(12f, 15f); arcTo(3f, 3f, 0f, false, true, 12f, 9f); arcTo(3f, 3f, 0f, false, true, 12f, 15f)
-                moveTo(19.4f, 15f); arcTo(1.65f, 1.65f, 0f, false, false, 0.33f, 1.65f)
-                lineTo(18f, 13f); arcTo(1.65f, 1.65f, 0f, false, false, 15.82f, 9.17f)
-                lineTo(19.4f, 9f); arcTo(1.65f, 1.65f, 0f, false, false, 19.73f, 7.35f)
-                lineTo(21f, 5f); lineTo(19f, 3f); lineTo(17f, 4.27f)
-                arcTo(1.65f, 1.65f, 0f, false, false, 15.33f, 4.6f)
-                lineTo(15f, 4.6f); arcTo(1.65f, 1.65f, 0f, false, false, 13.35f, 3f)
-                lineTo(13f, 3f); lineTo(11f, 3f); lineTo(10.65f, 3f)
-                arcTo(1.65f, 1.65f, 0f, false, false, 9f, 4.6f)
-                lineTo(8.67f, 4.6f); arcTo(1.65f, 1.65f, 0f, false, false, 7f, 4.27f)
-                lineTo(5f, 3f); lineTo(3f, 5f); lineTo(4.27f, 7f)
-                arcTo(1.65f, 1.65f, 0f, false, false, 4.6f, 8.67f)
-                lineTo(4.6f, 9f); arcTo(1.65f, 1.65f, 0f, false, false, 3f, 10.65f)
-                lineTo(3f, 11f); lineTo(3f, 13f); lineTo(3f, 13.35f)
-                arcTo(1.65f, 1.65f, 0f, false, false, 4.6f, 15f)
-                lineTo(4.6f, 15.33f); arcTo(1.65f, 1.65f, 0f, false, false, 4.27f, 17f)
-                lineTo(3f, 19f); lineTo(5f, 21f); lineTo(7f, 19.73f)
-                arcTo(1.65f, 1.65f, 0f, false, false, 8.67f, 19.4f)
-                lineTo(9f, 19.4f); arcTo(1.65f, 1.65f, 0f, false, false, 10.65f, 21f)
-                lineTo(11f, 21f); lineTo(13f, 21f); lineTo(13.35f, 21f)
-                arcTo(1.65f, 1.65f, 0f, false, false, 15f, 19.4f)
-                lineTo(15.33f, 19.4f); arcTo(1.65f, 1.65f, 0f, false, false, 17f, 19.73f)
-                lineTo(19f, 21f); lineTo(21f, 19f); lineTo(19.73f, 17f)
-                arcTo(1.65f, 1.65f, 0f, false, false, 19.4f, 15.33f); close()
+                moveTo(19.14f, 12.94f)
+                arcTo(7.36f, 7.36f, 0f, false, true, 19.22f, 12f)
+                arcTo(7.36f, 7.36f, 0f, false, true, 19.14f, 11.06f)
+                lineTo(21.16f, 9.48f)
+                arcTo(0.5f, 0.5f, 0f, false, false, 21.27f, 8.87f)
+                lineTo(19.36f, 5.63f)
+                arcTo(0.49f, 0.49f, 0f, false, false, 18.73f, 5.43f)
+                lineTo(16.38f, 6.38f)
+                arcTo(7.29f, 7.29f, 0f, false, true, 14.57f, 5.35f)
+                lineTo(14.22f, 2.85f)
+                arcTo(0.5f, 0.5f, 0f, false, false, 13.72f, 2.5f)
+                lineTo(10.28f, 2.5f)
+                arcTo(0.5f, 0.5f, 0f, false, false, 9.78f, 2.85f)
+                lineTo(9.43f, 5.35f)
+                arcTo(7.29f, 7.29f, 0f, false, true, 7.62f, 6.38f)
+                lineTo(5.27f, 5.43f)
+                arcTo(0.49f, 0.49f, 0f, false, false, 4.64f, 5.63f)
+                lineTo(2.73f, 8.87f)
+                arcTo(0.49f, 0.49f, 0f, false, false, 2.84f, 9.48f)
+                lineTo(4.86f, 11.06f)
+                arcTo(7.47f, 7.47f, 0f, false, true, 4.78f, 12f)
+                arcTo(7.47f, 7.47f, 0f, false, true, 4.86f, 12.94f)
+                lineTo(2.84f, 14.52f)
+                arcTo(0.5f, 0.5f, 0f, false, false, 2.73f, 15.13f)
+                lineTo(4.64f, 18.37f)
+                arcTo(0.49f, 0.49f, 0f, false, false, 5.27f, 18.57f)
+                lineTo(7.62f, 17.62f)
+                arcTo(7.29f, 7.29f, 0f, false, true, 9.43f, 18.65f)
+                lineTo(9.78f, 21.15f)
+                arcTo(0.5f, 0.5f, 0f, false, false, 10.28f, 21.5f)
+                lineTo(13.72f, 21.5f)
+                arcTo(0.5f, 0.5f, 0f, false, false, 14.22f, 21.15f)
+                lineTo(14.57f, 18.65f)
+                arcTo(7.29f, 7.29f, 0f, false, true, 16.38f, 17.62f)
+                lineTo(18.73f, 18.57f)
+                arcTo(0.49f, 0.49f, 0f, false, false, 19.36f, 18.37f)
+                lineTo(21.27f, 15.13f)
+                arcTo(0.5f, 0.5f, 0f, false, false, 21.16f, 14.52f)
+                close()
             },
             stroke = SolidColor(Color.White), strokeLineWidth = 1.5f,
             strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
-            fill = SolidColor(Color.Transparent)
+            fill = SolidColor(Color.Transparent),
+        )
+        // Inner circle
+        addPath(
+            pathData = PathData {
+                moveTo(12f, 15f)
+                arcTo(3f, 3f, 0f, false, true, 12f, 9f)
+                arcTo(3f, 3f, 0f, false, true, 12f, 15f)
+                close()
+            },
+            stroke = SolidColor(Color.White), strokeLineWidth = 1.5f,
+            strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+            fill = SolidColor(Color.Transparent),
         )
     }.build()
 
@@ -1846,23 +1875,6 @@ private fun SubtitleDrawer(
                                                 .padding(vertical = d.spaceSm + d.spaceXxs),
                                             Alignment.Center,
                                         ) { Text("Try again", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold) }
-                                    }
-                                    ui.subtitleUpsellMessage != null -> {
-                                        // Only the ONLINE SEARCH feature requires Premium.
-                                        // Stream subtitles (listed above) are free for everyone.
-                                        Icon(Icons.Default.Search, contentDescription = null,
-                                            tint = Brand.copy(.6f), modifier = Modifier.size(d.iconMd))
-                                        Text(ui.subtitleUpsellMessage, color = White60, fontSize = d.textXs,
-                                            textAlign = TextAlign.Center, lineHeight = (d.textXs.value * 1.45f).sp)
-                                        Box(
-                                            Modifier.fillMaxWidth()
-                                                .clip(RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                                                .background(AmberGlass)
-                                                .border(d.borderThin, AmberBorder, RoundedCornerShape(d.radiusMd - d.spaceXxs))
-                                                .clickable { onUpgradeToPremium() }
-                                                .padding(vertical = d.spaceSm + d.spaceXxs),
-                                            Alignment.Center,
-                                        ) { Text("Upgrade to Premium", color = Brand, fontSize = d.textSm, fontWeight = FontWeight.Bold) }
                                     }
                                     else -> {
                                         if (ui.subtitleOptions.isEmpty() && !ui.isOfflinePlayback) {

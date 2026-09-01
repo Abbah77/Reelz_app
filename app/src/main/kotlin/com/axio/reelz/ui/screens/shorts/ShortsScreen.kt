@@ -919,15 +919,18 @@ fun ShortVideoPage(
             TikTokAction(icon = if (isMuted) IconVolumeOff else IconVolumeOn, tint = if (isMuted) Color(0xFFFF9A00) else Color.White, locked = false, onClick = onMute)
         }
 
-        // ── Bottom-left metadata: title + source (TikTok exact positioning) ──
+        // ── Bottom-left metadata: title + source ─────────────────────────────
+        // Sits just above the progress bar (which itself sits above the nav bar).
+        // We use windowInsetsPadding for the nav bar so the text stays the same
+        // distance above the bar on every screen density — no hardcoded dp values.
         Column(
             Modifier
                 .align(Alignment.BottomStart)
-                .navigationBarsPadding()
+                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.navigationBars)
                 .padding(
                     start  = d.screenHorizPad,
-                    end    = d.avatarLg + d.spaceXl,   // leave room for action rail
-                    bottom = d.spaceXxl + d.spaceLg,   // consistent with action rail
+                    end    = d.avatarLg + d.spaceXl + d.screenHorizPad, // room for action rail
+                    bottom = d.spaceXxl + d.spaceLg + 2.dp,              // sit above the 2dp bar
                 ),
             verticalArrangement = Arrangement.spacedBy(d.spaceXxs),
         ) {
@@ -944,20 +947,23 @@ fun ShortVideoPage(
             if (video.title.isNotBlank()) {
                 Text(
                     video.title,
-                    color    = White.copy(alpha = 0.85f),
-                    fontSize = d.textSm,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    color      = White.copy(alpha = 0.85f),
+                    fontSize   = d.textSm,
+                    maxLines   = 2,
+                    overflow   = TextOverflow.Ellipsis,
                     lineHeight = (d.textSm.value * 1.4f).sp,
                 )
             }
         }
 
-        // ── Thin progress bar — TikTok-style scrub indicator ────────────────
+        // ── Thin progress bar — TikTok-style: sits directly on top of the
+        //    bottom navigation bar, no extra padding above it. ──────────────
         if (isActive && activePlayer != null) {
             VideoProgressBar(
                 player   = activePlayer,
-                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+                // align to BottomCenter with NO navigationBarsPadding so it
+                // touches the top edge of the navigation bar exactly like TikTok.
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
     }
@@ -965,6 +971,7 @@ fun ShortVideoPage(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Thin progress bar (2dp, white, animates with playback position)
+// Sits flush with the system navigation bar — no additional bottom offset.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -979,9 +986,13 @@ private fun VideoProgressBar(player: ExoPlayer, modifier: Modifier = Modifier) {
         }
     }
 
+    // navigationBarsPadding() applies a bottom padding equal to the nav bar height.
+    // By NOT applying it here, the 2dp bar sits at the very bottom of the screen
+    // content area — i.e. directly on top of the navigation bar, TikTok-style.
     Box(
         modifier
             .fillMaxWidth()
+            .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.navigationBars)
             .height(2.dp)
             .background(Color.White.copy(alpha = 0.25f))
     ) {
@@ -1007,7 +1018,7 @@ private fun TikTokAction(icon: ImageVector, tint: Color, locked: Boolean, onClic
     Box(modifier = Modifier.size(d.avatarSm + d.spaceMd), contentAlignment = Alignment.Center) {
         Icon(
             icon, null,
-            tint = if (locked) tint.copy(alpha = 0.55f) else tint,
+            tint = if (locked) tint.copy(alpha = 0.4f) else tint,
             modifier = Modifier
                 .size(d.avatarSm)
                 .scale(scale)
@@ -1016,16 +1027,24 @@ private fun TikTokAction(icon: ImageVector, tint: Color, locked: Boolean, onClic
                 },
         )
         if (locked) {
+            // Modern "Coming Soon" badge — small pill with a flag-style appearance
+            // so users immediately understand this feature is unavailable yet.
             Box(
                 Modifier
                     .align(Alignment.BottomEnd)
-                    .size(d.iconXs + d.spaceXxs)
-                    .clip(CircleShape)
-                    .background(Color(0xCC1C1C1E))
-                    .border(d.borderThin, Color.White.copy(alpha = 0.25f), CircleShape),
-                Alignment.Center,
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xDD1A1A2E))
+                    .border(0.5.dp, Color(0xFF5B7FFF).copy(alpha = 0.6f), RoundedCornerShape(50))
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(IconLock, null, tint = White.copy(alpha = 0.85f), modifier = Modifier.size(d.iconXs - 1.dp))
+                Text(
+                    "Soon",
+                    color      = Color(0xFF8BAEFF),
+                    fontSize   = 6.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.3.sp,
+                )
             }
         }
     }

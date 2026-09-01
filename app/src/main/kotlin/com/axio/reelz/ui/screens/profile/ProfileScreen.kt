@@ -53,21 +53,68 @@ import javax.inject.Inject
 
 // ── Icon vectors ──────────────────────────────────────────────────────────────
 
+// Clean, standard settings cog — matches the design language of every other icon
+// in the app. The previous path was malformed and rendered as hand-drawn strokes.
 private val IconSettings: ImageVector get() = ImageVector.Builder("Settings", 24.dp, 24.dp, 24f, 24f).apply {
-    addPath(pathData = PathData {
-        moveTo(12f, 8f); arcTo(4f, 4f, 0f, false, false, 12f, 16f); arcTo(4f, 4f, 0f, false, false, 12f, 8f); close()
-        moveTo(12f, 2f); lineTo(11f, 2f); lineTo(11f, 4.07f)
-        arcTo(8f, 8f, 0f, false, false, 5.14f, 7.28f); lineTo(3.71f, 5.86f); lineTo(2.29f, 7.28f)
-        lineTo(3.72f, 8.71f); arcTo(8f, 8f, 0f, false, false, 2f, 12f)
-        arcTo(8f, 8f, 0f, false, false, 3.72f, 15.29f); lineTo(2.29f, 16.71f); lineTo(3.71f, 18.14f)
-        lineTo(5.14f, 16.71f); arcTo(8f, 8f, 0f, false, false, 11f, 19.93f); lineTo(11f, 22f)
-        lineTo(13f, 22f); lineTo(13f, 19.93f)
-        arcTo(8f, 8f, 0f, false, false, 18.86f, 16.71f); lineTo(20.29f, 18.14f); lineTo(21.71f, 16.71f)
-        lineTo(20.28f, 15.28f); arcTo(8f, 8f, 0f, false, false, 22f, 12f)
-        arcTo(8f, 8f, 0f, false, false, 20.28f, 8.71f); lineTo(21.71f, 7.29f); lineTo(20.29f, 5.86f)
-        lineTo(18.86f, 7.29f); arcTo(8f, 8f, 0f, false, false, 13f, 4.07f); lineTo(13f, 2f); close()
-    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.4f, strokeLineCap = StrokeCap.Round,
-       strokeLineJoin = StrokeJoin.Round, fill = SolidColor(Color.Transparent))
+    // Outer gear body (12-point cog)
+    addPath(
+        pathData = PathData {
+            moveTo(19.14f, 12.94f)
+            arcTo(7.36f, 7.36f, 0f, false, true, 19.22f, 12f)
+            arcTo(7.36f, 7.36f, 0f, false, true, 19.14f, 11.06f)
+            lineTo(21.16f, 9.48f)
+            arcTo(0.5f, 0.5f, 0f, false, false, 21.27f, 8.87f)
+            lineTo(19.36f, 5.63f)
+            arcTo(0.49f, 0.49f, 0f, false, false, 18.73f, 5.43f)
+            lineTo(16.38f, 6.38f)
+            arcTo(7.29f, 7.29f, 0f, false, true, 14.57f, 5.35f)
+            lineTo(14.22f, 2.85f)
+            arcTo(0.5f, 0.5f, 0f, false, false, 13.72f, 2.5f)
+            lineTo(10.28f, 2.5f)
+            arcTo(0.5f, 0.5f, 0f, false, false, 9.78f, 2.85f)
+            lineTo(9.43f, 5.35f)
+            arcTo(7.29f, 7.29f, 0f, false, true, 7.62f, 6.38f)
+            lineTo(5.27f, 5.43f)
+            arcTo(0.49f, 0.49f, 0f, false, false, 4.64f, 5.63f)
+            lineTo(2.73f, 8.87f)
+            arcTo(0.49f, 0.49f, 0f, false, false, 2.84f, 9.48f)
+            lineTo(4.86f, 11.06f)
+            arcTo(7.47f, 7.47f, 0f, false, true, 4.78f, 12f)
+            arcTo(7.47f, 7.47f, 0f, false, true, 4.86f, 12.94f)
+            lineTo(2.84f, 14.52f)
+            arcTo(0.5f, 0.5f, 0f, false, false, 2.73f, 15.13f)
+            lineTo(4.64f, 18.37f)
+            arcTo(0.49f, 0.49f, 0f, false, false, 5.27f, 18.57f)
+            lineTo(7.62f, 17.62f)
+            arcTo(7.29f, 7.29f, 0f, false, true, 9.43f, 18.65f)
+            lineTo(9.78f, 21.15f)
+            arcTo(0.5f, 0.5f, 0f, false, false, 10.28f, 21.5f)
+            lineTo(13.72f, 21.5f)
+            arcTo(0.5f, 0.5f, 0f, false, false, 14.22f, 21.15f)
+            lineTo(14.57f, 18.65f)
+            arcTo(7.29f, 7.29f, 0f, false, true, 16.38f, 17.62f)
+            lineTo(18.73f, 18.57f)
+            arcTo(0.49f, 0.49f, 0f, false, false, 19.36f, 18.37f)
+            lineTo(21.27f, 15.13f)
+            arcTo(0.5f, 0.5f, 0f, false, false, 21.16f, 14.52f)
+            close()
+        },
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.5f,
+        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+        fill = SolidColor(Color.Transparent),
+    )
+    // Inner circle
+    addPath(
+        pathData = PathData {
+            moveTo(12f, 15f)
+            arcTo(3f, 3f, 0f, false, true, 12f, 9f)
+            arcTo(3f, 3f, 0f, false, true, 12f, 15f)
+            close()
+        },
+        stroke = SolidColor(Color.White), strokeLineWidth = 1.5f,
+        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+        fill = SolidColor(Color.Transparent),
+    )
 }.build()
 
 private val IconBookmarkSolid: ImageVector get() = ImageVector.Builder("BookmarkFill", 24.dp, 24.dp, 24f, 24f).apply {

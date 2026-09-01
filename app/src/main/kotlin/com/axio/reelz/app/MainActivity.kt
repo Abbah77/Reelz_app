@@ -1,9 +1,14 @@
 package com.axio.reelz.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -48,6 +53,29 @@ class MainActivity : ComponentActivity() {
 
     private var isColdStart = true
 
+    // ── POST_NOTIFICATIONS (Android 13+) ──────────────────────────────────────
+    // Downloads run via a foreground service and keep going even when the user
+    // switches to WhatsApp / TikTok etc., regardless of this permission.
+    // The permission only controls whether the persistent progress notification
+    // appears in the status bar. If the user denies, the download still works —
+    // they just won't see the bar; they can check progress inside the app later.
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            // granted=true  → notifications show in the bar; download works.
+            // granted=false → notifications are suppressed; download still works.
+            // Either way: no action needed here.
+        }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        ) return
+        // Only ask once — the launcher handles the system dialog.
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     override fun onResume() {
         super.onResume()
         // Background config refresh every resume — instant flag updates
@@ -72,6 +100,9 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Request notification permission so downloads show progress in status bar.
+        // Downloads work even if the user denies — they can still see progress in-app.
+        requestNotificationPermissionIfNeeded()
 
         val openPremiumOnStart = intent?.getBooleanExtra(EXTRA_OPEN_PREMIUM, false) ?: false
 

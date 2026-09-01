@@ -444,12 +444,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun searchOnlineSubtitles(query: String = "") {
-        if (!sessionRepo.isPremium) {
-            _ui.update { it.copy(subtitleUpsellMessage =
-                "Searching for additional subtitle languages online requires Premium. " +
-                "Stream subtitles (if available) are shown automatically above.") }
-            return
-        }
+        // Subtitles are free for all users — no premium gate.
         val langs = if (query.isBlank()) {
             val locale = java.util.Locale.getDefault().language.ifBlank { "en" }
             listOf("en", locale).distinct()
