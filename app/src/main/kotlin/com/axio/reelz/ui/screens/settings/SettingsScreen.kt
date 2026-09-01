@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -290,25 +291,19 @@ fun StorageUsageScreen(nav: NavController) {
     val context = LocalContext.current
 
     // ── Read real storage info ────────────────────────────────────────────────
-    val storageInfo = remember {
-        val stat = android.os.StatFs(android.os.Environment.getExternalStorageDirectory().path)
-        val totalBytes  = stat.totalBytes
-        val freeBytes   = stat.availableBytes
-        val usedBytes   = totalBytes - freeBytes
-
-        // Reelz-specific: size of the downloads directory
-        val reelzDir = context.getExternalFilesDir(null)
+    // Captured outside remember so context is available in the lambda.
+    val stat       = remember { android.os.StatFs(android.os.Environment.getExternalStorageDirectory().path) }
+    val totalBytes: Long = remember { stat.totalBytes }
+    val freeBytes:  Long = remember { stat.availableBytes }
+    val usedBytes:  Long = remember { totalBytes - freeBytes }
+    val reelzBytes: Long = remember {
+        val dir = context.getExternalFilesDir(null)
             ?.parentFile?.parentFile?.let { java.io.File(it, "reelz_downloads") }
             ?: context.getExternalFilesDir("reelz_downloads")
-        val reelzBytes = reelzDir?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
-
-        mapOf(
-            "totalBytes"  to totalBytes,
-            "freeBytes"   to freeBytes,
-            "usedBytes"   to usedBytes,
-            "reelzBytes"  to reelzBytes,
-        )
+        dir?.walkTopDown()?.filter { it.isFile }?.sumOf { f: java.io.File -> f.length() } ?: 0L
     }
+
+    val usedFraction = if (totalBytes > 0L) usedBytes.toFloat() / totalBytes.toFloat() else 0f
 
     fun formatBytes(bytes: Long): String {
         val gb = bytes / 1_073_741_824.0
@@ -319,12 +314,6 @@ fun StorageUsageScreen(nav: NavController) {
             else      -> "${bytes / 1024} KB"
         }
     }
-
-    val totalBytes  = storageInfo["totalBytes"]  ?: 0L
-    val freeBytes   = storageInfo["freeBytes"]   ?: 0L
-    val usedBytes   = storageInfo["usedBytes"]   ?: 0L
-    val reelzBytes  = storageInfo["reelzBytes"]  ?: 0L
-    val usedFraction = if (totalBytes > 0) usedBytes.toFloat() / totalBytes else 0f
 
     Column(
         Modifier
