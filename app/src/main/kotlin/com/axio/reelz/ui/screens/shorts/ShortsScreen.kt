@@ -1019,7 +1019,9 @@ fun ShortVideoPage(
         Column(
             Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = d.screenHorizPad, bottom = d.spaceXxl + d.spaceLg),
+                // TikTok: the bottom-most icon (mute) sits ~12dp above the progress bar.
+                // The bar is 2dp tall at the very bottom, so 14dp total from bottom edge.
+                .padding(end = d.screenHorizPad, bottom = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(d.spaceXl - d.spaceXxs),
         ) {
@@ -1054,18 +1056,19 @@ fun ShortVideoPage(
             TikTokAction(icon = if (isMuted) IconVolumeOff else IconVolumeOn, tint = if (isMuted) Color(0xFFFF9A00) else Color.White, locked = false, onClick = onMute)
         }
 
-        // ── Bottom-left metadata: title + source ─────────────────────────────
-        // Scaffold already pads the content area by the nav bar height, so no
-        // extra inset padding needed here — just sit above the 2dp progress bar.
+        // ── Bottom-left metadata: @username + caption ─────────────────────────
+        // TikTok layout: username bold on top, caption below, the block's bottom
+        // edge sits ~10dp above the 2dp progress bar = 12dp from screen bottom.
+        // End padding keeps text clear of the right-side action rail.
         Column(
             Modifier
                 .align(Alignment.BottomStart)
                 .padding(
                     start  = d.screenHorizPad,
-                    end    = d.avatarLg + d.spaceXl + d.screenHorizPad,
-                    bottom = d.spaceXxl + d.spaceLg + 2.dp,
+                    end    = d.avatarSm + d.screenHorizPad + d.spaceLg, // clear of action rail
+                    bottom = 12.dp,                                       // just above the 2dp bar
                 ),
-            verticalArrangement = Arrangement.spacedBy(d.spaceXxs),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             if (!video.source.isNullOrBlank()) {
                 Text(
@@ -1089,13 +1092,14 @@ fun ShortVideoPage(
             }
         }
 
-        // ── Thin progress bar — TikTok-style: sits directly on top of the
-        //    bottom navigation bar, no extra padding above it. ──────────────
-        if (isActive && activePlayer != null) {
+        // ── Thin progress bar — lives inside the page so it travels with
+        //    the video during swipe, exactly like TikTok. Each page owns its
+        //    own bar. We show it whenever the page has a player (active or
+        //    mid-swipe) — removing the isActive guard is what makes the bar
+        //    stick to the content rather than jumping between pages.
+        if (activePlayer != null) {
             VideoProgressBar(
                 player   = activePlayer,
-                // align to BottomCenter with NO navigationBarsPadding so it
-                // touches the top edge of the navigation bar exactly like TikTok.
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
