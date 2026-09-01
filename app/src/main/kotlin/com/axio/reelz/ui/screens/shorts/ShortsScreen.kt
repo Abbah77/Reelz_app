@@ -471,6 +471,19 @@ private val IconPause: ImageVector get() = ImageVector.Builder("Pause", 24.dp, 2
     }
 }.build()
 
+// Filled heart — used only for the double-tap burst animation (TikTok signature gesture)
+private val IconHeartFilled: ImageVector get() = ImageVector.Builder("HeartFilled", 24.dp, 24.dp, 24f, 24f).apply {
+    path(fill = SolidColor(Color(0xFFFF2D55))) {
+        moveTo(12f, 21.593f)
+        curveToRelative(-5.63f, -5.539f, -11f, -9.288f, -11f, -13.093f)
+        arcToRelative(5f, 5f, 0f, false, true, 9.542f, -2.062f)
+        arcToRelative(0.879f, 0.879f, 0f, false, false, 1.516f, 0f)
+        arcTo(5f, 5f, 0f, false, true, 23f, 8.5f)
+        curveToRelative(0f, 3.805f, -5.37f, 7.554f, -11f, 13.093f)
+        close()
+    }
+}.build()
+
 // ── "Unavailable" action icons from composables.com ──────────────────────────
 // Used to show that Like, Comment, and Bookmark are not yet available.
 // They are displayed as static pictures — no click logic, no badge.
