@@ -13,10 +13,13 @@ import javax.inject.Singleton
 
 /**
  * LibraryRepository — watchlist, watch progress, watch history.
- * Split out of MediaRepository per the restructure plan.
  *
- * All data here is local-only (Room). Never makes network calls.
- * Dependency direction: LibraryRepository → Room. Never touches UI.
+ * Data limits (oldest-first eviction, new insertions always work):
+ *   • watch_progress / history : 500 unique items (trimmed in saveProgress)
+ *   • watchlist                : 500 items (trimmed on addToWatchlist)
+ *
+ * UI can call clearWatchlist(), clearHistory(), clearSearchHistory() to
+ * let the user wipe individual data categories from Settings.
  */
 @Singleton
 class LibraryRepository @Inject constructor(
@@ -27,9 +30,8 @@ class LibraryRepository @Inject constructor(
 
     // ── Watch progress (local only) ───────────────────────────────────────────
 
-    suspend fun getRecentProgress(limit: Int): List<com.axio.reelz.core.database.WatchProgressRow> = withContext(Dispatchers.IO) {
-        watchProgressDao.getRecent(limit)
-    }
+    suspend fun getRecentProgress(limit: Int): List<WatchProgressRow> =
+        withContext(Dispatchers.IO) { watchProgressDao.getRecent(limit) }
 
     fun observeRecentProgress(limit: Int = 10) = watchProgressDao.observeRecent(limit)
 
@@ -37,8 +39,11 @@ class LibraryRepository @Inject constructor(
         withContext(Dispatchers.IO) { watchProgressDao.get(id, season, episode) }
 
     suspend fun saveProgress(
-        id: String, season: Int, episode: Int,
-        positionMs: Long, durationMs: Long,
+        id: String,
+        season: Int,
+        episode: Int,
+        positionMs: Long,
+        durationMs: Long,
         title: String = "",
         posterUrl: String? = null,
     ) = withContext(Dispatchers.IO) {
@@ -53,11 +58,7 @@ class LibraryRepository @Inject constructor(
             posterUrl  = posterUrl,
             watchedAt  = now,
         )
-        // Try to insert as a new row first. If the row already exists (same
-        // mediaId+season+episode primary key), IGNORE leaves it untouched.
         watchProgressDao.insertIfNew(row)
-        // Then update position/duration/metadata — but bump watchedAt to now so
-        // the most recently *started* episode always floats to the top.
         watchProgressDao.updateProgress(
             mediaId    = id,
             season     = season,
@@ -68,6 +69,7 @@ class LibraryRepository @Inject constructor(
             posterUrl  = posterUrl,
             watchedAt  = now,
         )
+        // Trim to 500 most recent items — oldest entries are evicted, new ones always land.
         watchProgressDao.trimToLimit()
     }
 
@@ -89,6 +91,8 @@ class LibraryRepository @Inject constructor(
                 mediaType = media.mediaType.name,
             )
         )
+        // Trim to 500 most recent — oldest items evicted, new insertions always work.
+        watchlistDao.trimToLimit()
     }
 
     suspend fun removeFromWatchlist(id: String) = withContext(Dispatchers.IO) {
@@ -103,10 +107,16 @@ class LibraryRepository @Inject constructor(
         }
     }
 
+    /** Clear all watchlist entries (user action from Settings). */
+    suspend fun clearWatchlist() = withContext(Dispatchers.IO) {
+        watchlistDao.clear()
+    }
+
     // ── Watch history ─────────────────────────────────────────────────────────
 
     fun observeHistory() = watchHistoryDao.observeAll()
 
+    /** Clear all watch history / continue-watching data (user action from Settings). */
     suspend fun clearHistory() = withContext(Dispatchers.IO) {
         watchHistoryDao.clear()
     }

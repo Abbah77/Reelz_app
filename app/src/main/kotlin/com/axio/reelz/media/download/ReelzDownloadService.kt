@@ -9,19 +9,20 @@ import com.axio.reelz.R
 import com.axio.reelz.core.database.DownloadDao
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
 /**
  * ReelzDownloadService — Foreground service keeping downloads alive.
  *
- * The actual download logic lives in [ReelzDownloadEngine].
- * This service only:
- *  1. Keeps the process alive while downloads are active
- *  2. Shows a persistent notification with progress
- *  3. Resumes in-progress downloads after process death
- *
- * Started via [start] / [pause] / [cancel] companion actions.
+ * KEY FIXES:
+ *  1. Uses START_STICKY so Android restarts the service after process death —
+ *     downloads are NOT paused when the user switches apps.
+ *  2. Notification is live: progress observer updates it every time the DB
+ *     changes, and the notification is fully dismissed (cancelNotification)
+ *     when all downloads are done or when a user cancels the last download.
+ *  3. Cancelled downloads: engine.cancel() deletes the DB row via the DAO,
+ *     which triggers the Flow to re-emit without that row. When activeJobs
+ *     becomes empty the notification is cancelled and stopSelf() is called.
  */
 @AndroidEntryPoint
 class ReelzDownloadService : Service() {
@@ -31,28 +32,31 @@ class ReelzDownloadService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    companion object {
-        const val CHANNEL_ID           = "reelz_downloads"
-        const val NOTIFICATION_ID      = 1001
+    // Track whether we have started observing — only start one observer loop.
+    private var observing = false
 
-        const val ACTION_START  = "com.axio.reelz.download.START"
-        const val ACTION_PAUSE  = "com.axio.reelz.download.PAUSE"
-        const val ACTION_CANCEL = "com.axio.reelz.download.CANCEL"
+    companion object {
+        const val CHANNEL_ID      = "reelz_downloads"
+        const val NOTIFICATION_ID = 1001
+
+        const val ACTION_START      = "com.axio.reelz.download.START"
+        const val ACTION_PAUSE      = "com.axio.reelz.download.PAUSE"
+        const val ACTION_CANCEL     = "com.axio.reelz.download.CANCEL"
         const val ACTION_RESUME_ALL = "com.axio.reelz.download.RESUME_ALL"
 
         const val EXTRA_DOWNLOAD_ID = "downloadId"
         const val EXTRA_URL         = "url"
-        const val EXTRA_TYPE        = "type"      // "mp4" | "hls"
-        const val EXTRA_HEADERS     = "headers"   // JSON string
+        const val EXTRA_TYPE        = "type"
+        const val EXTRA_HEADERS     = "headers"
         const val EXTRA_TITLE       = "title"
 
         fun startDownload(
-            ctx:        Context,
+            ctx: Context,
             downloadId: String,
-            url:        String,
-            type:       String,
-            headers:    Map<String, String> = emptyMap(),
-            title:      String = "",
+            url: String,
+            type: String,
+            headers: Map<String, String> = emptyMap(),
+            title: String = "",
         ) {
             val intent = Intent(ctx, ReelzDownloadService::class.java).apply {
                 action = ACTION_START
@@ -60,7 +64,6 @@ class ReelzDownloadService : Service() {
                 putExtra(EXTRA_URL, url)
                 putExtra(EXTRA_TYPE, type)
                 putExtra(EXTRA_TITLE, title)
-                // Flatten headers as "key=value\nkey2=value2"
                 putExtra(EXTRA_HEADERS, headers.entries.joinToString("\n") { "${it.key}=${it.value}" })
             }
             ctx.startForegroundService(intent)
@@ -90,24 +93,42 @@ class ReelzDownloadService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Must call startForeground immediately on creation.
         startForeground(NOTIFICATION_ID, buildNotification("Starting downloads…", 0, false))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                val id      = intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: return START_NOT_STICKY
-                val url     = intent.getStringExtra(EXTRA_URL)         ?: return START_NOT_STICKY
+                val id      = intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: return START_STICKY
+                val url     = intent.getStringExtra(EXTRA_URL)         ?: return START_STICKY
                 val type    = intent.getStringExtra(EXTRA_TYPE)        ?: "mp4"
                 val title   = intent.getStringExtra(EXTRA_TITLE)       ?: ""
                 val headers = parseHeaders(intent.getStringExtra(EXTRA_HEADERS))
                 engine.start(id, url, type, headers, title)
-                observeProgress()
+                ensureObserving()
             }
-            ACTION_PAUSE  -> engine.pause(intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: "")
-            ACTION_CANCEL -> engine.cancel(intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: "")
-            ACTION_RESUME_ALL -> resumeAllPaused()
+            ACTION_PAUSE -> {
+                engine.pause(intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: "")
+                ensureObserving()
+            }
+            ACTION_CANCEL -> {
+                val id = intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: ""
+                // Cancel engine job and delete the DB row so the observer
+                // re-emits without it — this triggers cleanup automatically.
+                engine.cancel(id)
+                scope.launch {
+                    downloadDao.delete(id)
+                }
+                ensureObserving()
+            }
+            ACTION_RESUME_ALL -> {
+                resumeAllPaused()
+                ensureObserving()
+            }
         }
+        // START_STICKY: Android will restart this service if the process is killed,
+        // which means downloads survive app switching and memory pressure.
         return START_STICKY
     }
 
@@ -115,11 +136,9 @@ class ReelzDownloadService : Service() {
         scope.launch {
             val paused = downloadDao.getByStatus("PAUSED") + downloadDao.getByStatus("QUEUED")
             paused.forEach { row ->
-                // Infer type from URL — never hardcode "hls" for all resumes.
                 val type = when {
                     row.streamUrl.contains(".m3u8", ignoreCase = true) -> "hls"
-                    row.streamUrl.contains(".mp4",  ignoreCase = true) -> "mp4"
-                    else -> "mp4"  // safe default — engine handles both
+                    else -> "mp4"
                 }
                 @Suppress("UNCHECKED_CAST")
                 val headers = runCatching {
@@ -130,21 +149,51 @@ class ReelzDownloadService : Service() {
         }
     }
 
-    private fun observeProgress() {
+    /**
+     * Start the DB observer exactly once. The observer drives the notification
+     * and decides when to stop the service.
+     */
+    private fun ensureObserving() {
+        if (observing) return
+        observing = true
         scope.launch {
             downloadDao.observeAll().collect { rows ->
-                val active  = rows.filter { it.status == "DOWNLOADING" }
-                val done    = rows.count  { it.status == "DONE" }
+                val active   = rows.filter { it.status == "DOWNLOADING" }
+                val paused   = rows.filter { it.status == "PAUSED" }
+                val queued   = rows.filter { it.status == "QUEUED" }
+                val done     = rows.count  { it.status == "DONE" }
+                val hasAny   = rows.isNotEmpty()
+
                 val totalSeg = active.sumOf { it.totalSegments }
                 val doneSeg  = active.sumOf { it.segmentsDone }
                 val progress = if (totalSeg > 0) (doneSeg * 100 / totalSeg) else 0
+
                 val msg = when {
-                    active.isNotEmpty() -> "${active.size} downloading ($progress%)"
+                    active.isNotEmpty() -> {
+                        val pct = if (active.size == 1) " ($progress%)" else ""
+                        "${active.size} downloading$pct"
+                    }
+                    queued.isNotEmpty() -> "${queued.size} queued"
+                    paused.isNotEmpty() -> "${paused.size} paused"
                     done > 0            -> "$done download(s) complete"
                     else                -> "Downloads ready"
                 }
-                updateNotification(msg, progress, active.isNotEmpty())
-                if (active.isEmpty()) stopSelf()
+
+                val isActive = active.isNotEmpty() || queued.isNotEmpty()
+
+                if (!hasAny) {
+                    // No rows at all (all cancelled/cleared) → dismiss notification and stop.
+                    cancelNotification()
+                    stopSelf()
+                } else if (!isActive && paused.isEmpty()) {
+                    // Everything is done — update notification once then dismiss after delay.
+                    updateNotification(msg, 100, false)
+                    delay(3_000)
+                    cancelNotification()
+                    stopSelf()
+                } else {
+                    updateNotification(msg, progress, isActive)
+                }
             }
         }
     }
@@ -170,15 +219,14 @@ class ReelzDownloadService : Service() {
     }
 
     private fun buildNotification(text: String, progress: Int, isActive: Boolean): Notification {
-        // Tapping the notification opens the app's downloads section
         val openIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("open_tab", "downloads")
         }
         val pendingIntent = if (openIntent != null) {
-            android.app.PendingIntent.getActivity(
+            PendingIntent.getActivity(
                 this, 0, openIntent,
-                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
         } else null
 
@@ -186,25 +234,32 @@ class ReelzDownloadService : Service() {
             .setSmallIcon(R.drawable.ic_reelz_logo)
             .setContentTitle("Reelz Downloads")
             .setContentText(text)
-            .setProgress(100, progress, !isActive && progress == 0)
-            .setOngoing(isActive)
+            .setProgress(100, progress, isActive && progress == 0)
+            .setOngoing(isActive)          // sticky only while actively downloading
             .setOnlyAlertOnce(true)
-            // Show notification even if permission was not explicitly granted (silent channel)
-            // The foreground service itself keeps the download alive regardless.
             .setSilent(true)
             .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
             .build()
     }
 
     private fun updateNotification(text: String, progress: Int, isActive: Boolean) {
-        // If POST_NOTIFICATIONS was denied we cannot show the notification bar update,
-        // but the foreground service — and therefore the download — keeps running.
-        // Android guarantees the startForeground() call works even without the
-        // POST_NOTIFICATIONS permission (the mandatory foreground-service notification
-        // is exempt from that permission on API 33+).
         runCatching {
-            getSystemService(NotificationManager::class.java)
-                .notify(NOTIFICATION_ID, buildNotification(text, progress, isActive))
+            val notification = buildNotification(text, progress, isActive)
+            // Keep startForeground in sync so the foreground state matches.
+            if (isActive) {
+                startForeground(NOTIFICATION_ID, notification)
+            } else {
+                getSystemService(NotificationManager::class.java)
+                    .notify(NOTIFICATION_ID, notification)
+            }
+        }
+    }
+
+    /** Fully dismiss the notification — called when all downloads are gone. */
+    private fun cancelNotification() {
+        runCatching {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
         }
     }
 

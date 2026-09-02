@@ -213,6 +213,17 @@ interface WatchlistDao {
 
     @Query("DELETE FROM watchlist")
     suspend fun clear()
+
+    /**
+     * Keep only the most recent [keepCount] watchlist entries (by addedAt).
+     * Hard limit: 500 items — more than enough even for a decade of use.
+     */
+    @Query("""
+        DELETE FROM watchlist WHERE mediaId NOT IN (
+            SELECT mediaId FROM watchlist ORDER BY addedAt DESC LIMIT :keepCount
+        )
+    """)
+    suspend fun trimToLimit(keepCount: Int = 500)
 }
 
 // ── Recent searches ───────────────────────────────────────────────────────────
@@ -593,6 +604,30 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+// Migration 5→6: no schema change — watchlist trimToLimit is pure query logic
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Trim watchlist to 500 most recent entries if it has grown large
+        db.execSQL("""
+            DELETE FROM watchlist WHERE mediaId NOT IN (
+                SELECT mediaId FROM watchlist ORDER BY addedAt DESC LIMIT 500
+            )
+        """)
+        // Trim watch_progress to 500 most recent entries
+        db.execSQL("""
+            DELETE FROM watch_progress WHERE rowid NOT IN (
+                SELECT rowid FROM watch_progress ORDER BY watchedAt DESC LIMIT 500
+            )
+        """)
+        // Trim recent_searches to 15
+        db.execSQL("""
+            DELETE FROM recent_searches WHERE query NOT IN (
+                SELECT query FROM recent_searches ORDER BY searchedAt DESC LIMIT 15
+            )
+        """)
+    }
+}
+
 @Database(
     entities = [
         CachedFeedRow::class,
@@ -607,7 +642,7 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         DownloadSubtitleRow::class,
         TransferRecord::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {

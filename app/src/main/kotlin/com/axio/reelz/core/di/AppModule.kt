@@ -6,6 +6,7 @@ import com.axio.reelz.core.database.ReelzDatabase
 import com.axio.reelz.core.database.MIGRATION_2_3
 import com.axio.reelz.core.database.MIGRATION_3_4
 import com.axio.reelz.core.database.MIGRATION_4_5
+import com.axio.reelz.core.database.MIGRATION_5_6
 import com.axio.reelz.core.network.PLACEHOLDER_BASE
 import com.axio.reelz.core.network.buildOkHttpClient
 import com.axio.reelz.data.remote.api.ReelzApi
@@ -89,7 +90,7 @@ object AppModule {
     fun provideDatabase(@ApplicationContext ctx: Context): ReelzDatabase =
         Room.databaseBuilder(ctx, ReelzDatabase::class.java, "reelz_v3.db")
             .setJournalMode(androidx.room.RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .fallbackToDestructiveMigration()
             .build()
 
