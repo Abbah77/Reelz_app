@@ -854,17 +854,19 @@ class P2pEngine @Inject constructor(
         val quality:   String = "",
         val mediaId:   String = "",   // ← stable backend media ID for DB dedup
     ) {
-        fun toJson(): String = buildString {
-            append("{")
-            append("\"title\":\"${title.replace("\"","\\\"")}\",")
-            append("\"posterUrl\":\"${posterUrl.replace("\"","\\\"")}\",")
-            append("\"mediaType\":\"$mediaType\",")
-            append("\"season\":$season,")
-            append("\"episode\":$episode,")
-            append("\"quality\":\"$quality\",")
-            append("\"mediaId\":\"${mediaId.replace("\"","\\\"\")}\"")
-            append("}")
-        }
+        // Escape a string for embedding inside a JSON double-quoted value
+        private fun String.esc() = replace("\\", "\\\\").replace("\"", "\\\"")
+
+        fun toJson(): String =
+            "{" +
+            "\"title\":\"${title.esc()}\"," +
+            "\"posterUrl\":\"${posterUrl.esc()}\"," +
+            "\"mediaType\":\"${mediaType.esc()}\"," +
+            "\"season\":$season," +
+            "\"episode\":$episode," +
+            "\"quality\":\"${quality.esc()}\"," +
+            "\"mediaId\":\"${mediaId.esc()}\"" +
+            "}"
 
         companion object {
             fun fromJson(json: String): FileMetadata = try {
