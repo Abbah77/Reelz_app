@@ -660,11 +660,11 @@ private fun IdlePage(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
                 BrandButton(
                     text    = when {
-                        selCount == 0 -> "Select files to send"
+                        selCount == 0 -> "Send"
                         selCount == 1 -> "Send 1 file"
                         else          -> "Send $selCount files"
                     },
-                    enabled = selCount > 0,
+                    enabled = true,
                     onClick = { onSend(selected) },
                     modifier = Modifier.weight(1f),
                     icon = { Icon(IconUpload, null, tint = Color(0xFF001428), modifier = Modifier.size(18.dp)) }
