@@ -1,42 +1,43 @@
 package com.axio.reelz.ui.screens.transfer
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  TransferScreen — Reelz Beam  (FULL SPEC IMPLEMENTATION)
+//  TransferScreen — Reelz Beam  (v6 — full rewrite with all fixes)
 //
-//  Screen flow per spec:
+//  CHANGES IN V6:
+//  1. IdlePage completely replaced with a rich poster-grid browser identical
+//     to BrowsePage but usable BEFORE connection:
+//       • Movie posters in 2-column grid with real PosterImage thumbnails
+//       • TV series in an expandable card with episode rows + quality picker
+//       • Tick/check overlay on selected items (Xender-style)
+//       • "Send N files" button fixed at bottom; tapping it starts the sender
+//         flow (QR shown) and the selected files are automatically sent the
+//         moment the receiver connects — no second tap required.
+//       • Receive button unchanged.
 //
-//  BEAM PAGE (entry)
-//    Two tabs: Send (shows QR) | Receive (shows camera scanner)
-//    QR generated silently, no extra tap required.
-//    Scanner is the full view the moment tab opens.
+//  2. QR generation now happens on Dispatchers.Default inside TransferManager,
+//     so the UI never blocks. QrCard shows a spinner until the bitmap arrives.
 //
-//  BROWSE PAGE (after connection)
-//    Both devices land here simultaneously after handshake.
-//    Shows your own downloaded content — movies with quality options,
-//    series → seasons → episodes, each with a checkbox.
-//    Send button at bottom enqueues selected items.
-//    Both sides send independently, no waiting.
+//  3. Received files are registered in DownloadDao (see TransferManager) with
+//     full duplicate prevention (same mediaId+season+episode+quality = skip;
+//     different quality = add as new row under same media entry).
 //
-//  FLOATING BUTTON
-//    Appears the moment any transfer starts.
-//    Stays on screen through all navigation.
-//    Pulses / shows queue count.
-//    Draggable.
-//    Tapping opens Transfer Panel.
-//
-//  TRANSFER PANEL (bottom sheet)
-//    Top half: Sending queue — active item with progress bar + speed,
-//              queued items below. No cancel on send (you chose to send it).
-//    Bottom half: Receiving queue — active item with progress + X button,
-//                 queued items with X button.
-//    Disconnect button at bottom.
+//  SCREEN FLOW (unchanged):
+//    1. User opens Transfer → sees downloaded files with Send / Receive
+//    2. User selects items, taps Send → PermissionPage → QR shown
+//       (selected items queued and sent automatically on connection)
+//    3. Or: user taps Receive → PermissionPage → Scanner
+//    4. Connected → BrowsePage for additional transfers
 // ─────────────────────────────────────────────────────────────────────────────
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Environment
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,12 +48,10 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -160,6 +159,16 @@ private val IconUpload: ImageVector get() = ImageVector.Builder("TrUp", 24.dp, 2
        fill = SolidColor(Color.Transparent))
 }.build()
 
+private val IconDownload: ImageVector get() = ImageVector.Builder("TrDl", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f,3f); lineTo(12f,15f)
+        moveTo(8f,11f); lineTo(12f,15f); lineTo(16f,11f)
+        moveTo(20f,17f); lineTo(20f,21f); lineTo(4f,21f); lineTo(4f,17f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
+}.build()
+
 private val IconCheck: ImageVector get() = ImageVector.Builder("TrOk", 24.dp, 24.dp, 24f, 24f).apply {
     addPath(pathData = PathData {
         moveTo(12f,2f); arcTo(10f,10f,0f,false,false,12f,22f)
@@ -176,6 +185,17 @@ private val IconWifi: ImageVector get() = ImageVector.Builder("TrWifi", 24.dp, 2
         moveTo(1.42f,9f); arcTo(16f,16f,0f,false,true,22.58f,9f)
         moveTo(8.53f,16.11f); arcTo(6f,6f,0f,false,true,15.47f,16.11f)
         moveTo(12f,20f); lineTo(12f,20.01f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
+}.build()
+
+private val IconBell: ImageVector get() = ImageVector.Builder("TrBell", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(18f,8f); arcTo(6f,6f,0f,false,false,6f,8f)
+        curveTo(6f,15f,3f,17f,3f,17f); lineTo(21f,17f)
+        curveTo(21f,17f,18f,15f,18f,8f)
+        moveTo(13.73f,21f); arcTo(2f,2f,0f,false,true,10.27f,21f)
     }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
        strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
        fill = SolidColor(Color.Transparent))
@@ -217,47 +237,80 @@ private val IconFilm: ImageVector get() = ImageVector.Builder("TrFilm", 24.dp, 2
        strokeLineCap = StrokeCap.Round, fill = SolidColor(Color.Transparent))
 }.build()
 
-// ─── Permissions ──────────────────────────────────────────────────────────────
+private val IconShield: ImageVector get() = ImageVector.Builder("TrShield", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f,22f); curveTo(12f,22f,3f,18f,3f,12f); lineTo(3f,5f); lineTo(12f,2f)
+        lineTo(21f,5f); lineTo(21f,12f); curveTo(21f,18f,12f,22f,12f,22f); close()
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
+}.build()
 
-private fun buildTransferPermissions(): Array<String> = buildList {
-    add(Manifest.permission.ACCESS_FINE_LOCATION)
-    add(Manifest.permission.ACCESS_COARSE_LOCATION)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+private val IconLocation: ImageVector get() = ImageVector.Builder("TrLoc", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(12f,2f); arcTo(7f,7f,0f,false,false,5f,9f)
+        curveTo(5f,14.25f,12f,22f,12f,22f)
+        curveTo(12f,22f,19f,14.25f,19f,9f)
+        arcTo(7f,7f,0f,false,false,12f,2f); close()
+        moveTo(12f,11.5f); arcTo(2.5f,2.5f,0f,false,false,12f,6.5f)
+        arcTo(2.5f,2.5f,0f,false,false,12f,11.5f); close()
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.5f,
+       fill = SolidColor(Color.Transparent))
+}.build()
+
+private val IconSwap: ImageVector get() = ImageVector.Builder("TrSwap", 24.dp, 24.dp, 24f, 24f).apply {
+    addPath(pathData = PathData {
+        moveTo(7f,16f); lineTo(17f,16f); moveTo(13f,12f); lineTo(17f,16f); lineTo(13f,20f)
+        moveTo(17f,8f); lineTo(7f,8f);  moveTo(11f,12f); lineTo(7f,8f);  lineTo(11f,4f)
+    }, stroke = SolidColor(Color.White), strokeLineWidth = 1.8f,
+       strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+       fill = SolidColor(Color.Transparent))
+}.build()
+
+// ─── Permission helpers ───────────────────────────────────────────────────────
+
+private fun requiredRuntimePermissions(forSend: Boolean): List<String> = buildList {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.NEARBY_WIFI_DEVICES)
-}.toTypedArray()
-
-private fun Context.allTransferPermsGranted(): Boolean {
-    val required = buildList {
+    } else {
         add(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-            add(Manifest.permission.NEARBY_WIFI_DEVICES)
     }
-    return required.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
+    if (!forSend) {
+        add(Manifest.permission.CAMERA)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        add(Manifest.permission.POST_NOTIFICATIONS)
+    }
 }
 
-private fun Context.hasCameraPermission(): Boolean =
-    ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+private fun Context.isGranted(perm: String): Boolean =
+    ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+
+private fun Context.isWifiEnabled(): Boolean = try {
+    val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    wm?.isWifiEnabled == true
+} catch (_: Exception) { false }
+
+private fun Context.allTransferPermsGranted(forSend: Boolean): Boolean =
+    requiredRuntimePermissions(forSend).all { isGranted(it) } && isWifiEnabled()
 
 // ─── ViewModel ────────────────────────────────────────────────────────────────
 
 @HiltViewModel
 class TransferViewModel @Inject constructor(
     private val transferManager: TransferManager,
-    private val downloadDao: DownloadDao,
-    private val transferDao: TransferDao,
+    private val downloadDao:     DownloadDao,
+    private val transferDao:     TransferDao,
 ) : ViewModel() {
 
-    val uiState:      StateFlow<TransferUiState>    = transferManager.uiState
-    val sendQueue:    StateFlow<List<TransferItem>>  = transferManager.sendQueue
-    val receiveQueue: StateFlow<List<TransferItem>>  = transferManager.receiveQueue
-    val hasActiveWork: StateFlow<Boolean>            = transferManager.hasActiveWork
+    val uiState:      StateFlow<TransferUiState>   = transferManager.uiState
+    val sendQueue:    StateFlow<List<TransferItem>> = transferManager.sendQueue
+    val receiveQueue: StateFlow<List<TransferItem>> = transferManager.receiveQueue
+    val hasActiveWork: StateFlow<Boolean>           = transferManager.hasActiveWork
 
     val history: StateFlow<List<TransferRecord>> = transferDao.getAll()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Downloads grouped for browse screen:
-    //   movies  → title → list of quality options
-    //   series  → title → season → episode → quality options
     val completedDownloads: StateFlow<List<DownloadItem>> = downloadDao.observeAll()
         .map { list ->
             list.filter { it.status == DownloadStatus.DONE.name && it.filePath.isNotBlank() }
@@ -268,41 +321,38 @@ class TransferViewModel @Inject constructor(
     fun startAsSender()              = transferManager.startAsSender()
     fun connectFromQr(rawQr: String) = transferManager.connectFromQr(rawQr)
 
-    /** Enqueue the selected items into the send queue. */
     fun sendSelected(items: List<DownloadItem>) {
         val queueItems = items.map { dl ->
             TransferItem(
                 fileName  = buildFileName(dl),
                 filePath  = dl.filePath,
                 sizeBytes = dl.sizeBytes,
-                // BUG3 FIX: carry metadata so receiver shows poster/title card
                 title     = dl.title,
                 posterUrl = dl.posterUrl ?: "",
                 mediaType = dl.mediaType,
                 season    = dl.season,
                 episode   = dl.episode,
                 quality   = dl.quality,
+                mediaId   = dl.mediaId,
             )
         }
         transferManager.enqueueToSend(queueItems)
     }
 
-    fun cancelActiveSend()                  = transferManager.cancelActiveSend()
-    fun cancelQueuedReceive(id: String)     = transferManager.cancelQueuedReceive(id)
-    fun cancelActiveReceive()               = transferManager.cancelActiveReceive()
-    fun disconnect()                        = transferManager.disconnect()
-    fun reset()                             = transferManager.disconnect()
+    fun cancelActiveSend()               = transferManager.cancelActiveSend()
+    fun cancelQueuedReceive(id: String)  = transferManager.cancelQueuedReceive(id)
+    fun cancelActiveReceive()            = transferManager.cancelActiveReceive()
+    fun disconnect()                     = transferManager.disconnect()
+    fun reset()                          = transferManager.disconnect()
 
     override fun onCleared() {
         super.onCleared()
         transferManager.release()
     }
 
-    private fun buildFileName(dl: DownloadItem): String {
-        return when {
-            dl.episode > 0 -> "${dl.title} S${dl.season.toString().padStart(2,'0')}E${dl.episode.toString().padStart(2,'0')} ${dl.quality}"
-            else           -> "${dl.title} ${dl.quality}"
-        }
+    private fun buildFileName(dl: DownloadItem): String = when {
+        dl.episode > 0 -> "${dl.title} S${dl.season.toString().padStart(2,'0')}E${dl.episode.toString().padStart(2,'0')} ${dl.quality}"
+        else           -> "${dl.title} ${dl.quality}"
     }
 }
 
@@ -313,44 +363,45 @@ private fun DownloadRow.toDownloadItem() = DownloadItem(
     status = DownloadStatus.DONE, streamUrl = streamUrl, createdAt = createdAt, completedAt = completedAt,
 )
 
+// ─── Transfer intent ──────────────────────────────────────────────────────────
+
+private enum class TransferIntent { NONE, SEND, RECEIVE }
+
 // ─── Screen root ──────────────────────────────────────────────────────────────
 
 @Composable
 fun TransferScreen(
     nav: NavController? = null,
-    vm: TransferViewModel = hiltViewModel(),
+    vm:  TransferViewModel = hiltViewModel(),
 ) {
-    val d             = LocalDimensions.current
-    val ctx           = LocalContext.current
-    val uiState       by vm.uiState.collectAsState()
-    val hasWork       by vm.hasActiveWork.collectAsState()
-    val sendQueue     by vm.sendQueue.collectAsState()
-    val receiveQueue  by vm.receiveQueue.collectAsState()
-    val downloads     by vm.completedDownloads.collectAsState()
+    val d            = LocalDimensions.current
+    val ctx          = LocalContext.current
+    val uiState      by vm.uiState.collectAsState()
+    val hasWork      by vm.hasActiveWork.collectAsState()
+    val sendQueue    by vm.sendQueue.collectAsState()
+    val receiveQueue by vm.receiveQueue.collectAsState()
+    val downloads    by vm.completedDownloads.collectAsState()
 
-    var tab by remember { mutableStateOf(0) }
-    var showPanel by remember { mutableStateOf(false) }
+    var intent               by remember { mutableStateOf(TransferIntent.NONE) }
+    var showPermPage         by remember { mutableStateOf(false) }
+    var showPanel            by remember { mutableStateOf(false) }
     var showDisconnectDialog by remember { mutableStateOf(false) }
+
+    // Files selected on IdlePage before connection is established
+    var pendingSendIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     val isConnected = uiState is TransferUiState.Connected || uiState is TransferUiState.Transferring
 
-    DisposableEffect(Unit) { onDispose { vm.reset() } }
-
-    // FIX: switching tabs should only reset if we're idle or in an error state.
-    // If sender is showing a QR (QrReady) and user taps Receive, we must
-    // invalidate the QR so the old ServerSocket is released and no stale
-    // receiver can connect to a session the user has abandoned.
-    LaunchedEffect(tab) {
-        if (!isConnected) {
-            val state = uiState
-            val shouldReset = state is TransferUiState.Idle
-                || state is TransferUiState.Error
-                || state is TransferUiState.QrReady   // user switched role while QR was showing
-                || state is TransferUiState.Preparing
-                || state is TransferUiState.Connecting
-            if (shouldReset) vm.reset()
+    // When the receiver connects, auto-send any files the user pre-selected
+    LaunchedEffect(isConnected) {
+        if (isConnected && pendingSendIds.isNotEmpty()) {
+            val toSend = downloads.filter { it.id in pendingSendIds }
+            if (toSend.isNotEmpty()) vm.sendSelected(toSend)
+            pendingSendIds = emptySet()
         }
     }
+
+    DisposableEffect(Unit) { onDispose { vm.reset() } }
 
     BackHandler(enabled = isConnected) { showDisconnectDialog = true }
 
@@ -359,6 +410,11 @@ fun TransferScreen(
             onConfirm = { showDisconnectDialog = false; vm.disconnect(); nav?.popBackStack() },
             onDismiss = { showDisconnectDialog = false },
         )
+    }
+
+    LaunchedEffect(intent) {
+        if (intent == TransferIntent.NONE) return@LaunchedEffect
+        showPermPage = !ctx.allTransferPermsGranted(forSend = intent == TransferIntent.SEND)
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -371,30 +427,61 @@ fun TransferScreen(
                 onBackRequest = { if (isConnected) showDisconnectDialog = true else nav?.popBackStack() },
             )
 
-            AnimatedVisibility(!isConnected, enter = fadeIn(), exit = fadeOut()) {
-                BeamTabBar(selected = tab, onSelect = { tab = it })
-            }
-
-            Spacer(Modifier.height(d.spaceXs))
-
             when {
-                isConnected ->
-                    BrowsePage(
-                        uiState   = uiState,
-                        downloads = downloads,
-                        ctx       = ctx,
-                        vm        = vm,
+                // ── Connected: browse & send more files ───────────────────────
+                isConnected -> {
+                    showPermPage = false
+                    intent = TransferIntent.NONE
+                    BrowsePage(uiState = uiState, downloads = downloads, ctx = ctx, vm = vm)
+                }
+
+                // ── Permission gate ───────────────────────────────────────────
+                showPermPage -> {
+                    PermissionPage(
+                        intent       = intent,
+                        ctx          = ctx,
+                        onAllGranted = {
+                            showPermPage = false
+                            when (intent) {
+                                TransferIntent.SEND    -> vm.startAsSender()
+                                TransferIntent.RECEIVE -> { /* scanner shows in ReceivePage */ }
+                                else -> {}
+                            }
+                        },
+                        onBack = { showPermPage = false; intent = TransferIntent.NONE; vm.reset() },
                     )
-                tab == 0 -> SendTab(uiState = uiState, ctx = ctx, vm = vm)
-                else     -> ReceiveTab(uiState = uiState, ctx = ctx, vm = vm)
+                }
+
+                // ── QR / Scanner / Idle ───────────────────────────────────────
+                else -> {
+                    when (intent) {
+                        TransferIntent.SEND    -> SendPage(
+                            uiState = uiState, ctx = ctx, vm = vm,
+                            onReset = { intent = TransferIntent.NONE; vm.reset() }
+                        )
+                        TransferIntent.RECEIVE -> ReceivePage(
+                            uiState = uiState, ctx = ctx, vm = vm,
+                            onReset = { intent = TransferIntent.NONE; vm.reset() }
+                        )
+                        TransferIntent.NONE    -> IdlePage(
+                            downloads     = downloads,
+                            pendingSendIds = pendingSendIds,
+                            onSend        = { selectedIds ->
+                                pendingSendIds = selectedIds
+                                intent = TransferIntent.SEND
+                            },
+                            onReceive     = { intent = TransferIntent.RECEIVE },
+                        )
+                    }
+                }
             }
         }
 
         // ── Floating transfer button ──────────────────────────────────────────
         AnimatedVisibility(
-            visible = hasWork || isConnected,
-            enter   = scaleIn() + fadeIn(),
-            exit    = scaleOut() + fadeOut(),
+            visible  = hasWork || isConnected,
+            enter    = scaleIn() + fadeIn(),
+            exit     = scaleOut() + fadeOut(),
             modifier = Modifier.align(Alignment.BottomEnd),
         ) {
             val activeCount = remember(sendQueue, receiveQueue) {
@@ -409,13 +496,12 @@ fun TransferScreen(
             )
         }
 
-        // ── Transfer panel bottom sheet ───────────────────────────────────────
         if (showPanel) {
             TransferPanel(
-                sendQueue    = sendQueue,
-                receiveQueue = receiveQueue,
-                onCancelActiveSend    = { vm.cancelActiveSend() },
-                onCancelReceive       = { id, active ->
+                sendQueue           = sendQueue,
+                receiveQueue        = receiveQueue,
+                onCancelActiveSend  = { vm.cancelActiveSend() },
+                onCancelReceive     = { id, active ->
                     if (active) vm.cancelActiveReceive() else vm.cancelQueuedReceive(id)
                 },
                 onDisconnect = { showPanel = false; showDisconnectDialog = true },
@@ -425,72 +511,175 @@ fun TransferScreen(
     }
 }
 
-// ─── Header ───────────────────────────────────────────────────────────────────
+// ─── Idle page (rich poster-grid browser + Xender-style selection) ─────────────
+//
+//  DESIGN PHILOSOPHY:
+//  • Movies → 2-column poster grid exactly like the connected BrowsePage, but
+//    with a tap-to-select tick overlay. Long-press opens quality picker.
+//  • TV series → expandable card listing seasons/episodes with quality rows
+//    and a per-row checkbox just like the connected BrowsePage.
+//  • "Send N files" at the bottom starts the sender flow (shows QR) and the
+//    selected files are auto-sent the moment the peer connects.
+//  • "Receive" button always visible for the opposite role.
 
 @Composable
-private fun BeamHeader(
-    nav: NavController?,
-    isConnected: Boolean,
-    peerName: String?,
-    onBackRequest: () -> Unit,
+private fun IdlePage(
+    downloads:     List<DownloadItem>,
+    pendingSendIds: Set<String>,
+    onSend:        (Set<String>) -> Unit,
+    onReceive:     () -> Unit,
 ) {
     val d = LocalDimensions.current
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = d.heroPadding - d.spaceSm, vertical = d.spaceLg),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (nav != null) {
-            Box(
-                Modifier.size(d.buttonHeightSm - d.spaceMd).clip(CircleShape)
-                    .background(GlassMd).border(1.dp, GlassBorderMd, CircleShape)
-                    .clickable(onClick = onBackRequest),
-                Alignment.Center,
-            ) { Icon(IconBack, null, tint = Color.White, modifier = Modifier.size(d.iconMd - 2.dp)) }
-            Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
-        }
-        Column {
-            Text(
-                "Reelz Beam",
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    color = Color.White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp),
-            )
-            Text(
-                if (isConnected && peerName != null) "↔ $peerName" else "Instant wireless transfer",
-                color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        val inf = rememberInfiniteTransition(label = "hdr")
-        val pulse by inf.animateFloat(0.4f, 1f, infiniteRepeatable(tween(1200), RepeatMode.Reverse), "hp")
-        Icon(IconBeam, null, tint = Brand.copy(if (isConnected) 1f else pulse), modifier = Modifier.size(d.iconLg))
+
+    val movies = remember(downloads) { downloads.filter { it.episode == 0 }.groupBy { it.title } }
+    val series = remember(downloads) { downloads.filter { it.episode > 0  }.groupBy { it.title } }
+
+    var selected         by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var qualityPickerFor by remember { mutableStateOf<String?>(null) }
+
+    // Restore pending selection if user backed from permission page
+    LaunchedEffect(pendingSendIds) {
+        if (pendingSendIds.isNotEmpty()) selected = pendingSendIds
     }
-}
 
-// ─── Tab bar ──────────────────────────────────────────────────────────────────
+    Box(Modifier.fillMaxSize()) {
+        if (downloads.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(bottom = 120.dp), Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+                    Box(Modifier.size(72.dp).clip(CircleShape).background(GlassMd).border(1.dp, GlassBorderMd, CircleShape), Alignment.Center) {
+                        Icon(IconFilm, null, tint = White40, modifier = Modifier.size(36.dp))
+                    }
+                    Text("No downloads yet", color = White60, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
+                    Text("Download movies first, then use Beam to share.", color = White40, fontSize = d.textSm, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = d.spaceXxl))
+                }
+            }
+        } else {
+            // Rich poster grid — mirrors BrowsePage exactly
+            LazyColumn(
+                Modifier.fillMaxSize().padding(bottom = 136.dp),
+                contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.spaceMd),
+                verticalArrangement = Arrangement.spacedBy(d.spaceLg),
+            ) {
+                item {
+                    // Selection status bar
+                    val selCount = selected.size
+                    AnimatedVisibility(selCount > 0, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(d.radiusMd))
+                                .background(Brand.copy(0.12f))
+                                .border(1.dp, Brand.copy(0.35f), RoundedCornerShape(d.radiusMd))
+                                .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+                        ) {
+                            Icon(IconCheck, null, tint = Brand, modifier = Modifier.size(16.dp))
+                            Text("$selCount file${if (selCount == 1) "" else "s"} selected",
+                                color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = d.textSm,
+                                modifier = Modifier.weight(1f))
+                            Box(
+                                Modifier.clip(RoundedCornerShape(d.radiusSm))
+                                    .clickable { selected = emptySet(); qualityPickerFor = null }
+                                    .padding(horizontal = d.spaceMd, vertical = d.spaceXs),
+                            ) {
+                                Text("Clear", color = White60, fontSize = d.textXs)
+                            }
+                        }
+                    }
+                }
 
-@Composable
-private fun BeamTabBar(selected: Int, onSelect: (Int) -> Unit) {
-    val d = LocalDimensions.current
-    Box(
-        Modifier.padding(horizontal = d.screenHorizPad)
-            .clip(RoundedCornerShape(d.radiusMd)).background(BgCard)
-            .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd)).padding(d.spaceXs),
-    ) {
-        Row {
-            listOf("Share" to IconQr, "Receive" to IconScan).forEachIndexed { i, (label, icon) ->
-                val sel = selected == i
+                if (movies.isNotEmpty()) {
+                    item { SectionLabel("Movies  ·  ${movies.size}") }
+                    val movieList = movies.entries.toList()
+                    items(count = (movieList.size + 1) / 2, key = { "mgrid_$it" }) { rowIdx ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+                            val left  = movieList.getOrNull(rowIdx * 2)
+                            val right = movieList.getOrNull(rowIdx * 2 + 1)
+                            if (left != null) {
+                                val allIds     = left.value.map { it.id }.toSet()
+                                val anySelected = allIds.any { it in selected }
+                                MoviePosterCard(
+                                    title           = left.key,
+                                    qualities       = left.value,
+                                    selected        = anySelected,
+                                    selectedIds     = selected,
+                                    expanded        = qualityPickerFor == left.key,
+                                    onTap           = { selected = if (anySelected) selected - allIds else selected + allIds; qualityPickerFor = null },
+                                    onLongPress     = { qualityPickerFor = if (qualityPickerFor == left.key) null else left.key },
+                                    onQualityToggle = { id -> selected = if (id in selected) selected - id else selected + id },
+                                    modifier        = Modifier.weight(1f),
+                                )
+                            } else Spacer(Modifier.weight(1f))
+                            if (right != null) {
+                                val allIds     = right.value.map { it.id }.toSet()
+                                val anySelected = allIds.any { it in selected }
+                                MoviePosterCard(
+                                    title           = right.key,
+                                    qualities       = right.value,
+                                    selected        = anySelected,
+                                    selectedIds     = selected,
+                                    expanded        = qualityPickerFor == right.key,
+                                    onTap           = { selected = if (anySelected) selected - allIds else selected + allIds; qualityPickerFor = null },
+                                    onLongPress     = { qualityPickerFor = if (qualityPickerFor == right.key) null else right.key },
+                                    onQualityToggle = { id -> selected = if (id in selected) selected - id else selected + id },
+                                    modifier        = Modifier.weight(1f),
+                                )
+                            } else Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+
+                if (series.isNotEmpty()) {
+                    item { SectionLabel("Series  ·  ${series.size}") }
+                    series.forEach { (title, episodes) ->
+                        item(key = "series_$title") {
+                            SeriesBrowseRow(
+                                title    = title,
+                                episodes = episodes,
+                                selected = selected,
+                                onToggle = { id -> selected = if (id in selected) selected - id else selected + id },
+                            )
+                        }
+                    }
+                }
+
+                item { Spacer(Modifier.height(20.dp)) }
+            }
+        }
+
+        // Fixed bottom bar: Send (with count) + Receive
+        Column(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Bg, Bg)))
+                .padding(horizontal = d.screenHorizPad, vertical = d.spaceMd)
+                .navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(d.spaceSm),
+        ) {
+            val selCount = selected.size
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+                BrandButton(
+                    text    = when {
+                        selCount == 0 -> "Select files to send"
+                        selCount == 1 -> "Send 1 file"
+                        else          -> "Send $selCount files"
+                    },
+                    enabled = selCount > 0,
+                    onClick = { onSend(selected) },
+                    modifier = Modifier.weight(1f),
+                    icon = { Icon(IconUpload, null, tint = Color(0xFF001428), modifier = Modifier.size(18.dp)) }
+                )
                 Box(
-                    Modifier.weight(1f).clip(RoundedCornerShape(d.spaceMd))
-                        .background(
-                            if (sel) Brush.horizontalGradient(listOf(BrandDeep, Brand.copy(.9f)))
-                            else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
-                        ).clickable { onSelect(i) }.padding(vertical = d.spaceMd),
-                    contentAlignment = Alignment.Center,
+                    Modifier.weight(1f).height(d.buttonHeightMd)
+                        .clip(RoundedCornerShape(d.radiusMd))
+                        .background(GlassMd)
+                        .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+                        .clickable(onClick = onReceive),
+                    Alignment.Center,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
-                        Icon(icon, null, tint = if (sel) Color.White else White60, modifier = Modifier.size(d.iconMd - 4.dp))
-                        Text(label, color = if (sel) Color.White else White60,
-                            fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal, fontSize = d.textMd)
+                        Icon(IconDownload, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Text("Receive", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = d.textMd)
                     }
                 }
             }
@@ -498,33 +687,225 @@ private fun BeamTabBar(selected: Int, onSelect: (Int) -> Unit) {
     }
 }
 
-// ─── Send tab ─────────────────────────────────────────────────────────────────
+// ─── Permission page ──────────────────────────────────────────────────────────
+
+private data class PermItem(
+    val label:          String,
+    val description:    String,
+    val icon:           ImageVector,
+    val perm:           String? = null,
+    val settingsAction: String? = null,
+    val isSystemSetting: Boolean = false,
+)
 
 @Composable
-private fun SendTab(uiState: TransferUiState, ctx: Context, vm: TransferViewModel) {
+private fun PermissionPage(
+    intent:       TransferIntent,
+    ctx:          Context,
+    onAllGranted: () -> Unit,
+    onBack:       () -> Unit,
+) {
     val d = LocalDimensions.current
-    var hasPerms by remember { mutableStateOf(ctx.allTransferPermsGranted()) }
+    val forSend = intent == TransferIntent.SEND
 
-    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
-        hasPerms = results.entries
-            .filter { (p, _) -> p == Manifest.permission.ACCESS_FINE_LOCATION ||
-                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && p == Manifest.permission.NEARBY_WIFI_DEVICES) }
-            .all { (_, g) -> g }
-        if (hasPerms) vm.startAsSender()
+    val permItems: List<PermItem> = remember(forSend) {
+        buildList {
+            add(PermItem(
+                label           = "Wi-Fi",
+                description     = "Required for device-to-device wireless transfer",
+                icon            = IconWifi,
+                settingsAction  = Settings.ACTION_WIFI_SETTINGS,
+                isSystemSetting = true,
+            ))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(PermItem(
+                    label       = "Nearby Devices",
+                    description = "Required for Wi-Fi Direct & hotspot discovery on Android 13+",
+                    icon        = IconWifi,
+                    perm        = Manifest.permission.NEARBY_WIFI_DEVICES,
+                ))
+            } else {
+                add(PermItem(
+                    label       = "Location",
+                    description = "Required to discover nearby Wi-Fi Direct networks",
+                    icon        = IconLocation,
+                    perm        = Manifest.permission.ACCESS_FINE_LOCATION,
+                ))
+            }
+            if (!forSend) {
+                add(PermItem(
+                    label       = "Camera",
+                    description = "Required to scan the sender's QR code",
+                    icon        = IconCamera,
+                    perm        = Manifest.permission.CAMERA,
+                ))
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(PermItem(
+                    label       = "Notifications",
+                    description = "Required to show transfer progress while app is in background",
+                    icon        = IconBell,
+                    perm        = Manifest.permission.POST_NOTIFICATIONS,
+                ))
+            }
+        }
     }
 
-    // FIX: guard against double-firing. Only call startAsSender() once per tab
-    // visit. If the user manually resets, they tap "Reset" which calls vm.reset()
-    // and then the user re-lands on SendTab, which sets startedOnce = false.
+    var refreshKey by remember { mutableStateOf(0) }
+
+    val grantedMap: Map<String, Boolean> = remember(refreshKey) {
+        permItems.associate { item ->
+            item.label to when {
+                item.isSystemSetting -> ctx.isWifiEnabled()
+                item.perm != null    -> ctx.isGranted(item.perm)
+                else                 -> true
+            }
+        }
+    }
+    val allGranted = grantedMap.values.all { it }
+
+    val multiPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { refreshKey++ }
+
+    val settingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { refreshKey++ }
+
+    LaunchedEffect(allGranted) {
+        if (allGranted) onAllGranted()
+    }
+
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = d.screenHorizPad)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(d.spaceMd),
+    ) {
+        Spacer(Modifier.height(d.spaceXs))
+
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
+            Box(
+                Modifier.size(48.dp).clip(CircleShape)
+                    .background(Brush.radialGradient(listOf(BrandDeep.copy(0.3f), Color.Transparent)))
+                    .border(1.dp, Brand.copy(0.4f), CircleShape),
+                Alignment.Center,
+            ) {
+                Icon(IconShield, null, tint = Brand, modifier = Modifier.size(24.dp))
+            }
+            Column {
+                Text("Permissions needed", color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
+                Text(
+                    "All permissions are required to guarantee ${if (intent == TransferIntent.SEND) "sending" else "receiving"} works.",
+                    color = White60, fontSize = d.textSm,
+                )
+            }
+        }
+
+        permItems.forEach { item ->
+            val granted = grantedMap[item.label] == true
+            PermissionRow(
+                item    = item,
+                granted = granted,
+                onAllow = {
+                    if (item.perm != null) {
+                        multiPermLauncher.launch(arrayOf(item.perm))
+                    } else {
+                        val settingsIntent = Intent(item.settingsAction ?: Settings.ACTION_WIFI_SETTINGS)
+                        try { settingsLauncher.launch(settingsIntent) }
+                        catch (_: Exception) {
+                            settingsLauncher.launch(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", ctx.packageName, null))
+                            )
+                        }
+                    }
+                },
+            )
+        }
+
+        Spacer(Modifier.height(d.spaceMd))
+
+        BrandButton(
+            text     = "Next →",
+            enabled  = allGranted,
+            onClick  = onAllGranted,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Box(Modifier.fillMaxWidth().clickable(onClick = onBack).padding(vertical = d.spaceSm), Alignment.Center) {
+            Text("Cancel", color = White40, fontSize = d.textSm)
+        }
+
+        Spacer(Modifier.height(d.spaceXxl * 3f))
+    }
+}
+
+@Composable
+private fun PermissionRow(item: PermItem, granted: Boolean, onAllow: () -> Unit) {
+    val d = LocalDimensions.current
+    val borderColor by animateColorAsState(
+        if (granted) Success.copy(0.4f) else AmberBorder, tween(300), label = "pb"
+    )
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
+            .background(BgCard)
+            .border(1.dp, borderColor, RoundedCornerShape(d.radiusMd))
+            .padding(d.spaceMd),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
+    ) {
+        Box(
+            Modifier.size(40.dp).clip(CircleShape)
+                .background(if (granted) Success.copy(0.12f) else GlassMd)
+                .border(1.dp, if (granted) Success.copy(0.35f) else GlassBorderMd, CircleShape),
+            Alignment.Center,
+        ) {
+            Icon(if (granted) IconCheck else item.icon, null,
+                tint = if (granted) Success else White60,
+                modifier = Modifier.size(20.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(item.label, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = d.textMd)
+            Text(item.description, color = White40, fontSize = d.textXs)
+        }
+        if (!granted) {
+            Box(
+                Modifier.clip(RoundedCornerShape(d.radiusSm))
+                    .background(Brush.horizontalGradient(listOf(BrandDeep, Brand)))
+                    .clickable(onClick = onAllow)
+                    .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
+            ) {
+                Text("Allow", color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textSm)
+            }
+        } else {
+            Box(
+                Modifier.clip(RoundedCornerShape(d.radiusSm))
+                    .background(Success.copy(0.12f))
+                    .border(1.dp, Success.copy(0.3f), RoundedCornerShape(d.radiusSm))
+                    .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
+            ) {
+                Text("Allowed", color = Success, fontWeight = FontWeight.SemiBold, fontSize = d.textSm)
+            }
+        }
+    }
+}
+
+// ─── Send page ────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SendPage(
+    uiState: TransferUiState,
+    ctx:     Context,
+    vm:      TransferViewModel,
+    onReset: () -> Unit,
+) {
+    val d = LocalDimensions.current
+
     var startedOnce by remember { mutableStateOf(false) }
-    LaunchedEffect(hasPerms, uiState) {
-        if (hasPerms && uiState is TransferUiState.Idle && !startedOnce) {
+    LaunchedEffect(Unit) {
+        if (!startedOnce) {
             startedOnce = true
             vm.startAsSender()
-        }
-        // Allow re-start after an error or explicit reset
-        if (uiState is TransferUiState.Error || uiState is TransferUiState.Idle) {
-            if (startedOnce && uiState is TransferUiState.Idle) startedOnce = false
         }
     }
 
@@ -535,35 +916,23 @@ private fun SendTab(uiState: TransferUiState, ctx: Context, vm: TransferViewMode
         Spacer(Modifier.height(d.spaceXs))
 
         when (uiState) {
-            is TransferUiState.Idle -> {
-                if (!hasPerms) {
-                    PermissionCard(
-                        icon        = IconWifi,
-                        title       = "Wireless access needed",
-                        subtitle    = "Reelz Beam needs Wi-Fi permission to create a connection. Your location is never stored or sent.",
-                        buttonLabel = "Allow & Share",
-                        onRequest   = { permLauncher.launch(buildTransferPermissions()) },
-                    )
-                } else {
-                    SilentLoadingCard()
-                }
-            }
-            is TransferUiState.Preparing -> SilentLoadingCard()
+            is TransferUiState.Idle, is TransferUiState.Preparing -> SilentLoadingCard()
             is TransferUiState.QrReady -> {
                 val payload = BeamPayload.decode(uiState.payload)
                 QrCard(
-                    qr           = uiState.qr,
-                    sessionId    = uiState.sessionId,
-                    hotspotSsid  = if (payload?.tier == "HS") payload.ssid else null,
-                    hotspotPass  = if (payload?.tier == "HS") payload.password else null,
-                    onReset      = { startedOnce = false; vm.reset() },
+                    qr          = uiState.qr,
+                    sessionId   = uiState.sessionId,
+                    hotspotSsid = if (payload?.tier == "HS") payload.ssid else null,
+                    hotspotPass = if (payload?.tier == "HS") payload.password else null,
+                    tier        = payload?.tier,
+                    onReset     = { onReset() },
                 )
             }
             is TransferUiState.Error -> ErrorCard(
                 msg       = uiState.msg,
                 retryable = uiState.retryable,
                 kind      = uiState.kind,
-                onRetry   = { vm.reset() },
+                onRetry   = { onReset() },
             )
             else -> {}
         }
@@ -571,33 +940,20 @@ private fun SendTab(uiState: TransferUiState, ctx: Context, vm: TransferViewMode
     }
 }
 
-// ─── Receive tab ──────────────────────────────────────────────────────────────
+// ─── Receive page ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun ReceiveTab(
+private fun ReceivePage(
     uiState: TransferUiState,
-    ctx: Context,
-    vm: TransferViewModel,
+    ctx:     Context,
+    vm:      TransferViewModel,
+    onReset: () -> Unit,
 ) {
     val d = LocalDimensions.current
-    var hasCam           by remember { mutableStateOf(ctx.hasCameraPermission()) }
-    var hasTransferPerms by remember { mutableStateOf(ctx.allTransferPermsGranted()) }
-    var pendingQr        by remember { mutableStateOf<String?>(null) }
-
-    val camLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasCam = it }
-    val transferPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
-        hasTransferPerms = results.entries
-            .filter { (p, _) -> p == Manifest.permission.ACCESS_FINE_LOCATION ||
-                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && p == Manifest.permission.NEARBY_WIFI_DEVICES) }
-            .all { (_, g) -> g }
-        val qr = pendingQr; pendingQr = null
-        if (hasTransferPerms && qr != null) vm.connectFromQr(qr)
-    }
 
     fun onQrScanned(raw: String) {
         if (!raw.startsWith("reelzbeam://")) return
-        if (hasTransferPerms) vm.connectFromQr(raw)
-        else { pendingQr = raw; transferPermLauncher.launch(buildTransferPermissions()) }
+        vm.connectFromQr(raw)
     }
 
     Column(
@@ -607,23 +963,16 @@ private fun ReceiveTab(
         Spacer(Modifier.height(d.spaceXs))
 
         when (uiState) {
-            is TransferUiState.Idle -> {
-                if (!hasCam) {
-                    PermissionCard(
-                        icon        = IconCamera,
-                        title       = "Camera access needed",
-                        subtitle    = "Point your camera at the sender's QR code to connect instantly.",
-                        buttonLabel = "Allow Camera",
-                        onRequest   = { camLauncher.launch(Manifest.permission.CAMERA) },
-                    )
-                } else {
-                    ScannerCard(onScanned = ::onQrScanned)
-                }
-            }
+            is TransferUiState.Idle       -> ScannerCard(onScanned = ::onQrScanned)
             is TransferUiState.Connecting -> ScannerConnectingOverlay()
             is TransferUiState.Error -> {
-                ErrorCard(msg = uiState.msg, retryable = uiState.retryable, onRetry = { vm.reset() })
-                if (hasCam) {
+                ErrorCard(
+                    msg       = uiState.msg,
+                    retryable = uiState.retryable,
+                    kind      = uiState.kind,
+                    onRetry   = { onReset() },
+                )
+                if (uiState.kind != TransferUiState.ErrorKind.SWITCH_ROLE) {
                     Spacer(Modifier.height(d.spaceSm))
                     ScannerCard(onScanned = ::onQrScanned)
                 }
@@ -635,10 +984,6 @@ private fun ReceiveTab(
 }
 
 // ─── Browse page (post-connection) ────────────────────────────────────────────
-//
-//  Xender-style design: poster cards in a 2-column grid for movies,
-//  episode rows with thumbnail frame for series.
-//  Tapping a card selects all qualities; long-press opens quality picker.
 
 @Composable
 private fun BrowsePage(
@@ -649,33 +994,28 @@ private fun BrowsePage(
 ) {
     val d = LocalDimensions.current
 
-    val movies  = remember(downloads) { downloads.filter { it.episode == 0 }.groupBy { it.title } }
-    val series  = remember(downloads) { downloads.filter { it.episode > 0  }.groupBy { it.title } }
+    val movies = remember(downloads) { downloads.filter { it.episode == 0 }.groupBy { it.title } }
+    val series = remember(downloads) { downloads.filter { it.episode > 0  }.groupBy { it.title } }
 
-    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var qualityPickerFor by remember { mutableStateOf<String?>(null) }  // title being expanded
+    var selected         by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var qualityPickerFor by remember { mutableStateOf<String?>(null) }
 
     val peerName = (uiState as? TransferUiState.Connected)?.peerName
-        ?: (uiState as? TransferUiState.Transferring)?.peerName
-        ?: "Peer"
-
+        ?: (uiState as? TransferUiState.Transferring)?.peerName ?: "Peer"
     val isSending = uiState is TransferUiState.Transferring
 
     Column(Modifier.fillMaxSize()) {
-        // Connected banner
         ConnectedBadge(
             peerName = peerName,
             tier     = (uiState as? TransferUiState.Connected)?.tier
                 ?: (uiState as? TransferUiState.Transferring)?.tier,
             modifier = Modifier.padding(horizontal = d.screenHorizPad),
         )
-
         Spacer(Modifier.height(d.spaceSm))
 
         if (downloads.isEmpty()) {
-            Box(Modifier.weight(1f), Alignment.Center) {
+            Box(Modifier.weight(1f).padding(bottom = 100.dp), Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd)) {
-                    // Film reel illustration
                     Box(Modifier.size(72.dp).clip(CircleShape).background(GlassMd).border(1.dp, GlassBorderMd, CircleShape), Alignment.Center) {
                         Icon(IconFilm, null, tint = White40, modifier = Modifier.size(36.dp))
                     }
@@ -689,85 +1029,49 @@ private fun BrowsePage(
                 contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.spaceSm),
                 verticalArrangement = Arrangement.spacedBy(d.spaceLg),
             ) {
-                // ── Movies — Xender-style 2-column poster grid ──────────────
                 if (movies.isNotEmpty()) {
-                    item {
-                        SectionLabel("Movies  ·  ${movies.size}")
-                    }
-                    // Chunk into pairs for the 2-column grid
+                    item { SectionLabel("Movies  ·  ${movies.size}") }
                     val movieList = movies.entries.toList()
-                    items(
-                        count = (movieList.size + 1) / 2,
-                        key   = { "mgrid_$it" },
-                    ) { rowIdx ->
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
-                        ) {
+                    items(count = (movieList.size + 1) / 2, key = { "mgrid_$it" }) { rowIdx ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.spaceMd)) {
                             val left  = movieList.getOrNull(rowIdx * 2)
                             val right = movieList.getOrNull(rowIdx * 2 + 1)
                             if (left != null) {
-                                val allIds = left.value.map { it.id }.toSet()
+                                val allIds      = left.value.map { it.id }.toSet()
                                 val anySelected = allIds.any { it in selected }
                                 MoviePosterCard(
-                                    title      = left.key,
-                                    qualities  = left.value,
-                                    selected   = anySelected,
-                                    expanded   = qualityPickerFor == left.key,
-                                    onTap      = {
-                                        // Single tap: toggle all qualities at once (Xender UX)
-                                        selected = if (anySelected) selected - allIds else selected + allIds
-                                        qualityPickerFor = null
-                                    },
-                                    onLongPress = {
-                                        qualityPickerFor = if (qualityPickerFor == left.key) null else left.key
-                                    },
-                                    onQualityToggle = { id ->
-                                        selected = if (id in selected) selected - id else selected + id
-                                    },
+                                    title = left.key, qualities = left.value, selected = anySelected,
+                                    selectedIds = selected,
+                                    expanded = qualityPickerFor == left.key,
+                                    onTap = { selected = if (anySelected) selected - allIds else selected + allIds; qualityPickerFor = null },
+                                    onLongPress = { qualityPickerFor = if (qualityPickerFor == left.key) null else left.key },
+                                    onQualityToggle = { id -> selected = if (id in selected) selected - id else selected + id },
                                     modifier = Modifier.weight(1f),
                                 )
-                            } else {
-                                Spacer(Modifier.weight(1f))
-                            }
+                            } else Spacer(Modifier.weight(1f))
                             if (right != null) {
-                                val allIds = right.value.map { it.id }.toSet()
+                                val allIds      = right.value.map { it.id }.toSet()
                                 val anySelected = allIds.any { it in selected }
                                 MoviePosterCard(
-                                    title      = right.key,
-                                    qualities  = right.value,
-                                    selected   = anySelected,
-                                    expanded   = qualityPickerFor == right.key,
-                                    onTap      = {
-                                        selected = if (anySelected) selected - allIds else selected + allIds
-                                        qualityPickerFor = null
-                                    },
-                                    onLongPress = {
-                                        qualityPickerFor = if (qualityPickerFor == right.key) null else right.key
-                                    },
-                                    onQualityToggle = { id ->
-                                        selected = if (id in selected) selected - id else selected + id
-                                    },
+                                    title = right.key, qualities = right.value, selected = anySelected,
+                                    selectedIds = selected,
+                                    expanded = qualityPickerFor == right.key,
+                                    onTap = { selected = if (anySelected) selected - allIds else selected + allIds; qualityPickerFor = null },
+                                    onLongPress = { qualityPickerFor = if (qualityPickerFor == right.key) null else right.key },
+                                    onQualityToggle = { id -> selected = if (id in selected) selected - id else selected + id },
                                     modifier = Modifier.weight(1f),
                                 )
-                            } else {
-                                Spacer(Modifier.weight(1f))
-                            }
+                            } else Spacer(Modifier.weight(1f))
                         }
                     }
                 }
 
-                // ── Series — episode rows with film-frame thumbnail ─────────
                 if (series.isNotEmpty()) {
                     item { SectionLabel("Series  ·  ${series.size}") }
                     series.forEach { (title, episodes) ->
                         item(key = "series_$title") {
-                            SeriesBrowseRow(
-                                title     = title,
-                                episodes  = episodes,
-                                selected  = selected,
-                                onToggle  = { id -> selected = if (id in selected) selected - id else selected + id },
-                            )
+                            SeriesBrowseRow(title = title, episodes = episodes, selected = selected,
+                                onToggle = { id -> selected = if (id in selected) selected - id else selected + id })
                         }
                     }
                 }
@@ -776,7 +1080,6 @@ private fun BrowsePage(
             }
         }
 
-        // ── Send button ───────────────────────────────────────────────────────
         val selCount = selected.size
         Box(
             Modifier.fillMaxWidth()
@@ -794,8 +1097,7 @@ private fun BrowsePage(
                 onClick = {
                     val toSend = downloads.filter { it.id in selected }
                     vm.sendSelected(toSend)
-                    selected = emptySet()
-                    qualityPickerFor = null
+                    selected = emptySet(); qualityPickerFor = null
                 },
                 modifier = Modifier.fillMaxWidth(),
                 icon = { Icon(IconUpload, null, tint = Color(0xFF001428), modifier = Modifier.size(d.iconMd - 4.dp)) },
@@ -804,18 +1106,53 @@ private fun BrowsePage(
     }
 }
 
-// ─── Movie poster card (Xender-style) ─────────────────────────────────────────
-//
-//  Displays the movie poster (via coil/async if posterUrl available),
-//  or a generated colour swatch with film-strip overlay.
-//  Single tap → selects all quality variants.
-//  Long press → reveals inline quality pill row.
+// ─── Header ───────────────────────────────────────────────────────────────────
+
+@Composable
+private fun BeamHeader(
+    nav:           NavController?,
+    isConnected:   Boolean,
+    peerName:      String?,
+    onBackRequest: () -> Unit,
+) {
+    val d = LocalDimensions.current
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = d.heroPadding - d.spaceSm, vertical = d.spaceLg),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (nav != null) {
+            Box(
+                Modifier.size(d.buttonHeightSm - d.spaceMd).clip(CircleShape)
+                    .background(GlassMd).border(1.dp, GlassBorderMd, CircleShape)
+                    .clickable(onClick = onBackRequest),
+                Alignment.Center,
+            ) { Icon(IconBack, null, tint = Color.White, modifier = Modifier.size(d.iconMd - 2.dp)) }
+            Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
+        }
+        Column {
+            Text("Reelz Beam",
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    color = Color.White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp))
+            Text(
+                if (isConnected && peerName != null) "↔ $peerName" else "Instant wireless transfer",
+                color = Brand, fontSize = d.textSm, fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        val inf = rememberInfiniteTransition(label = "hdr")
+        val pulse by inf.animateFloat(0.4f, 1f, infiniteRepeatable(tween(1200), RepeatMode.Reverse), "hp")
+        Icon(IconBeam, null, tint = Brand.copy(if (isConnected) 1f else pulse), modifier = Modifier.size(d.iconLg))
+    }
+}
+
+// ─── Movie poster card ────────────────────────────────────────────────────────
 
 @Composable
 private fun MoviePosterCard(
     title:           String,
     qualities:       List<DownloadItem>,
     selected:        Boolean,
+    selectedIds:     Set<String>,
     expanded:        Boolean,
     onTap:           () -> Unit,
     onLongPress:     () -> Unit,
@@ -825,242 +1162,73 @@ private fun MoviePosterCard(
     val d = LocalDimensions.current
     val posterUrl = qualities.firstOrNull()?.posterUrl ?: ""
     val totalSize = qualities.sumOf { it.sizeBytes }
-
-    // Deterministic colour from title for placeholder
     val hue = (title.hashCode().and(0x7FFFFFFF) % 360).toFloat()
-    val placeholderColor = Color.hsl(hue, 0.35f, 0.15f)
+    val placeholderColor  = Color.hsl(hue, 0.35f, 0.15f)
     val placeholderAccent = Color.hsl(hue, 0.6f, 0.45f)
+    val borderColor by animateColorAsState(if (selected) Brand else GlassBorderMd, tween(200), label = "mc")
+    val bgOverlay   by animateColorAsState(if (selected) Brand.copy(0.18f) else Color.Transparent, tween(200), label = "mb")
 
-    val borderColor by animateColorAsState(
-        if (selected) Brand else GlassBorderMd, tween(200), label = "mc"
-    )
-    val bgOverlay by animateColorAsState(
-        if (selected) Brand.copy(0.18f) else Color.Transparent, tween(200), label = "mb"
-    )
-
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(d.spaceXs),
-    ) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
         Box(
-            Modifier.fillMaxWidth()
-                .aspectRatio(2f / 3f)   // standard movie poster ratio
-                .clip(RoundedCornerShape(d.radiusMd))
-                .background(placeholderColor)
+            Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+                .clip(RoundedCornerShape(d.radiusMd)).background(placeholderColor)
                 .border(2.dp, borderColor, RoundedCornerShape(d.radiusMd))
                 .combinedClickable(onClick = onTap, onLongClick = onLongPress),
         ) {
-            // Poster image — if URL present, try async load
-            if (posterUrl.isNotEmpty()) {
-                // Lazy image loading: use AndroidView wrapping an ImageView
-                // (avoids requiring Coil as a mandatory dependency)
-                PosterImage(url = posterUrl, modifier = Modifier.fillMaxSize())
-            } else {
-                // Colourful placeholder with film-strip art
-                FilmStripPlaceholder(accentColor = placeholderAccent, modifier = Modifier.fillMaxSize())
-            }
-
-            // Selection overlay
+            if (posterUrl.isNotEmpty()) PosterImage(url = posterUrl, modifier = Modifier.fillMaxSize())
+            else FilmStripPlaceholder(accentColor = placeholderAccent, modifier = Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(bgOverlay))
-
-            // Film-strip top bar (Xender style)
-            Row(
-                Modifier.fillMaxWidth().background(Color.Black.copy(0.55f)).padding(horizontal = 6.dp, vertical = 3.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                repeat(5) {
-                    Box(Modifier.size(width = 7.dp, height = 5.dp).background(Color.White.copy(0.5f), RoundedCornerShape(1.dp)))
-                }
+            // Film strip decoration at top
+            Row(Modifier.fillMaxWidth().background(Color.Black.copy(0.55f)).padding(horizontal = 6.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                repeat(5) { Box(Modifier.size(width = 7.dp, height = 5.dp).background(Color.White.copy(0.5f), RoundedCornerShape(1.dp))) }
             }
-
-            // Selected check badge
-            if (selected) {
-                Box(
-                    Modifier.align(Alignment.TopEnd).padding(6.dp)
-                        .size(22.dp).clip(CircleShape)
-                        .background(Brand).border(1.5.dp, Color.White.copy(0.4f), CircleShape),
-                    Alignment.Center,
-                ) {
-                    Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(12.dp))
-                }
-            }
-
-            // Size badge at bottom
+            // Selection tick — Xender-style checkmark in top-right
             Box(
-                Modifier.align(Alignment.BottomStart).padding(6.dp)
-                    .background(Color.Black.copy(0.72f), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp).clip(CircleShape)
+                    .background(if (selected) Brand else Color.Black.copy(0.5f))
+                    .border(1.5.dp, if (selected) Color.White.copy(0.4f) else Color.White.copy(0.3f), CircleShape),
+                Alignment.Center,
             ) {
+                if (selected) Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(13.dp))
+            }
+            // Size badge bottom-left
+            Box(Modifier.align(Alignment.BottomStart).padding(6.dp)
+                .background(Color.Black.copy(0.72f), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 2.dp)) {
                 Text(formatSize(totalSize), color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
-
-            // Quality count badge
             if (qualities.size > 1) {
-                Box(
-                    Modifier.align(Alignment.BottomEnd).padding(6.dp)
-                        .background(Color.Black.copy(0.72f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                ) {
+                Box(Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                    .background(Color.Black.copy(0.72f), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 2.dp)) {
                     Text("${qualities.size}Q", color = Brand, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
-
-        // Title under poster
-        Text(
-            title,
-            color = if (selected) Color.White else White80,
-            fontSize = 11.sp,
+        Text(title, color = if (selected) Color.White else White80, fontSize = 11.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
+            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 2.dp))
 
-        // Expanded quality picker (long-press reveals this)
         AnimatedVisibility(expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 qualities.forEach { dl ->
-                    val sel = dl.id in listOf<String>().let { selected.let { _ -> dl.id } }  // simplified
+                    val qualSel = dl.id in selectedIds
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
-                            .background(if (selected) BlueGlass else GlassMd)
-                            .border(1.dp, if (selected) BlueBorder else GlassBorderSm, RoundedCornerShape(6.dp))
+                            .background(if (qualSel) BlueGlass else GlassMd)
+                            .border(1.dp, if (qualSel) Brand.copy(0.5f) else GlassBorderSm, RoundedCornerShape(6.dp))
                             .clickable { onQualityToggle(dl.id) }
                             .padding(horizontal = 8.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        CheckCircle(checked = dl.id in setOf<String>())
-                        Text(dl.quality, color = White60, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                        CheckCircle(checked = qualSel)
+                        Text(dl.quality,
+                            color = if (qualSel) Color.White else White60,
+                            fontWeight = if (qualSel) FontWeight.SemiBold else FontWeight.Normal,
+                            fontSize = 10.sp, modifier = Modifier.weight(1f))
                         Text(formatSize(dl.sizeBytes), color = White40, fontSize = 9.sp)
                     }
                 }
-            }
-        }
-    }
-}
-
-// ─── Film-strip placeholder art ───────────────────────────────────────────────
-
-@Composable
-private fun FilmStripPlaceholder(accentColor: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        // Dark gradient base
-        drawRect(brush = Brush.verticalGradient(listOf(Color(0xFF0A0A12), Color(0xFF1A1A28))))
-
-        // Centre glow
-        drawCircle(
-            brush = Brush.radialGradient(
-                listOf(accentColor.copy(0.3f), Color.Transparent),
-                center = center,
-                radius = size.minDimension * 0.45f,
-            )
-        )
-
-        // Film perforations on left and right edges
-        val perfW = size.width * 0.08f
-        val perfH = size.height * 0.04f
-        val perfGap = perfH * 2.4f
-        var y = perfGap
-        while (y < size.height - perfH) {
-            // Left perfs
-            drawRoundRect(
-                color = Color.White.copy(0.25f),
-                topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.01f, y),
-                size = androidx.compose.ui.geometry.Size(perfW, perfH),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f),
-            )
-            // Right perfs
-            drawRoundRect(
-                color = Color.White.copy(0.25f),
-                topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.91f, y),
-                size = androidx.compose.ui.geometry.Size(perfW, perfH),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f),
-            )
-            y += perfGap
-        }
-
-        // Centre play-triangle hint
-        val cx = center.x; val cy = center.y; val r = size.minDimension * 0.12f
-        val path = androidx.compose.ui.graphics.Path().apply {
-            moveTo(cx - r, cy - r * 1.2f)
-            lineTo(cx + r * 1.4f, cy)
-            lineTo(cx - r, cy + r * 1.2f)
-            close()
-        }
-        drawPath(path, color = accentColor.copy(0.6f))
-    }
-}
-
-// ─── Async poster image ───────────────────────────────────────────────────────
-//
-//  Simple URL-to-bitmap loader without requiring Coil.
-//  Uses AndroidView → ImageView with a background coroutine load.
-
-@Composable
-private fun PosterImage(url: String, modifier: Modifier = Modifier) {
-    val ctx = LocalContext.current
-    var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var failed by remember(url) { mutableStateOf(false) }
-
-    LaunchedEffect(url) {
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 4_000
-                conn.readTimeout    = 6_000
-                conn.connect()
-                val bmp = android.graphics.BitmapFactory.decodeStream(conn.inputStream)
-                withContext(kotlinx.coroutines.Dispatchers.Main) { bitmap = bmp }
-                conn.disconnect()
-            } catch (_: Exception) {
-                withContext(kotlinx.coroutines.Dispatchers.Main) { failed = true }
-            }
-        }
-    }
-
-    val bmp = bitmap
-    if (bmp != null) {
-        Image(bmp.asImageBitmap(), contentDescription = null, modifier = modifier,
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-    }
-    // If null/failed: caller's placeholder shows through (transparent)
-}
-
-// ─── Movie browse row — kept as fallback for very long quality lists ───────────
-
-@Composable
-private fun MovieBrowseRow(
-    title:     String,
-    qualities: List<DownloadItem>,
-    selected:  Set<String>,
-    onToggle:  (String) -> Unit,
-) {
-    val d = LocalDimensions.current
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
-            .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
-            .padding(d.spaceMd),
-        verticalArrangement = Arrangement.spacedBy(d.spaceXs),
-    ) {
-        Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textMd)
-        qualities.forEach { dl ->
-            val sel = dl.id in selected
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusSm))
-                    .background(if (sel) AmberGlass else GlassMd)
-                    .border(1.dp, if (sel) AmberBorder else GlassBorderSm, RoundedCornerShape(d.radiusSm))
-                    .clickable { onToggle(dl.id) }
-                    .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-            ) {
-                CheckCircle(checked = sel)
-                Text(dl.quality, color = if (sel) Color.White else White60,
-                    fontSize = d.textSm, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
-                    modifier = Modifier.weight(1f))
-                Text(formatSize(dl.sizeBytes), color = White40, fontSize = d.textXs)
             }
         }
     }
@@ -1077,44 +1245,54 @@ private fun SeriesBrowseRow(
 ) {
     val d = LocalDimensions.current
     var expanded by remember { mutableStateOf(false) }
-
-    // Group by season
     val seasons = remember(episodes) { episodes.groupBy { it.season }.toSortedMap() }
+    val allIds = remember(episodes) { episodes.map { it.id }.toSet() }
+    val anySelected = allIds.any { it in selected }
 
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
-            .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+            .background(BgCard)
+            .border(1.dp, if (anySelected) Brand.copy(0.4f) else GlassBorderMd, RoundedCornerShape(d.radiusMd))
             .padding(d.spaceMd),
         verticalArrangement = Arrangement.spacedBy(d.spaceXs),
     ) {
-        // Parent: series title + expand toggle
-        Row(
-            Modifier.fillMaxWidth().clickable { expanded = !expanded },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textMd,
-                modifier = Modifier.weight(1f))
-            Text("${episodes.size} eps", color = White40, fontSize = d.textXs)
+        Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+            // Series poster thumbnail
+            val posterUrl = episodes.firstOrNull()?.posterUrl ?: ""
+            val hue = (title.hashCode().and(0x7FFFFFFF) % 360).toFloat()
+            Box(
+                Modifier.size(width = 40.dp, height = 56.dp)
+                    .clip(RoundedCornerShape(d.radiusSm))
+                    .background(Color.hsl(hue, 0.35f, 0.15f))
+            ) {
+                if (posterUrl.isNotEmpty()) PosterImage(url = posterUrl, modifier = Modifier.fillMaxSize())
+                else FilmStripPlaceholder(accentColor = Color.hsl(hue, 0.6f, 0.45f), modifier = Modifier.fillMaxSize())
+            }
             Spacer(Modifier.width(d.spaceSm))
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textMd)
+                Text("${episodes.size} episode${if (episodes.size == 1) "" else "s"}", color = White40, fontSize = d.textXs)
+            }
+            if (anySelected) {
+                Box(Modifier.size(22.dp).clip(CircleShape).background(Brand), Alignment.Center) {
+                    Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(12.dp))
+                }
+                Spacer(Modifier.width(d.spaceSm))
+            }
             val rot by animateFloatAsState(if (expanded) 180f else 0f, label = "ser")
             Icon(IconChevronDown, null, tint = White60, modifier = Modifier.size(d.iconMd - 4.dp).rotate(rot))
         }
-
-        // Expanded: seasons → episodes
         AnimatedVisibility(expanded) {
             Column(verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
                 seasons.forEach { (season, eps) ->
                     Text("Season $season", color = White60, fontSize = d.textXs, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = d.spaceXs))
-                    // Group by episode number
                     val byEpisode = eps.groupBy { it.episode }.toSortedMap()
                     byEpisode.forEach { (epNum, qualities) ->
-                        val epName = qualities.firstOrNull()?.episodeName?.takeIf { it.isNotBlank() }
-                            ?: "Episode $epNum"
+                        val epName = qualities.firstOrNull()?.episodeName?.takeIf { it.isNotBlank() } ?: "Episode $epNum"
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text("  E${epNum.toString().padStart(2,'0')} · $epName",
-                                color = White60, fontSize = d.textXs,
-                                modifier = Modifier.padding(horizontal = d.spaceSm))
+                                color = White60, fontSize = d.textXs, modifier = Modifier.padding(horizontal = d.spaceSm))
                             qualities.forEach { dl ->
                                 val sel = dl.id in selected
                                 Row(
@@ -1144,45 +1322,29 @@ private fun SeriesBrowseRow(
 // ─── Floating transfer button ─────────────────────────────────────────────────
 
 @Composable
-private fun FloatingTransferButton(
-    activeCount: Int,
-    onClick:     () -> Unit,
-    modifier:    Modifier = Modifier,
-) {
-    val density = LocalDensity.current
+private fun FloatingTransferButton(activeCount: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
-
     val inf = rememberInfiniteTransition(label = "fab")
-    val pulse by inf.animateFloat(
-        0.85f, 1.0f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), "fp"
-    )
+    val pulse by inf.animateFloat(0.85f, 1.0f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), "fp")
 
     Box(
         modifier = modifier
             .offset { IntOffset(offsetX.toInt(), offsetY.toInt()) }
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    offsetX += dragAmount.x
-                    offsetY += dragAmount.y
+                    change.consume(); offsetX += dragAmount.x; offsetY += dragAmount.y
                 }
             }
-            .size(56.dp)
-            .scale(if (activeCount > 0) pulse else 1f)
-            .clip(CircleShape)
-            .background(Brush.radialGradient(listOf(BrandDeep, Brand)))
-            .border(2.dp, Brand.copy(.5f), CircleShape)
-            .clickable(onClick = onClick),
+            .size(56.dp).scale(if (activeCount > 0) pulse else 1f)
+            .clip(CircleShape).background(Brush.radialGradient(listOf(BrandDeep, Brand)))
+            .border(2.dp, Brand.copy(.5f), CircleShape).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(IconBeam, null, tint = Color.White, modifier = Modifier.size(22.dp))
         if (activeCount > 0) {
-            Box(
-                Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp)
-                    .size(16.dp).clip(CircleShape).background(Color.Red),
-                Alignment.Center,
-            ) {
+            Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp)
+                .size(16.dp).clip(CircleShape).background(Color.Red), Alignment.Center) {
                 Text(activeCount.toString(), color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Black)
             }
         }
@@ -1194,80 +1356,55 @@ private fun FloatingTransferButton(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TransferPanel(
-    sendQueue:         List<TransferItem>,
-    receiveQueue:      List<TransferItem>,
+    sendQueue:          List<TransferItem>,
+    receiveQueue:       List<TransferItem>,
     onCancelActiveSend: () -> Unit,
-    onCancelReceive:   (id: String, active: Boolean) -> Unit,
-    onDisconnect:      () -> Unit,
-    onDismiss:         () -> Unit,
+    onCancelReceive:    (id: String, active: Boolean) -> Unit,
+    onDisconnect:       () -> Unit,
+    onDismiss:          () -> Unit,
 ) {
     val d = LocalDimensions.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState       = sheetState,
-        containerColor   = BgRaised,
-        dragHandle       = {
+        onDismissRequest = onDismiss, sheetState = sheetState, containerColor = BgRaised,
+        dragHandle = {
             Box(Modifier.fillMaxWidth().padding(vertical = d.spaceMd), Alignment.Center) {
                 Box(Modifier.width(36.dp).height(4.dp).clip(CircleShape).background(White40))
             }
         },
     ) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad)
-                .padding(bottom = d.spaceXxl),
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad).padding(bottom = d.spaceXxl),
             verticalArrangement = Arrangement.spacedBy(d.spaceMd),
         ) {
-            Text("Transfer", color = Color.White, fontWeight = FontWeight.Black,
-                fontSize = d.textXl, letterSpacing = (-0.3).sp)
+            Text("Transfer", color = Color.White, fontWeight = FontWeight.Black, fontSize = d.textXl, letterSpacing = (-0.3).sp)
 
-            // ── Sending section ───────────────────────────────────────────────
-            val sending = sendQueue.filter {
-                it.status != TransferItemStatus.CANCELLED && it.status != TransferItemStatus.ERROR
-            }
+            val sending = sendQueue.filter { it.status != TransferItemStatus.CANCELLED && it.status != TransferItemStatus.ERROR }
             if (sending.isNotEmpty()) {
                 SectionLabel("Sending")
-                sending.forEach { item ->
-                    PanelQueueRow(
-                        item        = item,
-                        showCancel  = false, // per spec: no cancel on send
-                        onCancel    = {},
-                    )
-                }
+                sending.forEach { item -> PanelQueueRow(item = item, showCancel = false, onCancel = {}) }
             } else {
-                Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
-                        .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
-                        .padding(d.spaceMd),
-                    Alignment.Center,
-                ) { Text("Nothing to send", color = White40, fontSize = d.textSm) }
+                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
+                    .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd)).padding(d.spaceMd), Alignment.Center) {
+                    Text("Nothing to send", color = White40, fontSize = d.textSm)
+                }
             }
 
             Spacer(Modifier.height(d.spaceXs))
 
-            // ── Receiving section ─────────────────────────────────────────────
-            val receiving = receiveQueue.filter {
-                it.status != TransferItemStatus.CANCELLED && it.status != TransferItemStatus.ERROR
-            }
+            val receiving = receiveQueue.filter { it.status != TransferItemStatus.CANCELLED && it.status != TransferItemStatus.ERROR }
             if (receiving.isNotEmpty()) {
                 SectionLabel("Receiving")
                 receiving.forEach { item ->
-                    PanelQueueRow(
-                        item       = item,
-                        showCancel = true,
-                        onCancel   = {
-                            onCancelReceive(item.id, item.status == TransferItemStatus.ACTIVE)
-                        },
-                    )
+                    PanelQueueRow(item = item, showCancel = true,
+                        onCancel = { onCancelReceive(item.id, item.status == TransferItemStatus.ACTIVE) })
                 }
             } else {
-                Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
-                        .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd))
-                        .padding(d.spaceMd),
-                    Alignment.Center,
-                ) { Text("Nothing incoming", color = White40, fontSize = d.textSm) }
+                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
+                    .background(BgCard).border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusMd)).padding(d.spaceMd), Alignment.Center) {
+                    Text("Nothing incoming", color = White40, fontSize = d.textSm)
+                }
             }
 
             Spacer(Modifier.height(d.spaceSm))
@@ -1276,72 +1413,39 @@ private fun TransferPanel(
     }
 }
 
-// ─── Panel queue row (Xender-style with poster thumbnail) ─────────────────────
+// ─── Panel queue row ──────────────────────────────────────────────────────────
 
 @Composable
-private fun PanelQueueRow(
-    item:       TransferItem,
-    showCancel: Boolean,
-    onCancel:   () -> Unit,
-) {
+private fun PanelQueueRow(item: TransferItem, showCancel: Boolean, onCancel: () -> Unit) {
     val d = LocalDimensions.current
-    val isActive  = item.status == TransferItemStatus.ACTIVE
-    val isDone    = item.status == TransferItemStatus.DONE
-    val progress  = if (item.sizeBytes > 0) item.bytesdone.toFloat() / item.sizeBytes else 0f
+    val isActive = item.status == TransferItemStatus.ACTIVE
+    val isDone   = item.status == TransferItemStatus.DONE
+    val progress = if (item.sizeBytes > 0) item.bytesdone.toFloat() / item.sizeBytes else 0f
     val animProg by animateFloatAsState(progress.coerceIn(0f, 1f), tween(200), label = "qp")
-
-    // Xender-style: show poster thumbnail on the left when metadata available
-    val hasPoster = item.posterUrl.isNotEmpty()
     val hue = (item.title.hashCode().and(0x7FFFFFFF) % 360).toFloat()
-    val placeholderColor  = Color.hsl(hue, 0.3f, 0.14f)
-    val placeholderAccent = Color.hsl(hue, 0.55f, 0.4f)
 
     Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
-            .background(BgCard)
-            .border(1.dp,
-                when {
-                    isActive -> Brand.copy(.4f)
-                    isDone   -> Success.copy(.3f)
-                    else     -> GlassBorderMd
-                },
-                RoundedCornerShape(d.radiusMd)
-            )
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd)).background(BgCard)
+            .border(1.dp, when { isActive -> Brand.copy(.4f); isDone -> Success.copy(.3f); else -> GlassBorderMd }, RoundedCornerShape(d.radiusMd))
     ) {
-        // Progress fill
         if (isActive && item.sizeBytes > 0) {
-            Box(
-                Modifier.fillMaxWidth(animProg).matchParentSize()
-                    .clip(RoundedCornerShape(d.radiusMd))
-                    .background(Brush.horizontalGradient(listOf(BrandDim.copy(.2f), BrandDeep.copy(.15f))))
-            )
+            Box(Modifier.fillMaxWidth(animProg).matchParentSize().clip(RoundedCornerShape(d.radiusMd))
+                .background(Brush.horizontalGradient(listOf(BrandDim.copy(.2f), BrandDeep.copy(.15f)))))
         }
-
-        Row(
-            Modifier.padding(d.spaceSm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-        ) {
-            // BUG3 FIX: Xender-style poster thumbnail in the queue row
+        Row(Modifier.padding(d.spaceSm), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
             Box(
-                Modifier.size(width = 44.dp, height = 60.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(placeholderColor)
+                Modifier.size(width = 44.dp, height = 60.dp).clip(RoundedCornerShape(6.dp))
+                    .background(Color.hsl(hue, 0.3f, 0.14f))
                     .border(1.dp, if (isActive) Brand.copy(.3f) else GlassBorderSm, RoundedCornerShape(6.dp))
             ) {
-                if (hasPoster) {
-                    PosterImage(url = item.posterUrl, modifier = Modifier.fillMaxSize())
-                } else {
-                    FilmStripPlaceholder(accentColor = placeholderAccent, modifier = Modifier.fillMaxSize())
-                }
-                // Status overlay badge
+                if (item.posterUrl.isNotEmpty()) PosterImage(url = item.posterUrl, modifier = Modifier.fillMaxSize())
+                else FilmStripPlaceholder(accentColor = Color.hsl(hue, 0.55f, 0.4f), modifier = Modifier.fillMaxSize())
                 if (isDone) {
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(0.5f)))
                     Box(Modifier.align(Alignment.Center).size(16.dp).clip(CircleShape).background(Success), Alignment.Center) {
                         Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(10.dp))
                     }
                 }
-                // Active: pulse ring
                 if (isActive) {
                     val inf = rememberInfiniteTransition(label = "pr")
                     val a by inf.animateFloat(0.2f, 0.7f, infiniteRepeatable(tween(700), RepeatMode.Reverse), "pa")
@@ -1350,26 +1454,19 @@ private fun PanelQueueRow(
             }
 
             Column(Modifier.weight(1f)) {
-                // Show title from metadata if available, else filename
                 val displayTitle = if (item.title.isNotBlank()) item.title else item.fileName
                 Text(displayTitle, color = Color.White, fontSize = d.textSm,
                     fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-
-                // Quality + season/ep badge
                 val badge = buildString {
                     if (item.quality.isNotBlank()) append(item.quality)
-                    if (item.season > 0) append("  S${item.season.toString().padStart(2,'0')}")
+                    if (item.season  > 0) append("  S${item.season.toString().padStart(2,'0')}")
                     if (item.episode > 0) append("E${item.episode.toString().padStart(2,'0')}")
                 }
-                if (badge.isNotBlank()) {
-                    Text(badge, color = White40, fontSize = d.textXs)
-                }
-
+                if (badge.isNotBlank()) Text(badge, color = White40, fontSize = d.textXs)
                 Row(horizontalArrangement = Arrangement.spacedBy(d.spaceSm), verticalAlignment = Alignment.CenterVertically) {
                     when {
                         isDone   -> Text("✓ Done", color = Success, fontSize = d.textXs, fontWeight = FontWeight.SemiBold)
                         isActive -> {
-                            // Progress bar
                             Box(Modifier.weight(1f).height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
                                 Box(Modifier.fillMaxWidth(animProg).fillMaxHeight().background(Brush.horizontalGradient(listOf(BrandDeep, Brand))))
                             }
@@ -1385,12 +1482,8 @@ private fun PanelQueueRow(
             }
 
             if (showCancel && !isDone) {
-                Box(
-                    Modifier.size(28.dp).clip(CircleShape)
-                        .background(GlassMd).border(1.dp, GlassBorderSm, CircleShape)
-                        .clickable(onClick = onCancel),
-                    Alignment.Center,
-                ) {
+                Box(Modifier.size(28.dp).clip(CircleShape).background(GlassMd).border(1.dp, GlassBorderSm, CircleShape)
+                    .clickable(onClick = onCancel), Alignment.Center) {
                     Icon(IconClose, null, tint = White60, modifier = Modifier.size(12.dp))
                 }
             }
@@ -1430,12 +1523,9 @@ private fun ConnectedBadge(peerName: String, tier: TransportTier?, modifier: Mod
 @Composable
 private fun CheckCircle(checked: Boolean) {
     val d = LocalDimensions.current
-    Box(
-        Modifier.size(20.dp).clip(CircleShape)
-            .background(if (checked) AmberGlass else GlassMd)
-            .border(1.5.dp, if (checked) AmberBorder else GlassBorderSm, CircleShape),
-        Alignment.Center,
-    ) {
+    Box(Modifier.size(20.dp).clip(CircleShape)
+        .background(if (checked) AmberGlass else GlassMd)
+        .border(1.5.dp, if (checked) AmberBorder else GlassBorderSm, CircleShape), Alignment.Center) {
         if (checked) Icon(IconCheck, null, tint = Brand, modifier = Modifier.size(12.dp))
     }
 }
@@ -1462,9 +1552,8 @@ private fun ScannerConnectingOverlay() {
     val d = LocalDimensions.current
     val screenH = LocalConfiguration.current.screenHeightDp.dp
     Box(
-        Modifier.fillMaxWidth().height(screenH * 0.42f)
-            .clip(RoundedCornerShape(d.radiusLg)).background(Color.Black.copy(0.85f))
-            .border(1.dp, Brand.copy(.5f), RoundedCornerShape(d.radiusLg)),
+        Modifier.fillMaxWidth().height(screenH * 0.42f).clip(RoundedCornerShape(d.radiusLg))
+            .background(Color.Black.copy(0.85f)).border(1.dp, Brand.copy(.5f), RoundedCornerShape(d.radiusLg)),
         Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd)) {
@@ -1476,31 +1565,20 @@ private fun ScannerConnectingOverlay() {
 }
 
 @Composable
-private fun PermissionCard(icon: ImageVector, title: String, subtitle: String, buttonLabel: String, onRequest: () -> Unit) {
-    val d = LocalDimensions.current
-    Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusLg)).background(BgCard)
-            .border(1.dp, AmberBorder, RoundedCornerShape(d.radiusLg)).padding(d.spaceXxl - d.spaceSm),
-    ) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd)) {
-            Icon(icon, null, tint = Brand, modifier = Modifier.size(44.dp))
-            Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textLg, textAlign = TextAlign.Center)
-            Text(subtitle, color = White60, fontSize = d.textMd, textAlign = TextAlign.Center)
-            BrandButton(text = buttonLabel, onClick = onRequest, modifier = Modifier.fillMaxWidth(),
-                icon = { Icon(icon, null, tint = Color(0xFF001428), modifier = Modifier.size(d.iconMd - 4.dp)) })
-        }
-    }
-}
-
-@Composable
 private fun QrCard(
-    qr: android.graphics.Bitmap?,
-    sessionId: String,
+    qr:          android.graphics.Bitmap?,
+    sessionId:   String,
     hotspotSsid: String?,
     hotspotPass: String?,
-    onReset: () -> Unit,
+    tier:        String?,
+    onReset:     () -> Unit,
 ) {
     val d = LocalDimensions.current
+    val tierLabel = when (tier) {
+        "WD" -> "Wi-Fi Direct"
+        "HS" -> "Hotspot"
+        else -> "Wi-Fi"
+    }
     Box(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusLg))
             .background(Brush.verticalGradient(listOf(BgCard, BgRaised)))
@@ -1511,24 +1589,29 @@ private fun QrCard(
                 val inf = rememberInfiniteTransition(label = "dot")
                 val a by inf.animateFloat(0.3f, 1f, infiniteRepeatable(tween(800), RepeatMode.Reverse), "da")
                 Box(Modifier.size(8.dp).background(Success.copy(a), CircleShape))
-                Text("Ready to scan", color = White60, fontSize = d.textSm)
+                Text("Ready to scan  ·  $tierLabel", color = White60, fontSize = d.textSm)
                 Spacer(Modifier.weight(1f))
                 Text("ID: $sessionId", color = White40, fontSize = d.textXs)
             }
 
+            // QR code area — shows spinner while bitmap is generating on background thread
             Box(Modifier.size(240.dp).clip(RoundedCornerShape(d.radiusMd)).background(Color.White).padding(8.dp)) {
-                if (qr != null) Image(qr.asImageBitmap(), "QR", modifier = Modifier.fillMaxSize())
-                else Box(Modifier.fillMaxSize(), Alignment.Center) { CinematicSpinner(size = d.spinnerMd) }
+                if (qr != null) {
+                    Image(qr.asImageBitmap(), "QR", modifier = Modifier.fillMaxSize())
+                } else {
+                    // Bitmap not ready yet (still generating on Default dispatcher)
+                    Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        CinematicSpinner(size = d.spinnerMd)
+                    }
+                }
             }
 
             Text("Scan with the other device's Reelz app", color = White60, fontSize = d.textSm, textAlign = TextAlign.Center)
 
             if (!hotspotSsid.isNullOrEmpty()) {
                 Row(
-                    Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(d.radiusSm))
-                        .background(Color(0xFF0D1A0D))
-                        .border(1.dp, Success.copy(.3f), RoundedCornerShape(d.radiusSm))
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusSm))
+                        .background(Color(0xFF0D1A0D)).border(1.dp, Success.copy(.3f), RoundedCornerShape(d.radiusSm))
                         .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
                     horizontalArrangement = Arrangement.spacedBy(d.spaceLg),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1555,30 +1638,24 @@ private fun QrCard(
     }
 }
 
+// ─── Error card ───────────────────────────────────────────────────────────────
+
 @Composable
 private fun ErrorCard(
-    msg: String,
+    msg:       String,
     retryable: Boolean,
-    onRetry: () -> Unit,
-    kind: TransferUiState.ErrorKind = TransferUiState.ErrorKind.GENERIC,
+    onRetry:   () -> Unit,
+    kind:      TransferUiState.ErrorKind = TransferUiState.ErrorKind.GENERIC,
 ) {
     val d = LocalDimensions.current
     val (icon, accentColor, headline) = when (kind) {
-        TransferUiState.ErrorKind.PERMISSION -> Triple(IconWifi, Color(0xFFFF9F0A), "Permission required")
-        TransferUiState.ErrorKind.CONNECTION -> Triple(IconWifi,  Error,            "Couldn't connect")
-        TransferUiState.ErrorKind.TIMEOUT    -> Triple(IconWifi,  Color(0xFFFF9F0A),"Connection timed out")
-        TransferUiState.ErrorKind.TRANSFER   -> Triple(IconFilm,  Error,            "Transfer failed")
-        else                                 -> Triple(IconBeam,  Error,            "Something went wrong")
+        TransferUiState.ErrorKind.PERMISSION  -> Triple(IconShield, Color(0xFFFF9F0A), "Permission required")
+        TransferUiState.ErrorKind.CONNECTION  -> Triple(IconWifi,  Error,             "Couldn't connect")
+        TransferUiState.ErrorKind.TIMEOUT     -> Triple(IconWifi,  Color(0xFFFF9F0A), "Connection timed out")
+        TransferUiState.ErrorKind.TRANSFER    -> Triple(IconFilm,  Error,             "Transfer failed")
+        TransferUiState.ErrorKind.SWITCH_ROLE -> Triple(IconSwap,  Brand,             "Switch roles to connect")
+        else                                  -> Triple(IconBeam,  Error,             "Something went wrong")
     }
-
-    // BUG2 FIX: Detect connection errors that are likely caused by a stale Wi-Fi
-    // association (the OS is still holding the previous hotspot network even after
-    // disconnect). Show a clear actionable tip so the user knows what to do.
-    val isStaleWifi = kind == TransferUiState.ErrorKind.CONNECTION &&
-        (msg.contains("unreachable", ignoreCase = true) ||
-         msg.contains("ENETUNREACH", ignoreCase = true) ||
-         msg.contains("timed out", ignoreCase = true) ||
-         msg.contains("lost", ignoreCase = true))
 
     Box(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusLg))
@@ -1595,27 +1672,10 @@ private fun ErrorCard(
             Text(headline, color = Color.White, fontSize = d.textLg, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             Text(msg, color = White60, fontSize = d.textSm, textAlign = TextAlign.Center, lineHeight = (d.textSm.value * 1.6f).sp)
 
-            // BUG2 FIX: Show Wi-Fi toggle tip for stale-connection errors
-            if (isStaleWifi) {
-                Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusSm))
-                        .background(Color(0xFF1A1200))
-                        .border(1.dp, Color(0xFFFFCC00).copy(0.35f), RoundedCornerShape(d.radiusSm))
-                        .padding(d.spaceMd),
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
-                        Text("📶  Wi-Fi still connected to old hotspot?", color = Color(0xFFFFCC00),
-                            fontSize = d.textSm, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "Turn off Wi-Fi on your phone, wait 2 seconds, then turn it back on. " +
-                            "Then tap Try Again — the app will reconnect automatically.",
-                            color = White60, fontSize = d.textXs, lineHeight = (d.textXs.value * 1.7f).sp,
-                        )
-                    }
-                }
-            }
-
-            if (retryable) BrandButton("Try Again", onClick = onRetry, modifier = Modifier.fillMaxWidth())
+            if (retryable) BrandButton(
+                if (kind == TransferUiState.ErrorKind.SWITCH_ROLE) "Start Over" else "Try Again",
+                onClick = onRetry, modifier = Modifier.fillMaxWidth()
+            )
             else GhostButton("Go Back", onClick = onRetry, modifier = Modifier.fillMaxWidth())
         }
     }
@@ -1647,11 +1707,9 @@ private fun ScannerCard(onScanned: (String) -> Unit) {
 
         val inf = rememberInfiniteTransition(label = "sl")
         val scanY by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing), RepeatMode.Reverse), "sy")
-        Box(
-            Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 48.dp)
-                .offset(y = (scanY * 250).dp).height(2.dp)
-                .background(Brush.horizontalGradient(listOf(Color.Transparent, Brand2, Brand, Brand2, Color.Transparent)))
-        )
+        Box(Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 48.dp)
+            .offset(y = (scanY * 250).dp).height(2.dp)
+            .background(Brush.horizontalGradient(listOf(Color.Transparent, Brand2, Brand, Brand2, Color.Transparent))))
 
         listOf(Alignment.TopStart, Alignment.TopEnd, Alignment.BottomStart, Alignment.BottomEnd).forEach { a ->
             val bs = 32.dp; val bw = 3.dp
@@ -1665,8 +1723,7 @@ private fun ScannerCard(onScanned: (String) -> Unit) {
 
         Text("Point at the sender's QR code", color = White60, fontSize = 12.sp,
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = d.spaceLg)
-                .background(Color.Black.copy(.5f), RoundedCornerShape(8.dp))
-                .padding(horizontal = 12.dp, vertical = 6.dp))
+                .background(Color.Black.copy(.5f), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 6.dp))
     }
 }
 
@@ -1707,3 +1764,55 @@ private fun decodeQr(proxy: ImageProxy): String? = try {
         .also { it.setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE))) }
         .decode(BinaryBitmap(HybridBinarizer(src))).text
 } catch (_: Exception) { null }
+
+// ─── Film strip placeholder ───────────────────────────────────────────────────
+
+@Composable
+private fun FilmStripPlaceholder(accentColor: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        drawRect(brush = Brush.verticalGradient(listOf(Color(0xFF0A0A12), Color(0xFF1A1A28))))
+        drawCircle(brush = Brush.radialGradient(listOf(accentColor.copy(0.3f), Color.Transparent),
+            center = center, radius = size.minDimension * 0.45f))
+        val perfW = size.width * 0.08f; val perfH = size.height * 0.04f; val perfGap = perfH * 2.4f
+        var y = perfGap
+        while (y < size.height - perfH) {
+            drawRoundRect(color = Color.White.copy(0.25f),
+                topLeft = Offset(size.width * 0.01f, y), size = androidx.compose.ui.geometry.Size(perfW, perfH),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f))
+            drawRoundRect(color = Color.White.copy(0.25f),
+                topLeft = Offset(size.width * 0.91f, y), size = androidx.compose.ui.geometry.Size(perfW, perfH),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f))
+            y += perfGap
+        }
+        val cx = center.x; val cy = center.y; val r = size.minDimension * 0.12f
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(cx - r, cy - r * 1.2f); lineTo(cx + r * 1.4f, cy); lineTo(cx - r, cy + r * 1.2f); close()
+        }
+        drawPath(path, color = accentColor.copy(0.6f))
+    }
+}
+
+// ─── Async poster image ───────────────────────────────────────────────────────
+
+@Composable
+private fun PosterImage(url: String, modifier: Modifier = Modifier) {
+    var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    LaunchedEffect(url) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 4_000; conn.readTimeout = 6_000; conn.connect()
+                val bmp = android.graphics.BitmapFactory.decodeStream(conn.inputStream)
+                withContext(kotlinx.coroutines.Dispatchers.Main) { bitmap = bmp }
+                conn.disconnect()
+            } catch (_: Exception) {}
+        }
+    }
+
+    val bmp = bitmap
+    if (bmp != null) {
+        Image(bmp.asImageBitmap(), contentDescription = null, modifier = modifier,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+    }
+}
