@@ -322,19 +322,91 @@ class TransferViewModel @Inject constructor(
     fun connectFromQr(rawQr: String) = transferManager.connectFromQr(rawQr)
 
     fun sendSelected(items: List<DownloadItem>) {
-        val queueItems = items.map { dl ->
-            TransferItem(
-                fileName  = buildFileName(dl),
-                filePath  = dl.filePath,
-                sizeBytes = dl.sizeBytes,
-                title     = dl.title,
-                posterUrl = dl.posterUrl ?: "",
-                mediaType = dl.mediaType,
-                season    = dl.season,
-                episode   = dl.episode,
-                quality   = dl.quality,
-                mediaId   = dl.mediaId,
-            )
+        val queueItems = mutableListOf<TransferItem>()
+        items.forEach { dl ->
+            val isHls = dl.filePath.endsWith(".m3u8", ignoreCase = true)
+            if (isHls) {
+                // HLS: the filePath points to segments/index.m3u8.
+                // We must send ALL .ts segment files + a rewritten m3u8 with
+                // relative paths so the receiver can play it offline.
+                val m3u8File   = java.io.File(dl.filePath)
+                val segmentsDir = m3u8File.parentFile ?: return@forEach
+                val tsFiles = segmentsDir.listFiles()
+                    ?.filter { it.name.endsWith(".ts") && it.length() > 0 }
+                    ?.sortedBy { it.name }
+                    ?: emptyList()
+
+                val baseName = buildFileName(dl)
+
+                // --- Rewrite the m3u8 with relative-only segment URIs ---
+                val rewrittenPlaylist = try {
+                    val original = m3u8File.readText()
+                    val sb = StringBuilder()
+                    original.lines().forEach { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
+                            // Replace any path (absolute or relative) with just the filename
+                            sb.appendLine(java.io.File(trimmed).name)
+                        } else {
+                            sb.appendLine(line)
+                        }
+                    }
+                    sb.toString()
+                } catch (_: Exception) { null }
+
+                // Persist the rewritten m3u8 as a temp file next to the original
+                val rewrittenFile = java.io.File(segmentsDir, "index_rel.m3u8")
+                if (rewrittenPlaylist != null) {
+                    rewrittenFile.writeText(rewrittenPlaylist)
+                } else {
+                    rewrittenFile.delete()
+                    m3u8File.copyTo(rewrittenFile, overwrite = true)
+                }
+
+                // Enqueue all .ts segments first
+                tsFiles.forEach { tsFile ->
+                    queueItems += TransferItem(
+                        fileName  = tsFile.name,
+                        filePath  = tsFile.absolutePath,
+                        sizeBytes = tsFile.length(),
+                        title     = dl.title,
+                        posterUrl = dl.posterUrl ?: "",
+                        mediaType = dl.mediaType,
+                        season    = dl.season,
+                        episode   = dl.episode,
+                        quality   = dl.quality,
+                        mediaId   = dl.mediaId,
+                    )
+                }
+
+                // Enqueue the rewritten playlist last (receiver uses it to assemble)
+                queueItems += TransferItem(
+                    fileName  = "$baseName.m3u8",
+                    filePath  = rewrittenFile.absolutePath,
+                    sizeBytes = rewrittenFile.length(),
+                    title     = dl.title,
+                    posterUrl = dl.posterUrl ?: "",
+                    mediaType = dl.mediaType,
+                    season    = dl.season,
+                    episode   = dl.episode,
+                    quality   = dl.quality,
+                    mediaId   = dl.mediaId,
+                )
+            } else {
+                // MP4: single file — straightforward
+                queueItems += TransferItem(
+                    fileName  = buildFileName(dl) + ".mp4",
+                    filePath  = dl.filePath,
+                    sizeBytes = dl.sizeBytes,
+                    title     = dl.title,
+                    posterUrl = dl.posterUrl ?: "",
+                    mediaType = dl.mediaType,
+                    season    = dl.season,
+                    episode   = dl.episode,
+                    quality   = dl.quality,
+                    mediaId   = dl.mediaId,
+                )
+            }
         }
         transferManager.enqueueToSend(queueItems)
     }
@@ -359,7 +431,11 @@ class TransferViewModel @Inject constructor(
 private fun DownloadRow.toDownloadItem() = DownloadItem(
     id = id, mediaId = mediaId, title = title, posterUrl = posterUrl,
     mediaType = mediaType, season = season, episode = episode, episodeName = episodeName,
-    quality = quality, filePath = filePath, sizeBytes = sizeBytes, downloadedBytes = downloadedBytes,
+    quality = quality,
+    // For HLS downloads filePath == localPlaylistPath == segments/index.m3u8
+    filePath          = if (localPlaylistPath.isNotBlank()) localPlaylistPath else filePath,
+    localPlaylistPath = localPlaylistPath,
+    sizeBytes = sizeBytes, downloadedBytes = downloadedBytes,
     status = DownloadStatus.DONE, streamUrl = streamUrl, createdAt = createdAt, completedAt = completedAt,
 )
 
@@ -597,30 +673,46 @@ private fun IdlePage(
                             val left  = movieList.getOrNull(rowIdx * 2)
                             val right = movieList.getOrNull(rowIdx * 2 + 1)
                             if (left != null) {
-                                val allIds     = left.value.map { it.id }.toSet()
+                                val allIds      = left.value.map { it.id }.toSet()
                                 val anySelected = allIds.any { it in selected }
+                                val isMultiQ    = left.value.size > 1
                                 MoviePosterCard(
                                     title           = left.key,
                                     qualities       = left.value,
                                     selected        = anySelected,
                                     selectedIds     = selected,
                                     expanded        = qualityPickerFor == left.key,
-                                    onTap           = { selected = if (anySelected) selected - allIds else selected + allIds; qualityPickerFor = null },
+                                    onTap           = {
+                                        if (isMultiQ) {
+                                            qualityPickerFor = if (qualityPickerFor == left.key) null else left.key
+                                        } else {
+                                            selected = if (anySelected) selected - allIds else selected + allIds
+                                            qualityPickerFor = null
+                                        }
+                                    },
                                     onLongPress     = { qualityPickerFor = if (qualityPickerFor == left.key) null else left.key },
                                     onQualityToggle = { id -> selected = if (id in selected) selected - id else selected + id },
                                     modifier        = Modifier.weight(1f),
                                 )
                             } else Spacer(Modifier.weight(1f))
                             if (right != null) {
-                                val allIds     = right.value.map { it.id }.toSet()
+                                val allIds      = right.value.map { it.id }.toSet()
                                 val anySelected = allIds.any { it in selected }
+                                val isMultiQ    = right.value.size > 1
                                 MoviePosterCard(
                                     title           = right.key,
                                     qualities       = right.value,
                                     selected        = anySelected,
                                     selectedIds     = selected,
                                     expanded        = qualityPickerFor == right.key,
-                                    onTap           = { selected = if (anySelected) selected - allIds else selected + allIds; qualityPickerFor = null },
+                                    onTap           = {
+                                        if (isMultiQ) {
+                                            qualityPickerFor = if (qualityPickerFor == right.key) null else right.key
+                                        } else {
+                                            selected = if (anySelected) selected - allIds else selected + allIds
+                                            qualityPickerFor = null
+                                        }
+                                    },
                                     onLongPress     = { qualityPickerFor = if (qualityPickerFor == right.key) null else right.key },
                                     onQualityToggle = { id -> selected = if (id in selected) selected - id else selected + id },
                                     modifier        = Modifier.weight(1f),
@@ -1039,11 +1131,21 @@ private fun BrowsePage(
                             if (left != null) {
                                 val allIds      = left.value.map { it.id }.toSet()
                                 val anySelected = allIds.any { it in selected }
+                                val isMultiQ    = left.value.size > 1
                                 MoviePosterCard(
                                     title = left.key, qualities = left.value, selected = anySelected,
                                     selectedIds = selected,
                                     expanded = qualityPickerFor == left.key,
-                                    onTap = { selected = if (anySelected) selected - allIds else selected + allIds; qualityPickerFor = null },
+                                    onTap = {
+                                        if (isMultiQ) {
+                                            // Multi-quality: tap opens quality picker
+                                            qualityPickerFor = if (qualityPickerFor == left.key) null else left.key
+                                        } else {
+                                            // Single quality: tap toggles the file
+                                            selected = if (anySelected) selected - allIds else selected + allIds
+                                            qualityPickerFor = null
+                                        }
+                                    },
                                     onLongPress = { qualityPickerFor = if (qualityPickerFor == left.key) null else left.key },
                                     onQualityToggle = { id -> selected = if (id in selected) selected - id else selected + id },
                                     modifier = Modifier.weight(1f),
@@ -1052,11 +1154,19 @@ private fun BrowsePage(
                             if (right != null) {
                                 val allIds      = right.value.map { it.id }.toSet()
                                 val anySelected = allIds.any { it in selected }
+                                val isMultiQ    = right.value.size > 1
                                 MoviePosterCard(
                                     title = right.key, qualities = right.value, selected = anySelected,
                                     selectedIds = selected,
                                     expanded = qualityPickerFor == right.key,
-                                    onTap = { selected = if (anySelected) selected - allIds else selected + allIds; qualityPickerFor = null },
+                                    onTap = {
+                                        if (isMultiQ) {
+                                            qualityPickerFor = if (qualityPickerFor == right.key) null else right.key
+                                        } else {
+                                            selected = if (anySelected) selected - allIds else selected + allIds
+                                            qualityPickerFor = null
+                                        }
+                                    },
                                     onLongPress = { qualityPickerFor = if (qualityPickerFor == right.key) null else right.key },
                                     onQualityToggle = { id -> selected = if (id in selected) selected - id else selected + id },
                                     modifier = Modifier.weight(1f),
@@ -1145,7 +1255,12 @@ private fun BeamHeader(
     }
 }
 
-// ─── Movie poster card ────────────────────────────────────────────────────────
+// ─── Movie poster card ─────────────────────────────────────────────────────────
+//
+//  DESIGN HIERARCHY (envelope model):
+//   • 1 quality  → Tick/untick at root on tap. No inner step.
+//   • 2+ quality → Tap root opens quality-picker step (step 2).
+//                  Tick appears on root when ANY quality is selected.
 
 @Composable
 private fun MoviePosterCard(
@@ -1160,15 +1275,18 @@ private fun MoviePosterCard(
     modifier:        Modifier = Modifier,
 ) {
     val d = LocalDimensions.current
-    val posterUrl = qualities.firstOrNull()?.posterUrl ?: ""
-    val totalSize = qualities.sumOf { it.sizeBytes }
-    val hue = (title.hashCode().and(0x7FFFFFFF) % 360).toFloat()
+    val posterUrl         = qualities.firstOrNull()?.posterUrl ?: ""
+    val totalSize         = qualities.sumOf { it.sizeBytes }
+    val hue               = (title.hashCode().and(0x7FFFFFFF) % 360).toFloat()
     val placeholderColor  = Color.hsl(hue, 0.35f, 0.15f)
     val placeholderAccent = Color.hsl(hue, 0.6f, 0.45f)
+    val hasMultiQuality   = qualities.size > 1
     val borderColor by animateColorAsState(if (selected) Brand else GlassBorderMd, tween(200), label = "mc")
     val bgOverlay   by animateColorAsState(if (selected) Brand.copy(0.18f) else Color.Transparent, tween(200), label = "mb")
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
+
+        // ── Root card (always visible) ──────────────────────────────────────
         Box(
             Modifier.fillMaxWidth().aspectRatio(2f / 3f)
                 .clip(RoundedCornerShape(d.radiusMd)).background(placeholderColor)
@@ -1178,54 +1296,109 @@ private fun MoviePosterCard(
             if (posterUrl.isNotEmpty()) PosterImage(url = posterUrl, modifier = Modifier.fillMaxSize())
             else FilmStripPlaceholder(accentColor = placeholderAccent, modifier = Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(bgOverlay))
+
             // Film strip decoration at top
-            Row(Modifier.fillMaxWidth().background(Color.Black.copy(0.55f)).padding(horizontal = 6.dp, vertical = 3.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                repeat(5) { Box(Modifier.size(width = 7.dp, height = 5.dp).background(Color.White.copy(0.5f), RoundedCornerShape(1.dp))) }
+            Row(
+                Modifier.fillMaxWidth().background(Color.Black.copy(0.55f))
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                repeat(5) {
+                    Box(Modifier.size(width = 7.dp, height = 5.dp)
+                        .background(Color.White.copy(0.5f), RoundedCornerShape(1.dp)))
+                }
             }
-            // Selection tick — Xender-style checkmark in top-right
+
+            // Selection tick — top-right (Xender-style)
             Box(
                 Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp).clip(CircleShape)
                     .background(if (selected) Brand else Color.Black.copy(0.5f))
-                    .border(1.5.dp, if (selected) Color.White.copy(0.4f) else Color.White.copy(0.3f), CircleShape),
+                    .border(1.5.dp,
+                        if (selected) Color.White.copy(0.4f) else Color.White.copy(0.3f),
+                        CircleShape),
                 Alignment.Center,
             ) {
                 if (selected) Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(13.dp))
             }
-            // Size badge bottom-left
-            Box(Modifier.align(Alignment.BottomStart).padding(6.dp)
-                .background(Color.Black.copy(0.72f), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 2.dp)) {
+
+            // Bottom-left: size badge
+            Box(
+                Modifier.align(Alignment.BottomStart).padding(6.dp)
+                    .background(Color.Black.copy(0.72f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
+            ) {
                 Text(formatSize(totalSize), color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
-            if (qualities.size > 1) {
-                Box(Modifier.align(Alignment.BottomEnd).padding(6.dp)
-                    .background(Color.Black.copy(0.72f), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 2.dp)) {
-                    Text("${qualities.size}Q", color = Brand, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+
+            // Bottom-right: multi-quality indicator (tap to drill)
+            if (hasMultiQuality) {
+                Box(
+                    Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                        .background(
+                            if (expanded) Brand.copy(0.85f) else Color.Black.copy(0.72f),
+                            RoundedCornerShape(4.dp),
+                        )
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        "${qualities.size} qualities",
+                        color = if (expanded) Color.White else Brand,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
             }
         }
-        Text(title, color = if (selected) Color.White else White80, fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 2.dp))
 
-        AnimatedVisibility(expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        // Title
+        Text(
+            title,
+            color = if (selected) Color.White else White80,
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+
+        // ── Step 2: Quality picker (only when multi-quality AND expanded) ───
+        AnimatedVisibility(
+            visible = hasMultiQuality && expanded,
+            enter   = expandVertically() + fadeIn(),
+            exit    = shrinkVertically() + fadeOut(),
+        ) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(d.radiusSm))
+                    .background(BgCard)
+                    .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusSm))
+                    .padding(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "Choose quality",
+                    color = White40, fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                )
                 qualities.forEach { dl ->
                     val qualSel = dl.id in selectedIds
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(5.dp))
                             .background(if (qualSel) BlueGlass else GlassMd)
-                            .border(1.dp, if (qualSel) Brand.copy(0.5f) else GlassBorderSm, RoundedCornerShape(6.dp))
+                            .border(1.dp, if (qualSel) Brand.copy(0.5f) else GlassBorderSm, RoundedCornerShape(5.dp))
                             .clickable { onQualityToggle(dl.id) }
-                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         CheckCircle(checked = qualSel)
-                        Text(dl.quality,
+                        Text(
+                            dl.quality,
                             color = if (qualSel) Color.White else White60,
                             fontWeight = if (qualSel) FontWeight.SemiBold else FontWeight.Normal,
-                            fontSize = 10.sp, modifier = Modifier.weight(1f))
+                            fontSize = 11.sp, modifier = Modifier.weight(1f),
+                        )
                         Text(formatSize(dl.sizeBytes), color = White40, fontSize = 9.sp)
                     }
                 }
@@ -1234,7 +1407,17 @@ private fun MoviePosterCard(
     }
 }
 
-// ─── Series browse row ────────────────────────────────────────────────────────
+// ─── Series browse row ─────────────────────────────────────────────────────────
+//
+//  HIERARCHY (envelope model):
+//   Step 1 — Root card  (show poster + title + episode count)
+//              Checkbox at root selects the entire show.
+//   Step 2 — Season list (tap root to expand)
+//              Checkbox per season selects that whole season.
+//   Step 3 — Episode list (tap season to expand)
+//              Each episode row = one content unit. Checkbox selects it.
+//   Step 4 — Quality picker (only when episode has 2+ qualities)
+//              Appears inline under the episode on tap.
 
 @Composable
 private fun SeriesBrowseRow(
@@ -1244,71 +1427,269 @@ private fun SeriesBrowseRow(
     onToggle: (String) -> Unit,
 ) {
     val d = LocalDimensions.current
-    var expanded by remember { mutableStateOf(false) }
-    val seasons = remember(episodes) { episodes.groupBy { it.season }.toSortedMap() }
-    val allIds = remember(episodes) { episodes.map { it.id }.toSet() }
+    val seasons     = remember(episodes) { episodes.groupBy { it.season }.toSortedMap() }
+    val allIds      = remember(episodes) { episodes.map { it.id }.toSet() }
     val anySelected = allIds.any { it in selected }
+    val allSelected = allIds.isNotEmpty() && allIds.all { it in selected }
 
+    // Tracks which seasons are expanded (step 2 → 3)
+    var showSeasons        by remember { mutableStateOf(false) }
+    var expandedSeasons    by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    // Tracks which episode is showing its quality picker (step 3 → 4)
+    var qualityPickerEpKey by remember { mutableStateOf<String?>(null) }  // "season_episode"
+
+    // ── Root card ────────────────────────────────────────────────────────────
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusMd))
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(d.radiusMd))
             .background(BgCard)
-            .border(1.dp, if (anySelected) Brand.copy(0.4f) else GlassBorderMd, RoundedCornerShape(d.radiusMd))
-            .padding(d.spaceMd),
-        verticalArrangement = Arrangement.spacedBy(d.spaceXs),
+            .border(1.dp, if (anySelected) Brand.copy(0.45f) else GlassBorderMd, RoundedCornerShape(d.radiusMd)),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
-            // Series poster thumbnail
+        // ── Step 1: Show header ──────────────────────────────────────────────
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable { showSeasons = !showSeasons }
+                .padding(d.spaceMd),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Poster thumbnail
             val posterUrl = episodes.firstOrNull()?.posterUrl ?: ""
-            val hue = (title.hashCode().and(0x7FFFFFFF) % 360).toFloat()
+            val hue       = (title.hashCode().and(0x7FFFFFFF) % 360).toFloat()
             Box(
-                Modifier.size(width = 40.dp, height = 56.dp)
+                Modifier.size(width = 44.dp, height = 62.dp)
                     .clip(RoundedCornerShape(d.radiusSm))
-                    .background(Color.hsl(hue, 0.35f, 0.15f))
+                    .background(Color.hsl(hue, 0.35f, 0.15f)),
             ) {
                 if (posterUrl.isNotEmpty()) PosterImage(url = posterUrl, modifier = Modifier.fillMaxSize())
                 else FilmStripPlaceholder(accentColor = Color.hsl(hue, 0.6f, 0.45f), modifier = Modifier.fillMaxSize())
             }
-            Spacer(Modifier.width(d.spaceSm))
+            Spacer(Modifier.width(d.spaceMd))
             Column(Modifier.weight(1f)) {
-                Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textMd)
-                Text("${episodes.size} episode${if (episodes.size == 1) "" else "s"}", color = White40, fontSize = d.textXs)
+                Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textMd, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                val selCount = allIds.count { it in selected }
+                Text(
+                    buildString {
+                        append("${episodes.size} ep${if (episodes.size == 1) "" else "s"}")
+                        if (selCount > 0) append(" · $selCount selected")
+                    },
+                    color = if (selCount > 0) Brand else White40,
+                    fontSize = d.textXs,
+                )
+                Text("${seasons.size} season${if (seasons.size == 1) "" else "s"}",
+                    color = White40, fontSize = d.textXs)
             }
-            if (anySelected) {
-                Box(Modifier.size(22.dp).clip(CircleShape).background(Brand), Alignment.Center) {
-                    Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(12.dp))
-                }
-                Spacer(Modifier.width(d.spaceSm))
+            // Show-level checkbox (selects/deselects the entire show)
+            Box(
+                Modifier.size(26.dp).clip(CircleShape)
+                    .background(if (allSelected) Brand else if (anySelected) Brand.copy(0.3f) else GlassMd)
+                    .border(1.5.dp, if (anySelected) Brand else GlassBorderMd, CircleShape)
+                    .clickable {
+                        // Toggle entire show: select all if none/partial selected, deselect all if all selected
+                        if (allSelected) {
+                            allIds.forEach { onToggle(it) }
+                        } else {
+                            allIds.filter { it !in selected }.forEach { onToggle(it) }
+                        }
+                    },
+                Alignment.Center,
+            ) {
+                if (allSelected) Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                else if (anySelected) Box(Modifier.size(8.dp).clip(CircleShape).background(Brand))
             }
-            val rot by animateFloatAsState(if (expanded) 180f else 0f, label = "ser")
+            Spacer(Modifier.width(d.spaceSm))
+            val rot by animateFloatAsState(if (showSeasons) 180f else 0f, label = "srot")
             Icon(IconChevronDown, null, tint = White60, modifier = Modifier.size(d.iconMd - 4.dp).rotate(rot))
         }
-        AnimatedVisibility(expanded) {
-            Column(verticalArrangement = Arrangement.spacedBy(d.spaceXs)) {
-                seasons.forEach { (season, eps) ->
-                    Text("Season $season", color = White60, fontSize = d.textXs, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(top = d.spaceXs))
-                    val byEpisode = eps.groupBy { it.episode }.toSortedMap()
-                    byEpisode.forEach { (epNum, qualities) ->
-                        val epName = qualities.firstOrNull()?.episodeName?.takeIf { it.isNotBlank() } ?: "Episode $epNum"
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("  E${epNum.toString().padStart(2,'0')} · $epName",
-                                color = White60, fontSize = d.textXs, modifier = Modifier.padding(horizontal = d.spaceSm))
-                            qualities.forEach { dl ->
-                                val sel = dl.id in selected
-                                Row(
-                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(d.radiusSm))
-                                        .background(if (sel) AmberGlass else GlassMd)
-                                        .border(1.dp, if (sel) AmberBorder else GlassBorderSm, RoundedCornerShape(d.radiusSm))
-                                        .clickable { onToggle(dl.id) }
-                                        .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                                ) {
-                                    CheckCircle(checked = sel)
-                                    Text(dl.quality, color = if (sel) Color.White else White60,
-                                        fontSize = d.textSm, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
-                                        modifier = Modifier.weight(1f))
-                                    Text(formatSize(dl.sizeBytes), color = White40, fontSize = d.textXs)
+
+        // ── Step 2: Season list ──────────────────────────────────────────────
+        AnimatedVisibility(showSeasons, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Bg.copy(0.6f))
+                    .padding(start = d.spaceMd, end = d.spaceMd, bottom = d.spaceMd),
+                verticalArrangement = Arrangement.spacedBy(d.spaceXs),
+            ) {
+                seasons.forEach { (seasonNum, eps) ->
+                    val seasonIds    = eps.map { it.id }.toSet()
+                    val seasonAllSel = seasonIds.isNotEmpty() && seasonIds.all { it in selected }
+                    val seasonAnySel = seasonIds.any { it in selected }
+                    val seasonOpen   = seasonNum in expandedSeasons
+
+                    // ── Season header row ────────────────────────────────────
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(d.radiusSm))
+                            .background(BgRaised)
+                            .border(1.dp, if (seasonAnySel) Brand.copy(0.35f) else GlassBorderSm, RoundedCornerShape(d.radiusSm)),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    expandedSeasons = if (seasonOpen)
+                                        expandedSeasons - seasonNum else expandedSeasons + seasonNum
+                                }
+                                .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+                        ) {
+                            // Season-level checkbox
+                            Box(
+                                Modifier.size(22.dp).clip(CircleShape)
+                                    .background(if (seasonAllSel) Brand else if (seasonAnySel) Brand.copy(0.25f) else GlassMd)
+                                    .border(1.dp, if (seasonAnySel) Brand else GlassBorderSm, CircleShape)
+                                    .clickable {
+                                        if (seasonAllSel) {
+                                            seasonIds.forEach { onToggle(it) }
+                                        } else {
+                                            seasonIds.filter { it !in selected }.forEach { onToggle(it) }
+                                        }
+                                    },
+                                Alignment.Center,
+                            ) {
+                                if (seasonAllSel) Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(12.dp))
+                                else if (seasonAnySel) Box(Modifier.size(6.dp).clip(CircleShape).background(Brand))
+                            }
+
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "Season $seasonNum",
+                                    color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = d.textSm,
+                                )
+                                val selEpCount = seasonIds.count { it in selected }
+                                Text(
+                                    "${eps.size} episode${if (eps.size == 1) "" else "s"}${if (selEpCount > 0) " · $selEpCount selected" else ""}",
+                                    color = if (selEpCount > 0) Brand else White40, fontSize = d.textXs,
+                                )
+                            }
+
+                            val sRot by animateFloatAsState(if (seasonOpen) 180f else 0f, label = "sn$seasonNum")
+                            Icon(IconChevronDown, null, tint = White60, modifier = Modifier.size(16.dp).rotate(sRot))
+                        }
+
+                        // ── Step 3: Episode list ─────────────────────────────
+                        AnimatedVisibility(seasonOpen, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                            val byEpisode = eps.groupBy { it.episode }.toSortedMap()
+                            Column(
+                                Modifier.fillMaxWidth().padding(horizontal = d.spaceSm).padding(bottom = d.spaceSm),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                byEpisode.forEach { (epNum, qualities) ->
+                                    val epKey       = "${seasonNum}_$epNum"
+                                    val epName      = qualities.firstOrNull()?.episodeName?.takeIf { it.isNotBlank() } ?: "Episode $epNum"
+                                    val epIds       = qualities.map { it.id }.toSet()
+                                    val epAllSel    = epIds.isNotEmpty() && epIds.all { it in selected }
+                                    val epAnySel    = epIds.any { it in selected }
+                                    val hasMultiQ   = qualities.size > 1
+                                    val qualOpen    = qualityPickerEpKey == epKey
+
+                                    // ── Episode row ──────────────────────────
+                                    Column(
+                                        Modifier.fillMaxWidth()
+                                            .clip(RoundedCornerShape(d.radiusSm))
+                                            .background(if (epAnySel) BlueGlass else GlassMd)
+                                            .border(1.dp, if (epAnySel) Brand.copy(0.4f) else GlassBorderSm, RoundedCornerShape(d.radiusSm)),
+                                    ) {
+                                        Row(
+                                            Modifier.fillMaxWidth()
+                                                .clickable {
+                                                    if (hasMultiQ) {
+                                                        // Tap opens quality picker
+                                                        qualityPickerEpKey = if (qualOpen) null else epKey
+                                                    } else {
+                                                        // Single quality: toggle directly
+                                                        onToggle(qualities.first().id)
+                                                    }
+                                                }
+                                                .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+                                        ) {
+                                            // Episode checkbox (always visible; for multi-q selects all/none)
+                                            Box(
+                                                Modifier.size(20.dp).clip(CircleShape)
+                                                    .background(if (epAllSel) Brand else if (epAnySel) Brand.copy(0.25f) else GlassMd)
+                                                    .border(1.dp, if (epAnySel) Brand else GlassBorderSm, CircleShape)
+                                                    .clickable {
+                                                        if (hasMultiQ) {
+                                                            if (epAllSel) epIds.forEach { onToggle(it) }
+                                                            else epIds.filter { it !in selected }.forEach { onToggle(it) }
+                                                        } else {
+                                                            onToggle(qualities.first().id)
+                                                        }
+                                                    },
+                                                Alignment.Center,
+                                            ) {
+                                                if (epAllSel) Icon(IconCheck, null, tint = Color.White, modifier = Modifier.size(11.dp))
+                                                else if (epAnySel) Box(Modifier.size(5.dp).clip(CircleShape).background(Brand))
+                                            }
+
+                                            Column(Modifier.weight(1f)) {
+                                                Text(
+                                                    "E${epNum.toString().padStart(2, '0')} · $epName",
+                                                    color = if (epAnySel) Color.White else White80,
+                                                    fontWeight = if (epAnySel) FontWeight.SemiBold else FontWeight.Normal,
+                                                    fontSize = d.textSm, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                                )
+                                                val sizeText = formatSize(qualities.sumOf { it.sizeBytes })
+                                                Row(horizontalArrangement = Arrangement.spacedBy(d.spaceXs)) {
+                                                    Text(sizeText, color = White40, fontSize = d.textXs)
+                                                    if (hasMultiQ) Text(
+                                                        "${qualities.size} qualities",
+                                                        color = if (qualOpen) Brand else White40, fontSize = d.textXs,
+                                                    )
+                                                }
+                                            }
+
+                                            if (hasMultiQ) {
+                                                val qRot by animateFloatAsState(if (qualOpen) 180f else 0f, label = "qr$epKey")
+                                                Icon(IconChevronDown, null, tint = White40, modifier = Modifier.size(14.dp).rotate(qRot))
+                                            }
+                                        }
+
+                                        // ── Step 4: Quality picker (only multi-quality episodes) ──
+                                        AnimatedVisibility(
+                                            hasMultiQ && qualOpen,
+                                            enter = expandVertically() + fadeIn(),
+                                            exit  = shrinkVertically() + fadeOut(),
+                                        ) {
+                                            Column(
+                                                Modifier.fillMaxWidth()
+                                                    .background(Bg.copy(0.8f))
+                                                    .padding(horizontal = d.spaceMd, bottom = d.spaceSm),
+                                                verticalArrangement = Arrangement.spacedBy(3.dp),
+                                            ) {
+                                                Text(
+                                                    "Select quality",
+                                                    color = White40, fontSize = 9.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    modifier = Modifier.padding(top = d.spaceXs, bottom = 2.dp),
+                                                )
+                                                qualities.forEach { dl ->
+                                                    val qSel = dl.id in selected
+                                                    Row(
+                                                        Modifier.fillMaxWidth()
+                                                            .clip(RoundedCornerShape(5.dp))
+                                                            .background(if (qSel) BlueGlass else GlassMd)
+                                                            .border(1.dp, if (qSel) Brand.copy(0.5f) else GlassBorderSm, RoundedCornerShape(5.dp))
+                                                            .clickable { onToggle(dl.id) }
+                                                            .padding(horizontal = d.spaceMd, vertical = d.spaceSm),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+                                                    ) {
+                                                        CheckCircle(checked = qSel)
+                                                        Text(
+                                                            dl.quality,
+                                                            color = if (qSel) Color.White else White60,
+                                                            fontWeight = if (qSel) FontWeight.SemiBold else FontWeight.Normal,
+                                                            fontSize = d.textSm, modifier = Modifier.weight(1f),
+                                                        )
+                                                        Text(formatSize(dl.sizeBytes), color = White40, fontSize = d.textXs)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
