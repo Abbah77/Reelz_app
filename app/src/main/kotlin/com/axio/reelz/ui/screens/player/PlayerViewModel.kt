@@ -738,38 +738,16 @@ class PlayerViewModel @Inject constructor(
 
     fun setSubtitleOffset(offsetMs: Int) {
         _ui.update { it.copy(subtitleOffsetMs = offsetMs) }
-        // Apply offset to ExoPlayer: the cleanest supported way is adjusting
-        // the subtitle configuration's subsample offset. Since we can't mutate a
-        // live MediaItem, we rebuild it with OFFSET_SAMPLE_RELATIVE applied.
-        // For in-stream tracks, a tiny seek forces the renderer to re-deliver cues.
+        // Offset is applied at render time via SubtitleView in PlayerActivity (addTextOutput).
+        // For external subtitle files we also need to re-attach the subtitle so ExoPlayer
+        // re-parses it — a seek to the current position forces cue re-delivery.
         viewModelScope.launch(Dispatchers.Main) {
             val p = exoPlayer ?: return@launch
-            val currentSub = _ui.value.subtitles
-                .firstOrNull { it.language == _ui.value.activeSubtitleLanguage }
-
-            if (currentSub != null && _ui.value.subtitlesEnabled) {
-                val currentPos = p.currentPosition.coerceAtLeast(0L)
-                val wasPlaying = p.isPlaying
-                val subUrl = if (!currentSub.url.startsWith("http") && !currentSub.url.startsWith("file://"))
-                    "file://${currentSub.url}" else currentSub.url
-
-                @Suppress("DEPRECATION")
-                val subConfig = MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(subUrl))
-                    .setMimeType(subtitleMimeType(currentSub.format))
-                    .setLanguage(currentSub.language)
-                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                    // subsampleOffsetUs: positive = delay subtitle (show later),
-                    // negative = advance subtitle (show earlier). offsetMs is in ms → µs.
-                    .setSubsampleOffsetUs(offsetMs.toLong() * -1000L)
-                    .build()
-
-                val currentItem = p.currentMediaItem ?: return@launch
-                val newItem = currentItem.buildUpon()
-                    .setSubtitleConfigurations(listOf(subConfig))
-                    .build()
-                p.setMediaItem(newItem, currentPos)
-                p.prepare()
-                p.playWhenReady = wasPlaying
+            if (_ui.value.subtitlesEnabled && _ui.value.activeSubtitleLanguage != "off") {
+                // A tiny relative seek forces the text renderer to re-deliver cues
+                // so the new offset takes effect immediately without re-preparing.
+                val pos = p.currentPosition.coerceAtLeast(0L)
+                p.seekTo(pos)
             }
         }
     }
@@ -905,7 +883,6 @@ class PlayerViewModel @Inject constructor(
         val activeLang = _ui.value.activeSubtitleLanguage
         val activeSub  = if (_ui.value.subtitlesEnabled && activeLang != "off")
             _ui.value.subtitles.firstOrNull { it.language == activeLang } else null
-        val offsetUs   = _ui.value.subtitleOffsetMs.toLong() * -1000L
 
         val itemBuilder = MediaItem.Builder().setUri(url)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build())
@@ -917,7 +894,6 @@ class PlayerViewModel @Inject constructor(
                 .setMimeType(subtitleMimeType(activeSub.format))
                 .setLanguage(activeSub.language)
                 .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                .setSubsampleOffsetUs(offsetUs)
                 .build()
             itemBuilder.setSubtitleConfigurations(listOf(subConfig))
         }

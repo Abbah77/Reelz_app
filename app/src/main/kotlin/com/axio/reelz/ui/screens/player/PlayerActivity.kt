@@ -759,6 +759,10 @@ fun PlayerScreen(
     ) {
         // ── Video surface ─────────────────────────────────────────────────
         key(player) {
+            val subtitleOffsetMs = ui.subtitleOffsetMs
+            // Hold a reference to the current text output listener so we can
+            // remove it before adding a new one (clearTextOutput requires the exact instance).
+            val textOutputRef = remember { mutableStateOf<androidx.media3.common.Player.Listener?>(null) }
             AndroidView(
                 factory = { c ->
                     PlayerView(c).apply {
@@ -768,7 +772,38 @@ fun PlayerScreen(
                         this.player = player
                     }
                 },
-                update  = { pv -> pv.player = vm.exoPlayer },
+                update = { pv ->
+                    pv.player = vm.exoPlayer
+                    val sv  = pv.subtitleView ?: return@AndroidView
+                    val exo = vm.exoPlayer ?: run {
+                        sv.visibility = android.view.View.VISIBLE
+                        return@AndroidView
+                    }
+                    // Remove previous listener if any
+                    textOutputRef.value?.let { exo.removeListener(it) }
+                    textOutputRef.value = null
+
+                    if (subtitleOffsetMs == 0) {
+                        // Zero offset — native PlayerView subtitle rendering
+                        sv.visibility = android.view.View.VISIBLE
+                    } else {
+                        // Non-zero offset: intercept via Player.Listener.onCues, shift, feed to SubtitleView
+                        sv.visibility = android.view.View.INVISIBLE
+                        val listener = object : androidx.media3.common.Player.Listener {
+                            override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+                                val shiftedUs = cueGroup.presentationTimeUs +
+                                        subtitleOffsetMs.toLong() * 1_000L
+                                val shifted = androidx.media3.common.text.CueGroup(
+                                    cueGroup.cues, shiftedUs
+                                )
+                                sv.visibility = android.view.View.VISIBLE
+                                sv.onCues(shifted)
+                            }
+                        }
+                        exo.addListener(listener)
+                        textOutputRef.value = listener
+                    }
+                },
                 modifier = Modifier.fillMaxSize(),
             )
         }
