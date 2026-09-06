@@ -88,20 +88,15 @@ class SubtitleManager(
     // ── Online subtitle search ─────────────────────────────────────────────────
 
     fun searchOnlineSubtitles(query: String = "") {
-        if (!userRepo.isPremium) {
-            _state.update { it.copy(subtitleUpsellMessage =
-                "Manual subtitle search is a Premium feature. Upgrade to search any language.") }
-            return
-        }
-        val langs = if (query.isBlank()) {
-            val locale = java.util.Locale.getDefault().language.ifBlank { "en" }
-            listOf("en", locale).distinct()
+        // Resolve to a single language code — new API takes one language per call.
+        val lang = if (query.isBlank()) {
+            java.util.Locale.getDefault().language.ifBlank { "en" }
         } else {
-            query.split(",").map { it.trim().lowercase() }.filter { it.isNotBlank() }
+            query.split(",").map { it.trim().lowercase() }.firstOrNull { it.isNotBlank() } ?: "en"
         }
         _state.update { it.copy(isSubtitleSearching = true, subtitleSearchEmpty = false, subtitleUpsellMessage = null) }
         scope.launch(Dispatchers.IO) {
-            val result = streamRepo.getSubtitles(currentId, currentType, currentSeason, currentEpisode, langs)
+            val result = streamRepo.getSubtitles(currentId, currentType, currentSeason, currentEpisode, lang)
             val subs = (result as? NetworkResult.Success)?.data ?: emptyList()
             if (subs.isNotEmpty()) {
                 val options = subs.map { s -> SubtitleOption(s.language, s.language, s.url, isEnabled = s.enabled) }
