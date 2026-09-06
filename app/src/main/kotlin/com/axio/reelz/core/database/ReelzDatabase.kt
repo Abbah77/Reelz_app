@@ -457,6 +457,8 @@ data class DownloadSubtitleRow(
     val localFilePath: String,
     val isEnabled: Boolean = true,
     val addedAt: Long = System.currentTimeMillis(),
+    /** File format: "srt" | "vtt" | "ass" | etc. */
+    @androidx.room.ColumnInfo(defaultValue = "srt") val format: String = "srt",
 )
 
 @Dao
@@ -475,6 +477,10 @@ interface DownloadSubtitleDao {
 
     @Query("DELETE FROM download_subtitles WHERE downloadId = :id")
     suspend fun deleteForDownload(id: String)
+
+    /** Cascade: delete all subtitles for a media item (called when movie/episode deleted). */
+    @Query("DELETE FROM download_subtitles WHERE mediaId = :mediaId AND season = :season AND episode = :episode")
+    suspend fun deleteForContent(mediaId: String, season: Int, episode: Int)
 }
 
 // ── Transfer types ─────────────────────────────────────────────────────────────
@@ -628,6 +634,13 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+// Migration 6→7: add format column to download_subtitles
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE download_subtitles ADD COLUMN format TEXT NOT NULL DEFAULT 'srt'")
+    }
+}
+
 @Database(
     entities = [
         CachedFeedRow::class,
@@ -642,7 +655,7 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         DownloadSubtitleRow::class,
         TransferRecord::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {

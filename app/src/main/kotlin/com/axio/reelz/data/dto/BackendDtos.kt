@@ -170,12 +170,14 @@ data class StreamSubtitleDto(
     val language: String = "en",
     val label: String = "",          // human-readable name e.g. "English", "Arabic" from backend
     val enabled: Boolean = false,
+    val format: String = "srt",      // "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc"
 ) {
     fun toModel() = Subtitle(
         url      = url,
         language = language,
         enabled  = enabled,
         label    = label.takeIf { it.isNotBlank() } ?: language,
+        format   = format.ifBlank { "srt" },
     )
 }
 
@@ -231,6 +233,8 @@ data class DownloadLinkDto(
 data class DownloadData(
     val links: List<DownloadLinkDto> = emptyList(),
     @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
+    /** Optional subtitles bundled with the download response (may be null or absent). */
+    val subtitles: List<SubtitleDto>? = null,
 )
 
 // ── Subtitles ─────────────────────────────────────────────────────────────────
@@ -239,12 +243,14 @@ data class SubtitleDto(
     val language: String = "en",
     val label: String = "",          // human-readable name from backend
     val enabled: Boolean = false,
+    val format: String = "srt",      // "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc"
 ) {
     fun toModel() = Subtitle(
         url      = url,
         language = language,
         enabled  = enabled,
         label    = label.takeIf { it.isNotBlank() } ?: language,
+        format   = format.ifBlank { "srt" },
     )
 }
 

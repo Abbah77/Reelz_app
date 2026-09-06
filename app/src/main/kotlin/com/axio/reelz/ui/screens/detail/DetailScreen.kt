@@ -209,7 +209,9 @@ class DetailViewModel @Inject constructor(
 
     // Maps download URL → type ("mp4" | "hls") so enqueue knows which engine path to use.
     // Populated fresh each time the download sheet is opened via getDownloadLinks().
-    private val preResolvedLinkTypes  = HashMap<String, String>()
+    private val preResolvedLinkTypes     = HashMap<String, String>()
+    // Subtitles bundled with the download response — scheduled silently post-download.
+    private var preResolvedSubtitles: List<com.axio.reelz.data.model.Subtitle> = emptyList()
 
     /** Observe all non-ERROR downloads and push their keys into UiState so the
      *  episode/movie download button can show IconDownloaded in real time. */
@@ -354,7 +356,9 @@ class DetailViewModel @Inject constructor(
             )
             when (dlResult) {
                 is com.axio.reelz.core.network.NetworkResult.Success -> {
-                    val links = dlResult.data
+                    val (links, subtitles) = dlResult.data
+                    // Cache subtitles for silent download after enqueue completes
+                    preResolvedSubtitles = subtitles
                     if (!links.isNullOrEmpty()) {
                         // Convert DownloadLink → QualityTrack for the download picker UI.
                         // Render exactly what the backend sends — no filtering, no inference.
@@ -422,7 +426,7 @@ class DetailViewModel @Inject constructor(
             val headers = preResolvedStream?.primaryStream?.headers ?: emptyMap()
             val linkType = preResolvedLinkTypes[track.url]
                 ?: if (track.url.contains(".m3u8")) "hls" else "mp4"
-            downloadRepo.enqueue(
+            val downloadId = downloadRepo.enqueue(
                 ctx         = ctx,
                 id          = detail.id,
                 title       = state.pendingDownloadTitle,
@@ -436,6 +440,17 @@ class DetailViewModel @Inject constructor(
                 streamUrl   = track.url,
                 headers     = headers,
             )
+            // Schedule silent subtitle download — fires invisibly once the movie is DONE.
+            // Only runs if backend returned subtitles with the download response.
+            if (preResolvedSubtitles.isNotEmpty()) {
+                downloadRepo.scheduleSubtitleDownload(
+                    downloadId = downloadId,
+                    mediaId    = detail.id,
+                    season     = state.pendingDownloadSeason,
+                    episode    = state.pendingDownloadEpisode,
+                    subtitles  = preResolvedSubtitles,
+                )
+            }
             _ui.update { it.copy(downloadEnqueued = true) }
         }
     }

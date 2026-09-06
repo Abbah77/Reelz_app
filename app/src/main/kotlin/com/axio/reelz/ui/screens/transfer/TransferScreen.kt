@@ -1656,7 +1656,8 @@ private fun SeriesBrowseRow(
                                             Column(
                                                 Modifier.fillMaxWidth()
                                                     .background(Bg.copy(0.8f))
-                                                    .padding(horizontal = d.spaceMd, bottom = d.spaceSm),
+                                                    .padding(horizontal = d.spaceMd)
+                                                    .padding(bottom = d.spaceSm),
                                                 verticalArrangement = Arrangement.spacedBy(3.dp),
                                             ) {
                                                 Text(

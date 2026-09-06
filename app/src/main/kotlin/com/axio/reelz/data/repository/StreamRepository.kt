@@ -119,19 +119,24 @@ class StreamRepository @Inject constructor(
 
     private val downloadLinksCache = mutableMapOf<String, DownloadLinksEntry>()
 
+    /**
+     * Returns download links AND any subtitles the backend bundled with the response.
+     * Subtitles are optional — the list will be empty if the backend sent none.
+     * Callers should schedule silent subtitle downloads for any returned subtitles.
+     */
     suspend fun getDownloadLinks(
         id: String,
         mediaType: MediaType,
         season: Int = 0,
         episode: Int = 0,
-    ): NetworkResult<List<DownloadLink>> = withContext(Dispatchers.IO) {
+    ): NetworkResult<Pair<List<DownloadLink>, List<com.axio.reelz.data.model.Subtitle>>> = withContext(Dispatchers.IO) {
         val key = cacheKey(id, mediaType, season, episode)
 
         // Return cached links if still alive (expires_at_ms not passed).
         downloadLinksCache[key]?.let { entry ->
             if (entry.isAlive()) {
                 Log.d(tag, "Download links cache HIT for $key")
-                return@withContext NetworkResult.Success(entry.links, fromCache = true)
+                return@withContext NetworkResult.Success(Pair(entry.links, emptyList()), fromCache = true)
             }
             downloadLinksCache.remove(key)
         }
@@ -152,12 +157,13 @@ class StreamRepository @Inject constructor(
                 }
                 // Render exactly what the backend sends — no filtering, no inference.
                 val links = payload.links.map { it.toModel() }
+                val subtitles = payload.subtitles?.map { it.toModel() } ?: emptyList()
                 // Cache using expires_at_ms from backend (same pattern as stream cache).
                 if (payload.expiresAtMs > 0) {
                     downloadLinksCache[key] = DownloadLinksEntry(links, payload.expiresAtMs)
                 }
-                Log.d(tag, "Download links: ${links.size} link(s) for $key")
-                NetworkResult.Success(links)
+                Log.d(tag, "Download links: ${links.size} link(s), ${subtitles.size} subtitle(s) for $key")
+                NetworkResult.Success(Pair(links, subtitles))
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,
@@ -170,25 +176,46 @@ class StreamRepository @Inject constructor(
     }
 
     // ── Subtitles ─────────────────────────────────────────────────────────────
+    //
+    // Cache uses the same TTL-expiry pattern as stream/download caches.
+    // Default TTL: 1 hour (3_600_000 ms), overridden by cache_ttl_ms from envelope.
 
-    private val subtitleCache = mutableMapOf<String, List<Subtitle>>()
+    private data class SubtitleCacheEntry(
+        val subtitles: List<Subtitle>,
+        val expiresAtMs: Long,
+    ) {
+        fun isAlive() = System.currentTimeMillis() < expiresAtMs
+    }
+
+    private val subtitleCache = mutableMapOf<String, SubtitleCacheEntry>()
 
     suspend fun getSubtitles(
         id: String,
         mediaType: MediaType,
         season: Int = 0,
         episode: Int = 0,
-        languages: List<String> = listOf("en"),
+        /** Single ISO 639-1 language code: "en" | "es" | "fr" | "pt" | "de" | "it" | "ar" */
+        language: String = "en",
+        /** Duration in ms — helps backend find the exact subtitle match. */
+        durationMs: Long = 0L,
     ): NetworkResult<List<Subtitle>> = withContext(Dispatchers.IO) {
-        val key = "$id|${mediaType.name}|$season|$episode"
-        subtitleCache[key]?.let { return@withContext NetworkResult.Success(it, fromCache = true) }
+        val key = "$id|${mediaType.name}|$season|$episode|$language"
+
+        subtitleCache[key]?.let { entry ->
+            if (entry.isAlive()) {
+                Log.d(tag, "Subtitle cache HIT for $key")
+                return@withContext NetworkResult.Success(entry.subtitles, fromCache = true)
+            }
+            subtitleCache.remove(key)
+        }
 
         val body = SubtitleRequestBody(
-            id        = id,
-            type      = if (mediaType == MediaType.MOVIE) "movie" else "tv",
-            season    = season,
-            episode   = episode,
-            languages = languages,
+            id         = id,
+            type       = if (mediaType == MediaType.MOVIE) "movie" else "tv",
+            season     = season,
+            episode    = episode,
+            languages  = language,
+            durationMs = durationMs,
         )
         val result = safeApiCall(tag) { api.getSubtitles(body) }
         return@withContext when (result) {
@@ -199,7 +226,14 @@ class StreamRepository @Inject constructor(
                     return@withContext NetworkResult.Error(envelope.error ?: "Subtitles unavailable")
                 }
                 val subs = payload.subtitles.map { it.toModel() }
-                if (subs.isNotEmpty()) subtitleCache[key] = subs
+                val ttlMs = envelope.cacheTtlMs ?: 3_600_000L
+                if (subs.isNotEmpty()) {
+                    subtitleCache[key] = SubtitleCacheEntry(
+                        subtitles  = subs,
+                        expiresAtMs = System.currentTimeMillis() + ttlMs,
+                    )
+                    Log.d(tag, "Subtitles cached: ${subs.size} track(s) for $key, TTL=${ttlMs}ms")
+                }
                 NetworkResult.Success(subs)
             }
             is NetworkResult.Error -> NetworkResult.Error(

@@ -139,7 +139,11 @@ data class SubtitleRequestBody(
     val type: String,
     val season: Int = 0,
     val episode: Int = 0,
-    val languages: List<String> = listOf("en"),
+    /** Single language code: "en" | "es" | "fr" | "pt" | "de" | "it" | "ar" */
+    val languages: String = "en",
+    /** Duration in milliseconds — helps provider fingerprint the exact file. */
+    @com.google.gson.annotations.SerializedName("duration_ms")
+    val durationMs: Long = 0L,
 )
 
 data class GoogleAuthBody(

@@ -91,6 +91,8 @@ data class Subtitle(
     val enabled: Boolean,
     /** Display label — defaults to language code if not provided by backend. */
     val label: String = language,
+    /** File format: "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc" */
+    val format: String = "srt",
 )
 
 data class StreamTrack(

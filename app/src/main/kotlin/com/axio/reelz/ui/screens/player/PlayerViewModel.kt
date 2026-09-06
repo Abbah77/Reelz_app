@@ -67,6 +67,14 @@ data class SubtitleOption(
     val isEnabled: Boolean = true,
 )
 
+/** Per-language subtitle download state shown in the drawer. */
+sealed class SubtitleDownloadState {
+    object Idle        : SubtitleDownloadState()
+    object Loading     : SubtitleDownloadState()
+    object Done        : SubtitleDownloadState()   // downloaded — hide icon
+    data class Error(val msg: String) : SubtitleDownloadState()
+}
+
 data class PlayerUiState(
     val state: PlayerState                     = PlayerState.Idle,
     val networkState: NetworkState             = NetworkState.Unknown,
@@ -107,6 +115,8 @@ data class PlayerUiState(
      * without pausing or hiding controls — the user did NOT pause intentionally.
      */
     val isNetworkStalling: Boolean             = false,
+    /** Per-language download state for the subtitle drawer. */
+    val subtitleDownloadStates: Map<String, SubtitleDownloadState> = emptyMap(),
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -421,6 +431,8 @@ class PlayerViewModel @Inject constructor(
             val displayLabel = sub.label.takeIf { it.isNotBlank() } ?: sub.language
             SubtitleOption(sub.language, displayLabel, sub.url, isEnabled = sub.enabled)
         }
+        // Mark already-present stream subtitles as Done in download states (no download icon)
+        val doneStates = options.associate { it.language to SubtitleDownloadState.Done as SubtitleDownloadState }
         // If backend pre-enables a subtitle track, respect it.
         val autoEnabled = options.firstOrNull { it.isEnabled }
         _ui.update { it.copy(
@@ -428,8 +440,9 @@ class PlayerViewModel @Inject constructor(
             subtitles              = subtitles,
             activeSubtitleLanguage = autoEnabled?.language ?: "off",
             subtitlesEnabled       = autoEnabled != null,
+            subtitleDownloadStates = doneStates,
         ) }
-        // Sync auto-enabled state to ExoPlayer track selector.
+        // Sync auto-enabled state to ExoPlayer track selector (non-blocking — stream starts first).
         if (autoEnabled != null) selectSubtitle(autoEnabled.language)
     }
 
@@ -443,37 +456,78 @@ class PlayerViewModel @Inject constructor(
             subtitlesEnabled = lastEnabled != null) }
     }
 
-    fun searchOnlineSubtitles(query: String = "") {
-        // Subtitles are free for all users — no premium gate.
-        val langs = if (query.isBlank()) {
-            val locale = java.util.Locale.getDefault().language.ifBlank { "en" }
-            listOf("en", locale).distinct()
-        } else {
-            query.split(",").map { it.trim().lowercase() }.filter { it.isNotBlank() }
-        }
-        _ui.update { it.copy(isSubtitleSearching = true, subtitleSearchEmpty = false, subtitleUpsellMessage = null) }
+    // ── Subtitle download for drawer ──────────────────────────────────────────
+
+    /**
+     * Called when user taps a download icon in the subtitle drawer.
+     * Downloads the subtitle for the requested language, shows spinner during fetch,
+     * updates state on completion (hide icon) or failure (restore icon + friendly error).
+     * For stream playback: caches the subtitle file and renders it immediately.
+     * For offline playback: persists to DB so it survives session.
+     */
+    fun downloadSubtitleForLanguage(language: String) {
+        // Mark as loading
+        _ui.update { it.copy(
+            subtitleDownloadStates = it.subtitleDownloadStates + (language to SubtitleDownloadState.Loading)
+        )}
         viewModelScope.launch(Dispatchers.IO) {
-            val result = streamRepo.getSubtitles(currentId, currentType, currentSeason, currentEpisode, langs)
-            val subs = (result as? NetworkResult.Success)?.data ?: emptyList()
-            if (subs.isNotEmpty()) {
-                val options = subs.map { s ->
-                    val displayLabel = s.label.takeIf { it.isNotBlank() } ?: s.language
-                    SubtitleOption(s.language, displayLabel, s.url, isEnabled = s.enabled)
+            val dur = exoPlayer?.duration?.coerceAtLeast(0L) ?: _ui.value.durationMs
+            val result = streamRepo.getSubtitles(
+                id         = currentId,
+                mediaType  = currentType,
+                season     = currentSeason,
+                episode    = currentEpisode,
+                language   = language,
+                durationMs = dur,
+            )
+            when (result) {
+                is NetworkResult.Success -> {
+                    val subs = result.data
+                    if (subs.isEmpty()) {
+                        _ui.update { it.copy(
+                            subtitleDownloadStates = it.subtitleDownloadStates +
+                                (language to SubtitleDownloadState.Error("Not available for this title"))
+                        )}
+                        return@launch
+                    }
+                    // Take the first matching subtitle
+                    val sub = subs.firstOrNull { it.language == language } ?: subs.first()
+
+                    if (_ui.value.isOfflinePlayback) {
+                        // Persist to DB for offline use
+                        addDownloadedSubtitle(sub, sub.url /* engine will use real path */)
+                    } else {
+                        // Add as a stream subtitle option (in-memory, uses URL directly)
+                        val displayLabel = sub.label.takeIf { it.isNotBlank() } ?: sub.language
+                        val newOption = SubtitleOption(sub.language, displayLabel, sub.url, isEnabled = sub.enabled)
+                        val existing = _ui.value.subtitleOptions.filter { it.language != sub.language }
+                        _ui.update { it.copy(
+                            subtitleOptions = existing + newOption,
+                            subtitles       = _ui.value.subtitles.filter { it.language != sub.language } + sub,
+                        )}
+                    }
+                    _ui.update { it.copy(
+                        subtitleDownloadStates = it.subtitleDownloadStates + (language to SubtitleDownloadState.Done)
+                    )}
                 }
-                val currentLang = _ui.value.activeSubtitleLanguage
-                val stillActive = options.any { o -> o.language == currentLang }
-                _ui.update { it.copy(
-                    subtitleOptions        = options,
-                    subtitles              = subs,
-                    isSubtitleSearching    = false,
-                    subtitleSearchEmpty    = false,
-                    activeSubtitleLanguage = if (stillActive) currentLang else "off",
-                    subtitlesEnabled       = _ui.value.subtitlesEnabled && stillActive,
-                )}
-            } else {
-                _ui.update { it.copy(isSubtitleSearching = false, subtitleSearchEmpty = true) }
+                is NetworkResult.Error -> {
+                    val friendly = when {
+                        result.isNetworkError -> "No connection"
+                        result.isNotFound     -> "Not available for this title"
+                        else                  -> "Download failed — try again"
+                    }
+                    _ui.update { it.copy(
+                        subtitleDownloadStates = it.subtitleDownloadStates +
+                            (language to SubtitleDownloadState.Error(friendly))
+                    )}
+                }
+                else -> {}
             }
         }
+    }
+
+    fun searchOnlineSubtitles(query: String = "") {
+        // No-op — kept for compatibility; drawer now uses downloadSubtitleForLanguage directly.
     }
 
     fun addDownloadedSubtitle(sub: Subtitle, localFilePath: String) {
