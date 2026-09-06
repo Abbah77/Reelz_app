@@ -36,6 +36,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.io.File
@@ -426,14 +427,11 @@ class PlayerViewModel @Inject constructor(
     // ── Subtitle handling ─────────────────────────────────────────────────────
 
     private fun loadStreamSubtitles(subtitles: List<Subtitle>) {
-        // Use the subtitle's label field for display; fall back to language code only if label is blank.
         val options = subtitles.map { sub ->
             val displayLabel = sub.label.takeIf { it.isNotBlank() } ?: sub.language
             SubtitleOption(sub.language, displayLabel, sub.url, isEnabled = sub.enabled)
         }
-        // Mark already-present stream subtitles as Done in download states (no download icon)
         val doneStates = options.associate { it.language to SubtitleDownloadState.Done as SubtitleDownloadState }
-        // If backend pre-enables a subtitle track, respect it.
         val autoEnabled = options.firstOrNull { it.isEnabled }
         _ui.update { it.copy(
             subtitleOptions        = options,
@@ -442,18 +440,47 @@ class PlayerViewModel @Inject constructor(
             subtitlesEnabled       = autoEnabled != null,
             subtitleDownloadStates = doneStates,
         ) }
-        // Sync auto-enabled state to ExoPlayer track selector (non-blocking — stream starts first).
-        if (autoEnabled != null) selectSubtitle(autoEnabled.language)
+        // Attach auto-enabled subtitle to ExoPlayer without blocking stream start.
+        // selectSubtitle runs on main thread and rebuilds the MediaItem after prepare().
+        if (autoEnabled != null) {
+            viewModelScope.launch(Dispatchers.Main) {
+                val sub = subtitles.firstOrNull { it.language == autoEnabled.language }
+                if (sub != null) applyExternalSubtitleToPlayer(sub)
+            }
+        }
     }
 
     private suspend fun loadDownloadedSubtitles(id: String, season: Int, episode: Int) {
         val saved = downloadSubtitleDao.getForContent(id, season, episode)
-        val options = saved.map { SubtitleOption(it.language, it.label, it.localFilePath,
-            isPersistent = true, persistentId = it.id, isEnabled = it.isEnabled) }
+        val options = saved.map { row ->
+            SubtitleOption(row.language, row.label, row.localFilePath,
+                isPersistent = true, persistentId = row.id, isEnabled = row.isEnabled)
+        }
+        // Populate subtitles list with format info so selectSubtitle can build SubtitleConfiguration
+        val subtitleModels = saved.map { row ->
+            Subtitle(
+                url      = row.localFilePath,
+                language = row.language,
+                enabled  = row.isEnabled,
+                label    = row.label,
+                format   = row.format.ifBlank { "srt" },
+            )
+        }
         val lastEnabled = options.firstOrNull { it.isEnabled }
-        _ui.update { it.copy(subtitleOptions = options,
+        _ui.update { it.copy(
+            subtitleOptions        = options,
+            subtitles              = subtitleModels,
+            subtitleDownloadStates = saved.associate { it.language to SubtitleDownloadState.Done as SubtitleDownloadState },
             activeSubtitleLanguage = lastEnabled?.language ?: "off",
-            subtitlesEnabled = lastEnabled != null) }
+            subtitlesEnabled       = lastEnabled != null,
+        )}
+        // If a subtitle was enabled before, re-attach it to the player
+        if (lastEnabled != null) {
+            val sub = subtitleModels.firstOrNull { it.language == lastEnabled.language }
+            if (sub != null) {
+                withContext(Dispatchers.Main) { applyExternalSubtitleToPlayer(sub) }
+            }
+        }
     }
 
     // ── Subtitle download for drawer ──────────────────────────────────────────
@@ -470,8 +497,9 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(
             subtitleDownloadStates = it.subtitleDownloadStates + (language to SubtitleDownloadState.Loading)
         )}
+        // Read duration on the main thread — ExoPlayer enforces thread affinity
+        val dur = (_ui.value.durationMs).coerceAtLeast(0L)
         viewModelScope.launch(Dispatchers.IO) {
-            val dur = exoPlayer?.duration?.coerceAtLeast(0L) ?: _ui.value.durationMs
             val result = streamRepo.getSubtitles(
                 id         = currentId,
                 mediaType  = currentType,
@@ -490,21 +518,24 @@ class PlayerViewModel @Inject constructor(
                         )}
                         return@launch
                     }
-                    // Take the first matching subtitle
                     val sub = subs.firstOrNull { it.language == language } ?: subs.first()
 
                     if (_ui.value.isOfflinePlayback) {
-                        // Persist to DB for offline use
-                        addDownloadedSubtitle(sub, sub.url /* engine will use real path */)
+                        addDownloadedSubtitle(sub, sub.url)
                     } else {
-                        // Add as a stream subtitle option (in-memory, uses URL directly)
                         val displayLabel = sub.label.takeIf { it.isNotBlank() } ?: sub.language
                         val newOption = SubtitleOption(sub.language, displayLabel, sub.url, isEnabled = sub.enabled)
                         val existing = _ui.value.subtitleOptions.filter { it.language != sub.language }
+                        val newSubs  = _ui.value.subtitles.filter { it.language != sub.language } + sub
                         _ui.update { it.copy(
                             subtitleOptions = existing + newOption,
-                            subtitles       = _ui.value.subtitles.filter { it.language != sub.language } + sub,
+                            subtitles       = newSubs,
                         )}
+                        // Auto-select the just-downloaded language and attach it to ExoPlayer
+                        withContext(Dispatchers.Main) {
+                            applyExternalSubtitleToPlayer(sub)
+                            selectSubtitle(sub.language)
+                        }
                     }
                     _ui.update { it.copy(
                         subtitleDownloadStates = it.subtitleDownloadStates + (language to SubtitleDownloadState.Done)
@@ -528,6 +559,69 @@ class PlayerViewModel @Inject constructor(
 
     fun searchOnlineSubtitles(query: String = "") {
         // No-op — kept for compatibility; drawer now uses downloadSubtitleForLanguage directly.
+    }
+
+    // ── Subtitle → ExoPlayer wiring ───────────────────────────────────────────
+
+    /**
+     * Maps a subtitle format string to the correct MIME type for ExoPlayer's
+     * SubtitleConfiguration. Must be called on the main thread (player access).
+     */
+    private fun subtitleMimeType(format: String): String = when (format.lowercase().trim()) {
+        "vtt", "webvtt" -> androidx.media3.common.MimeTypes.TEXT_VTT
+        "ass", "ssa"    -> androidx.media3.common.MimeTypes.TEXT_SSA
+        "ttml", "xml"   -> androidx.media3.common.MimeTypes.APPLICATION_TTML
+        else             -> androidx.media3.common.MimeTypes.APPLICATION_SUBRIP // srt default
+    }
+
+    /**
+     * Rebuilds the current MediaItem with the given external subtitle attached and
+     * re-prepares the player at the current position. Must be called on the main thread.
+     *
+     * This is the correct way to add external SRT/VTT files to ExoPlayer — the
+     * MediaItem.SubtitleConfiguration is baked into the media source, not applied
+     * through the track selector (which only works for in-stream text tracks).
+     */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun applyExternalSubtitleToPlayer(sub: Subtitle) {
+        val p = exoPlayer ?: return
+        val currentPos = p.currentPosition.coerceAtLeast(0L)
+        val wasPlaying = p.isPlaying
+
+        // Build the SubtitleConfiguration
+        val subConfig = MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(sub.url))
+            .setMimeType(subtitleMimeType(sub.format))
+            .setLanguage(sub.language)
+            .setSelectionFlags(androidx.media3.common.C.SELECTION_FLAG_DEFAULT)
+            .build()
+
+        // Rebuild the MediaItem with the subtitle attached
+        val currentItem = p.currentMediaItem ?: return
+        val newItem = currentItem.buildUpon()
+            .setSubtitleConfigurations(listOf(subConfig))
+            .build()
+
+        // Re-prepare at same position
+        p.setMediaItem(newItem, currentPos)
+        p.prepare()
+        p.playWhenReady = wasPlaying
+    }
+
+    /**
+     * Removes all external subtitle configurations from the current MediaItem.
+     * Used when user selects "Off".
+     */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun clearExternalSubtitlesFromPlayer() {
+        val p = exoPlayer ?: return
+        val currentItem = p.currentMediaItem ?: return
+        if (currentItem.localConfiguration?.subtitleConfigurations.isNullOrEmpty()) return
+        val currentPos = p.currentPosition.coerceAtLeast(0L)
+        val wasPlaying = p.isPlaying
+        val newItem = currentItem.buildUpon().setSubtitleConfigurations(emptyList()).build()
+        p.setMediaItem(newItem, currentPos)
+        p.prepare()
+        p.playWhenReady = wasPlaying
     }
 
     fun addDownloadedSubtitle(sub: Subtitle, localFilePath: String) {
@@ -579,32 +673,52 @@ class PlayerViewModel @Inject constructor(
             subtitlesEnabled       = enabled,
             selectedSubtitle       = option?.label ?: "Off",
         )}
-        // Sync subtitle selection to ExoPlayer via track selector.
-        // trackSelector may be null if player hasn't been built yet — safe to skip.
-        val ts = trackSelector ?: return
-        try {
-            val params = ts.buildUponParameters()
-            if (enabled) {
-                // Set preferred language so ExoPlayer picks an in-stream track if one exists.
-                // setIgnoredTextSelectionFlags(0) clears any flags that would suppress the track.
-                ts.setParameters(
-                    params
-                        .setPreferredTextLanguage(language)
-                        .setPreferredTextRoleFlags(0)
-                        .setIgnoredTextSelectionFlags(0)
-                )
-            } else {
-                // Clear preference and suppress auto-selected tracks.
-                ts.setParameters(
-                    params
-                        .setPreferredTextLanguage(null)
-                        .setIgnoredTextSelectionFlags(
-                            C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED
-                        )
-                )
+
+        val ts = trackSelector
+        if (!enabled) {
+            // Clear external subtitles and suppress in-stream auto-selection
+            clearExternalSubtitlesFromPlayer()
+            ts?.setParameters(ts.buildUponParameters()
+                .setPreferredTextLanguage(null)
+                .setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED))
+            return
+        }
+
+        // Check if this option is an external URL (srt/vtt/etc) vs an in-stream track
+        val subUrl = option?.url ?: ""
+        val isExternal = subUrl.startsWith("http://") || subUrl.startsWith("https://") ||
+                         subUrl.startsWith("file://") ||
+                         (!subUrl.startsWith("/") && subUrl.contains(".") && !subUrl.isBlank())
+        val isLocalFile = subUrl.startsWith("/") || subUrl.startsWith("file://")
+
+        if (isExternal || isLocalFile) {
+            // External subtitle: embed as SubtitleConfiguration in the MediaItem
+            val sub = _ui.value.subtitles.firstOrNull { it.language == language }
+            if (sub != null) {
+                applyExternalSubtitleToPlayer(sub)
+            } else if (option != null) {
+                // Fallback: construct minimal Subtitle from option (offline case uses file path)
+                val inferredFormat = when {
+                    subUrl.endsWith(".vtt", ignoreCase = true) -> "vtt"
+                    subUrl.endsWith(".ass", ignoreCase = true) -> "ass"
+                    subUrl.endsWith(".ssa", ignoreCase = true) -> "ssa"
+                    else -> "srt"
+                }
+                val fallbackSub = Subtitle(url = if (isLocalFile && !subUrl.startsWith("file://")) "file://$subUrl" else subUrl,
+                    language = language, enabled = true, label = option.label, format = inferredFormat)
+                applyExternalSubtitleToPlayer(fallbackSub)
             }
-        } catch (e: Exception) {
-            Log.w("PlayerVM", "selectSubtitle: trackSelector update failed — ${e.message}")
+            // Also set track selector language so in-stream tracks match if present
+            ts?.setParameters(ts.buildUponParameters()
+                .setPreferredTextLanguage(language)
+                .setPreferredTextRoleFlags(0)
+                .setIgnoredTextSelectionFlags(0))
+        } else {
+            // In-stream track: use track selector only
+            ts?.setParameters(ts.buildUponParameters()
+                .setPreferredTextLanguage(language)
+                .setPreferredTextRoleFlags(0)
+                .setIgnoredTextSelectionFlags(0))
         }
     }
 
@@ -622,7 +736,43 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun setSubtitleOffset(offsetMs: Int) { _ui.update { it.copy(subtitleOffsetMs = offsetMs) } }
+    fun setSubtitleOffset(offsetMs: Int) {
+        _ui.update { it.copy(subtitleOffsetMs = offsetMs) }
+        // Apply offset to ExoPlayer: the cleanest supported way is adjusting
+        // the subtitle configuration's subsample offset. Since we can't mutate a
+        // live MediaItem, we rebuild it with OFFSET_SAMPLE_RELATIVE applied.
+        // For in-stream tracks, a tiny seek forces the renderer to re-deliver cues.
+        viewModelScope.launch(Dispatchers.Main) {
+            val p = exoPlayer ?: return@launch
+            val currentSub = _ui.value.subtitles
+                .firstOrNull { it.language == _ui.value.activeSubtitleLanguage }
+
+            if (currentSub != null && _ui.value.subtitlesEnabled) {
+                val currentPos = p.currentPosition.coerceAtLeast(0L)
+                val wasPlaying = p.isPlaying
+                val subUrl = if (!currentSub.url.startsWith("http") && !currentSub.url.startsWith("file://"))
+                    "file://${currentSub.url}" else currentSub.url
+
+                @Suppress("DEPRECATION")
+                val subConfig = MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(subUrl))
+                    .setMimeType(subtitleMimeType(currentSub.format))
+                    .setLanguage(currentSub.language)
+                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                    // subsampleOffsetUs: positive = delay subtitle (show later),
+                    // negative = advance subtitle (show earlier). offsetMs is in ms → µs.
+                    .setSubsampleOffsetUs(offsetMs.toLong() * -1000L)
+                    .build()
+
+                val currentItem = p.currentMediaItem ?: return@launch
+                val newItem = currentItem.buildUpon()
+                    .setSubtitleConfigurations(listOf(subConfig))
+                    .build()
+                p.setMediaItem(newItem, currentPos)
+                p.prepare()
+                p.playWhenReady = wasPlaying
+            }
+        }
+    }
 
     // ── Player build ──────────────────────────────────────────────────────────
 
@@ -747,13 +897,32 @@ class PlayerViewModel @Inject constructor(
         val p = exoPlayer ?: return
         val primary = result.primaryStream ?: return
         val rawUrl = primary.url
-        // Normalise: plain absolute paths from downloads don't carry "file://" — add it so
-        // ExoPlayer uses the local file system instead of the network data source.
         val url = if (!rawUrl.startsWith("file://") && !rawUrl.startsWith("http://") && !rawUrl.startsWith("https://"))
             "file://$rawUrl" else rawUrl
         val isLocalFile = url.startsWith("file://")
-        val item = MediaItem.Builder().setUri(url)
-            .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build()).build()
+
+        // Embed any currently-active external subtitle into the MediaItem
+        val activeLang = _ui.value.activeSubtitleLanguage
+        val activeSub  = if (_ui.value.subtitlesEnabled && activeLang != "off")
+            _ui.value.subtitles.firstOrNull { it.language == activeLang } else null
+        val offsetUs   = _ui.value.subtitleOffsetMs.toLong() * -1000L
+
+        val itemBuilder = MediaItem.Builder().setUri(url)
+            .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build())
+
+        if (activeSub != null) {
+            val subUrl = if (!activeSub.url.startsWith("http") && !activeSub.url.startsWith("file://"))
+                "file://${activeSub.url}" else activeSub.url
+            val subConfig = MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(subUrl))
+                .setMimeType(subtitleMimeType(activeSub.format))
+                .setLanguage(activeSub.language)
+                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                .setSubsampleOffsetUs(offsetUs)
+                .build()
+            itemBuilder.setSubtitleConfigurations(listOf(subConfig))
+        }
+
+        val item = itemBuilder.build()
 
         val mediaDsf = if (isLocalFile) {
             DefaultDataSource.Factory(appContext)
