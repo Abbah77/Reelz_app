@@ -760,8 +760,6 @@ fun PlayerScreen(
         // ── Video surface ─────────────────────────────────────────────────
         key(player) {
             val subtitleOffsetMs = ui.subtitleOffsetMs
-            // Hold a reference to the current text output listener so we can
-            // remove it before adding a new one (clearTextOutput requires the exact instance).
             val textOutputRef = remember { mutableStateOf<androidx.media3.common.Player.Listener?>(null) }
             AndroidView(
                 factory = { c ->
@@ -779,25 +777,22 @@ fun PlayerScreen(
                         sv.visibility = android.view.View.VISIBLE
                         return@AndroidView
                     }
-                    // Remove previous listener if any
+                    // Remove previous offset listener before registering a new one
                     textOutputRef.value?.let { exo.removeListener(it) }
                     textOutputRef.value = null
 
                     if (subtitleOffsetMs == 0) {
-                        // Zero offset — native PlayerView subtitle rendering
+                        // Zero offset — let PlayerView drive SubtitleView natively
                         sv.visibility = android.view.View.VISIBLE
                     } else {
-                        // Non-zero offset: intercept via Player.Listener.onCues, shift, feed to SubtitleView
+                        // Non-zero: intercept cues via Player.Listener, shift, feed directly
+                        // to SubtitleView.setCues(List<Cue>) — the correct public API in Media3 1.4.1
                         sv.visibility = android.view.View.INVISIBLE
                         val listener = object : androidx.media3.common.Player.Listener {
                             override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
-                                val shiftedUs = cueGroup.presentationTimeUs +
-                                        subtitleOffsetMs.toLong() * 1_000L
-                                val shifted = androidx.media3.common.text.CueGroup(
-                                    cueGroup.cues, shiftedUs
-                                )
+                                // setCues(List<Cue>) is the public SubtitleView API in Media3 1.4.1
                                 sv.visibility = android.view.View.VISIBLE
-                                sv.onCues(shifted)
+                                sv.setCues(cueGroup.cues)
                             }
                         }
                         exo.addListener(listener)
