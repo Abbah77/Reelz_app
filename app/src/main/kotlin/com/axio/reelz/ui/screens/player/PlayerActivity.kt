@@ -1572,7 +1572,8 @@ private fun SettingsDrawerContent(
     vm: PlayerViewModel,
     onClose: () -> Unit,
 ) {
-    val d = LocalDimensions.current
+    val d   = LocalDimensions.current
+    val ctx = LocalContext.current
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth()
@@ -1625,6 +1626,46 @@ private fun SettingsDrawerContent(
                     }
                     Spacer(Modifier.width(d.spaceMd))
                     SubtitleTogglePill(enabled = ui.isPipGloballyEnabled)
+                }
+            }
+
+            // ── Report / Feedback row ─────────────────────────────────────────
+            item {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(d.radiusMd))
+                        .background(GlassMd)
+                        .border(d.borderThin, GlassBorderMd, RoundedCornerShape(d.radiusMd))
+                        .clickable {
+                            onClose()
+                            val rid = ui.streamRequestId
+                            val route = com.axio.reelz.app.Route.Feedback.build("player", requestId = rid)
+                            ctx.startActivity(
+                                android.content.Intent(ctx, com.axio.reelz.app.MainActivity::class.java).apply {
+                                    putExtra(com.axio.reelz.app.MainActivity.EXTRA_DEEPLINK_ROUTE, route)
+                                    addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                }
+                            )
+                        }
+                        .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceMd - d.spaceXs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Report an issue",
+                            color = White, fontSize = d.textMd, fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Wrong movie, bad quality, subtitle problems…",
+                            color = White40, fontSize = (d.textXxs.value + 1).sp,
+                        )
+                    }
+                    com.axio.reelz.ui.components.FeedbackIconButton(
+                        onOpen   = {},
+                        tint     = Error.copy(alpha = 0.7f),
+                        iconSize = d.iconSm,
+                    )
                 }
             }
         }

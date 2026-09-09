@@ -106,6 +106,7 @@ data class StreamTrack(
 data class StreamResult(
     val streams: List<StreamTrack>,
     val expiresAtMs: Long,
+    val requestId: String? = null,   // ENGINE traceability — attached to player feedback
 ) {
     val primaryStream: StreamTrack? get() = streams.firstOrNull()
     val isHls: Boolean get() = primaryStream?.type == "hls"
@@ -155,6 +156,7 @@ data class DownloadItem(
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
     val localPlaylistPath: String = "",  // HLS: path to local index.m3u8; MP4: same as filePath
+    val requestId: String? = null,        // ENGINE request_id — attached to download feedback
 )
 
 // ── User session ──────────────────────────────────────────────────────────────

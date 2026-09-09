@@ -16,11 +16,15 @@ import com.google.gson.annotations.SerializedName
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Standard envelope ─────────────────────────────────────────────────────────
+// request_id added in Schema v5 — present on ALL responses, meaningful for
+// ENGINE responses (stream / download / subtitle / shorts). The app reads it
+// and attaches it to feedback reports for those surfaces.
 data class ApiResponse<T>(
     val ok: Boolean = false,
     val data: T? = null,
     val error: String? = null,
     @SerializedName("cache_ttl_ms") val cacheTtlMs: Long? = null,
+    @SerializedName("request_id")   val requestId: String? = null,
 )
 
 // ── Media card (list item) ────────────────────────────────────────────────────
@@ -199,13 +203,15 @@ data class StreamItemDto(
 
 // data field inside ApiResponse<StreamData>
 // expires_at_ms lives here — it is content metadata (link expiry), not response metadata
+// requestId is passed in from the envelope root (not inside data) by the repository layer
 data class StreamData(
     val streams: List<StreamItemDto> = emptyList(),
     @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
 ) {
-    fun toModel() = StreamResult(
+    fun toModel(requestId: String? = null) = StreamResult(
         streams     = streams.map { it.toModel() },
         expiresAtMs = expiresAtMs,
+        requestId   = requestId,
     )
 }
 

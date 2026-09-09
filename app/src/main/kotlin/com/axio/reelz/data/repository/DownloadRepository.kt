@@ -79,6 +79,7 @@ class DownloadRepository @Inject constructor(
         linkType:    String = "mp4",     // "mp4" | "hls"
         streamUrl:   String,
         headers:     Map<String, String> = emptyMap(),
+        requestId:   String? = null,     // ENGINE request_id — stored for feedback traceability
     ): String = withContext(Dispatchers.IO) {
         // Duplicate guard — same quality of same content must not be enqueued twice
         val existing = dao.getForContent(id, season, episode)
@@ -100,6 +101,7 @@ class DownloadRepository @Inject constructor(
                 streamUrl   = streamUrl,
                 headersJson = gson.toJson(headers),
                 status      = DownloadStatus.QUEUED.name,
+                requestId   = requestId,
             )
         )
 
@@ -289,5 +291,6 @@ class DownloadRepository @Inject constructor(
         durationMs         = durationMs,
         lastPlayedAt       = lastPlayedAt,
         localPlaylistPath  = localPlaylistPath,
+        requestId          = requestId,
     )
 }

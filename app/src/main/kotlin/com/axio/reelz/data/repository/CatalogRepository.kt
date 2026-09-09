@@ -309,10 +309,17 @@ class CatalogRepository @Inject constructor(
 
     // ── Shorts ────────────────────────────────────────────────────────────────
 
+    data class ShortsPage(
+        val videos: List<com.axio.reelz.data.model.ShortVideo>,
+        val nextCursor: String?,
+        val hasMore: Boolean,
+        val requestId: String?,   // ENGINE request_id from the response envelope
+    )
+
     suspend fun getShorts(
         cursor: String? = null,
         limit: Int = 10,
-    ): NetworkResult<Triple<List<com.axio.reelz.data.model.ShortVideo>, String?, Boolean>> =
+    ): NetworkResult<ShortsPage> =
         withContext(Dispatchers.IO) {
             val result = safeApiCall(tag) { api.getShorts(cursor, limit) }
             when (result) {
@@ -322,10 +329,11 @@ class CatalogRepository @Inject constructor(
                     if (!envelope.ok || payload == null) {
                         return@withContext NetworkResult.Error(envelope.error ?: "Shorts unavailable")
                     }
-                    NetworkResult.Success(Triple(
-                        payload.items.map { it.toModel() },
-                        payload.nextCursor,
-                        payload.hasMore,
+                    NetworkResult.Success(ShortsPage(
+                        videos     = payload.items.map { it.toModel() },
+                        nextCursor = payload.nextCursor,
+                        hasMore    = payload.hasMore,
+                        requestId  = envelope.requestId,
                     ))
                 }
                 is NetworkResult.Error -> NetworkResult.Error(

@@ -56,6 +56,17 @@ sealed class Route(val path: String) {
     object Search          : Route("search")
     object Premium         : Route("premium")
     object Settings        : Route("settings")
+    // Feedback — "feedback/{source}?request_id={rid}&tmdb_id={tid}"
+    // source: player | detail | download | shorts | settings
+    object Feedback        : Route("feedback/{source}") {
+        fun build(source: String, requestId: String? = null, tmdbId: String? = null): String {
+            val params = buildList {
+                if (requestId != null) add("request_id=$requestId")
+                if (tmdbId    != null) add("tmdb_id=$tmdbId")
+            }
+            return "feedback/$source" + if (params.isEmpty()) "" else "?${params.joinToString("&")}"
+        }
+    }
     object Detail          : Route("detail/{id}/{mediaType}") {
         fun go(id: String, type: MediaType) = "detail/$id/${type.name}"
     }
@@ -79,7 +90,7 @@ val navTabs = listOf(
 )
 
 @Composable
-fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
+fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false, pendingDeeplinkRoute: String? = null) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
@@ -87,6 +98,15 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
     val topLevelRoutes = navTabs.map { it.route }
     val d = LocalDimensions.current
     val showBottomBar = currentRoute in topLevelRoutes
+
+    // Consume a deeplink route injected from PlayerActivity (e.g. feedback from player)
+    LaunchedEffect(pendingDeeplinkRoute) {
+        if (!pendingDeeplinkRoute.isNullOrBlank()) {
+            // Small delay so the nav graph is fully ready before navigating
+            kotlinx.coroutines.delay(300)
+            nav.navigate(pendingDeeplinkRoute)
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (openPremiumOnStart) nav.navigate(Route.Premium.path)
@@ -172,6 +192,26 @@ fun AppNavigation(adEngine: AdEngine, openPremiumOnStart: Boolean = false) {
             composable(Route.Search.path)    { SearchScreen(nav, adEngine) }
             composable(Route.Premium.path)   { PremiumScreen(nav) }
             composable(Route.Settings.path)  { com.axio.reelz.ui.screens.settings.SettingsScreen(nav) }
+
+            // ── Feedback ──────────────────────────────────────────────────────
+            composable(
+                route = "feedback/{source}?request_id={request_id}&tmdb_id={tmdb_id}",
+                arguments = listOf(
+                    androidx.navigation.navArgument("source")     { type = androidx.navigation.NavType.StringType },
+                    androidx.navigation.navArgument("request_id") { type = androidx.navigation.NavType.StringType; nullable = true; defaultValue = null },
+                    androidx.navigation.navArgument("tmdb_id")    { type = androidx.navigation.NavType.StringType; nullable = true; defaultValue = null },
+                ),
+            ) { back ->
+                val source    = back.arguments?.getString("source") ?: "settings"
+                val requestId = back.arguments?.getString("request_id")
+                val tmdbId    = back.arguments?.getString("tmdb_id")
+                com.axio.reelz.ui.screens.feedback.FeedbackScreen(
+                    nav       = nav,
+                    source    = com.axio.reelz.data.dto.FeedbackSource.fromKey(source),
+                    requestId = requestId,
+                    tmdbId    = tmdbId,
+                )
+            }
             composable("settings_storage")   { com.axio.reelz.ui.screens.settings.StorageUsageScreen(nav) }
             composable("settings_terms")     { com.axio.reelz.ui.screens.settings.TermsScreen(nav) }
             composable("settings_privacy")   { com.axio.reelz.ui.screens.settings.PrivacyPolicyScreen(nav) }

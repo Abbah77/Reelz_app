@@ -331,6 +331,7 @@ data class DownloadRow(
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
     val localPlaylistPath: String = "",
+    @androidx.room.ColumnInfo(name = "request_id", defaultValue = "") val requestId: String? = null,
 )
 
 @Dao
@@ -641,6 +642,13 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+// Migration 7→8: add request_id column to downloads for feedback traceability
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE downloads ADD COLUMN request_id TEXT DEFAULT NULL")
+    }
+}
+
 @Database(
     entities = [
         CachedFeedRow::class,
@@ -655,7 +663,7 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         DownloadSubtitleRow::class,
         TransferRecord::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {

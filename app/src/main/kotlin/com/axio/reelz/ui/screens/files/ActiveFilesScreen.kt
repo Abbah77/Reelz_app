@@ -123,7 +123,7 @@ fun ActiveFilesScreen(
                     )
                 }
                 items(downloading + queued, key = { "dl-${it.id}" }) { item ->
-                    ActiveDownloadCard(item = item, ctx = ctx, vm = vm)
+                    ActiveDownloadCard(item = item, ctx = ctx, vm = vm, onFeedback = { nav.navigate(com.axio.reelz.app.Route.Feedback.build("download", requestId = item.requestId)) })
                 }
             }
 
@@ -134,7 +134,7 @@ fun ActiveFilesScreen(
                     ActiveSectionHeader(label = "Paused", count = paused.size, dotColor = White40, pulsing = false)
                 }
                 items(paused, key = { "pa-${it.id}" }) { item ->
-                    ActiveDownloadCard(item = item, ctx = ctx, vm = vm)
+                    ActiveDownloadCard(item = item, ctx = ctx, vm = vm, onFeedback = { nav.navigate(com.axio.reelz.app.Route.Feedback.build("download", requestId = item.requestId)) })
                 }
             }
 
@@ -145,7 +145,7 @@ fun ActiveFilesScreen(
                     ActiveSectionHeader(label = "Failed", count = failed.size, dotColor = Error, pulsing = false)
                 }
                 items(failed, key = { "er-${it.id}" }) { item ->
-                    ActiveDownloadCard(item = item, ctx = ctx, vm = vm)
+                    ActiveDownloadCard(item = item, ctx = ctx, vm = vm, onFeedback = { nav.navigate(com.axio.reelz.app.Route.Feedback.build("download", requestId = item.requestId)) })
                 }
             }
         }
@@ -215,6 +215,7 @@ private fun ActiveDownloadCard(
     item: DownloadItem,
     ctx: Context,
     vm: DownloadsViewModel,
+    onFeedback: () -> Unit = {},
 ) {
     val d = LocalDimensions.current
     val isDownloading = item.status == DownloadStatus.DOWNLOADING
@@ -321,14 +322,22 @@ private fun ActiveDownloadCard(
                             )
                         }
                     }
-                    Box(
-                        Modifier
-                            .size(d.iconLg)
-                            .clip(CircleShape)
-                            .background(GlassMd)
-                            .clickable { showDeleteDialog = true },
-                        Alignment.Center,
-                    ) { Text("✕", color = White40, fontSize = (d.textSm.value - 1f).sp) }
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(d.spaceXxs)) {
+                        Box(
+                            Modifier
+                                .size(d.iconLg)
+                                .clip(CircleShape)
+                                .background(GlassMd)
+                                .clickable { showDeleteDialog = true },
+                            Alignment.Center,
+                        ) { Text("✕", color = White40, fontSize = (d.textSm.value - 1f).sp) }
+                        com.axio.reelz.ui.components.FeedbackIconButton(
+                            onOpen   = onFeedback,
+                            withBg   = true,
+                            tint     = com.axio.reelz.ui.theme.Error.copy(alpha = 0.65f),
+                            iconSize = d.iconSm,
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(d.spaceSm))

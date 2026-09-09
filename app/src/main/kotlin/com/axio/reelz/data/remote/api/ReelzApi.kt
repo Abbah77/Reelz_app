@@ -1,6 +1,9 @@
 package com.axio.reelz.data.remote.api
 
 import com.axio.reelz.data.dto.*
+import com.axio.reelz.data.dto.FeedbackBody
+import com.axio.reelz.data.dto.FeedbackResult
+import com.axio.reelz.data.dto.FeedbackSchemaData
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -123,6 +126,16 @@ interface ReelzApi {
     suspend fun initPayment(
         @Field("plan") plan: String,
     ): Response<ApiResponse<PaymentData>>
+
+    // ── Feedback — auth required (user must be logged in) ─────────────────────
+    @POST("api/v1/feedback")
+    suspend fun submitFeedback(
+        @Body body: FeedbackBody,
+    ): Response<ApiResponse<FeedbackResult>>
+
+    // ── Feedback schema — GET, public, cached 24h ─────────────────────────────
+    @GET("api/v1/feedback/schema")
+    suspend fun getFeedbackSchema(): Response<ApiResponse<FeedbackSchemaData>>
 }
 
 // ── Request bodies ────────────────────────────────────────────────────────────
