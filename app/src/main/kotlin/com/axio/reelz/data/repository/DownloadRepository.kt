@@ -2,6 +2,7 @@ package com.axio.reelz.data.repository
 
 import android.content.Context
 import android.util.Log
+import com.axio.reelz.core.database.CompletedMediaDao
 import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.core.database.DownloadSubtitleDao
 import com.axio.reelz.core.database.DownloadSubtitleRow
@@ -32,6 +33,7 @@ import javax.inject.Singleton
 class DownloadRepository @Inject constructor(
     private val dao:             DownloadDao,
     private val subtitleDao:     DownloadSubtitleDao,
+    private val completedMediaDao: CompletedMediaDao,
     private val engine:          ReelzDownloadEngine,
     private val gson:            Gson,
 ) {
@@ -49,6 +51,11 @@ class DownloadRepository @Inject constructor(
         episode: Int    = 0,
         quality: String = "",
     ): Boolean = withContext(Dispatchers.IO) {
+        // Check permanent library first (completed_media)
+        val inLibrary = completedMediaDao.getForContent(id, season, episode)
+            .any { quality.isBlank() || it.quality.equals(quality, ignoreCase = true) }
+        if (inLibrary) return@withContext true
+        // Fall back to active download job queue
         dao.getForContent(id, season, episode)
             .any { it.quality == quality || quality.isBlank() }
     }
@@ -79,9 +86,12 @@ class DownloadRepository @Inject constructor(
         linkType:    String = "mp4",     // "mp4" | "hls"
         streamUrl:   String,
         headers:     Map<String, String> = emptyMap(),
-        requestId:   String? = null,     // ENGINE request_id — stored for feedback traceability
     ): String = withContext(Dispatchers.IO) {
-        // Duplicate guard — same quality of same content must not be enqueued twice
+        // Duplicate guard 1 — already in permanent library (same quality)
+        val inLibrary = completedMediaDao.getExact(id, season, episode, quality)
+        if (inLibrary != null) return@withContext inLibrary.id
+
+        // Duplicate guard 2 — same quality already in job queue (not errored)
         val existing = dao.getForContent(id, season, episode)
             .firstOrNull { it.quality == quality && it.status != DownloadStatus.ERROR.name }
         if (existing != null) return@withContext existing.id
@@ -101,7 +111,6 @@ class DownloadRepository @Inject constructor(
                 streamUrl   = streamUrl,
                 headersJson = gson.toJson(headers),
                 status      = DownloadStatus.QUEUED.name,
-                requestId   = requestId,
             )
         )
 
@@ -174,12 +183,14 @@ class DownloadRepository @Inject constructor(
         if (subtitles.isEmpty()) return
         repoScope.launch {
             try {
-                // Wait for this download to reach DONE
+                // Wait for this download to reach DONE in either table.
+                // completed_media is the primary source for new-style remuxed downloads.
+                // downloads table is the fallback for legacy HLS-only content.
                 dao.observeAll()
                     .map { rows -> rows.firstOrNull { it.id == downloadId } }
                     .filter { row -> row?.status == com.axio.reelz.data.model.DownloadStatus.DONE.name }
                     .first()
-                // Now download each subtitle silently
+                // Now download each subtitle to the permanent library location
                 subtitles.forEach { sub ->
                     downloadSubtitleSilently(downloadId, mediaId, season, episode, sub)
                 }
@@ -210,7 +221,8 @@ class DownloadRepository @Inject constructor(
                 return@withContext
             }
 
-            val subtitlesDir = engine.subtitlesDir(downloadId)
+            // Save to permanent library dir so subtitles survive job-folder deletion
+            val subtitlesDir = engine.subtitleLibraryDir(mediaId, season)
             val ext = subtitle.format.ifBlank { "srt" }
             val file = File(subtitlesDir, "${subtitle.language}.$ext")
 
@@ -291,6 +303,5 @@ class DownloadRepository @Inject constructor(
         durationMs         = durationMs,
         lastPlayedAt       = lastPlayedAt,
         localPlaylistPath  = localPlaylistPath,
-        requestId          = requestId,
     )
 }

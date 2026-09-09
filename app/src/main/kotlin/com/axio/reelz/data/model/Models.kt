@@ -10,7 +10,7 @@ package com.axio.reelz.data.model
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class MediaType   { MOVIE, TV }
-enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
+enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, REMUXING, DONE, ERROR }
 enum class TransferStatus { IDLE, CONNECTING, TRANSFERRING, DONE, ERROR }
 enum class TransferDirection { SEND, RECEIVE }
 
@@ -106,7 +106,6 @@ data class StreamTrack(
 data class StreamResult(
     val streams: List<StreamTrack>,
     val expiresAtMs: Long,
-    val requestId: String? = null,   // ENGINE traceability — attached to player feedback
 ) {
     val primaryStream: StreamTrack? get() = streams.firstOrNull()
     val isHls: Boolean get() = primaryStream?.type == "hls"
@@ -156,7 +155,25 @@ data class DownloadItem(
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
     val localPlaylistPath: String = "",  // HLS: path to local index.m3u8; MP4: same as filePath
-    val requestId: String? = null,        // ENGINE request_id — attached to download feedback
+)
+
+// ── Completed media (permanent library, post-remux) ──────────────────────────
+data class CompletedMediaItem(
+    val id: String,
+    val mediaId: String,
+    val title: String,
+    val posterUrl: String?,
+    val mediaType: String,
+    val season: Int = 0,
+    val episode: Int = 0,
+    val episodeName: String = "",
+    val quality: String = "720p",
+    val filePath: String,           // always an .mp4 path in reelz_library/
+    val sizeBytes: Long = 0,
+    val completedAt: Long = 0,
+    val durationMs: Long = 0,
+    val watchProgressMs: Long = 0,
+    val lastPlayedAt: Long = 0,
 )
 
 // ── User session ──────────────────────────────────────────────────────────────

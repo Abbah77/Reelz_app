@@ -100,11 +100,11 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Request notification permission so downloads show progress in status bar.
+        // Downloads work even if the user denies — they can still see progress in-app.
         requestNotificationPermissionIfNeeded()
 
         val openPremiumOnStart = intent?.getBooleanExtra(EXTRA_OPEN_PREMIUM, false) ?: false
-        // Deeplink route injected by PlayerActivity when user taps feedback
-        val pendingDeeplinkRoute = intent?.getStringExtra(EXTRA_DEEPLINK_ROUTE)
 
         setContent {
             ReelzTheme {
@@ -113,10 +113,12 @@ class MainActivity : ComponentActivity() {
 
                 when (configState) {
 
+                    // Splash still up — Room is loading
                     ConfigState.LOADING -> {
                         Box(Modifier.fillMaxSize().background(Bg))
                     }
 
+                    // First install, no cache — must reach backend
                     ConfigState.ERROR -> {
                         var retryKey by remember { mutableStateOf(0) }
                         LaunchedEffect(retryKey) { configRepo.refresh() }
@@ -128,6 +130,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     ConfigState.READY -> {
+                        // Maintenance gate
                         if (configRepo.isMaintenanceMode()) {
                             MaintenanceScreen(
                                 message = config?.maintenanceMessage ?: "Down for maintenance.",
@@ -136,6 +139,7 @@ class MainActivity : ComponentActivity() {
                             return@ReelzTheme
                         }
 
+                        // Force / optional update gate
                         val current  = BuildConfig.VERSION_CODE
                         val minVer   = configRepo.minAppVersion()
                         val latest   = configRepo.latestAppVersion()
@@ -164,15 +168,12 @@ class MainActivity : ComponentActivity() {
                             return@ReelzTheme
                         }
 
+                        // Normal app flow
                         var showPoweredBy by remember { mutableStateOf(true) }
                         if (showPoweredBy) {
                             PoweredByScreen(onFinished = { showPoweredBy = false })
                         } else {
-                            AppNavigation(
-                                adEngine            = adEngine,
-                                openPremiumOnStart  = openPremiumOnStart,
-                                pendingDeeplinkRoute = pendingDeeplinkRoute,
-                            )
+                            AppNavigation(adEngine = adEngine, openPremiumOnStart = openPremiumOnStart)
                         }
                     }
                 }
@@ -181,8 +182,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        const val EXTRA_OPEN_PREMIUM    = "com.axio.reelz.EXTRA_OPEN_PREMIUM"
-        const val EXTRA_DEEPLINK_ROUTE  = "com.axio.reelz.EXTRA_DEEPLINK_ROUTE"
+        const val EXTRA_OPEN_PREMIUM = "com.axio.reelz.EXTRA_OPEN_PREMIUM"
     }
 }
 

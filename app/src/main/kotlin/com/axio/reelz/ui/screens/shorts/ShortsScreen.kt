@@ -168,7 +168,6 @@ class ShortsViewModel @Inject constructor(
         val categories: List<ShortCategory> = emptyList(),
         val error: String?             = null,
         val isRefreshing: Boolean      = false,
-        val currentRequestId: String?  = null,   // ENGINE request_id of the latest shorts page load
     ) {
         val videos        get() = if (feedMode == FeedMode.FOR_YOU) forYouVideos else discVideos
         val isLoading     get() = if (feedMode == FeedMode.FOR_YOU) forYouLoading else discLoading
@@ -247,17 +246,16 @@ class ShortsViewModel @Inject constructor(
             }
             when (result) {
                 is com.axio.reelz.core.network.NetworkResult.Success -> {
-                    val page = result.data
-                    nextCursor = page.nextCursor; hasMore = page.hasMore
-                    val all  = if (append) _ui.value.forYouVideos + page.videos else page.videos
+                    val (videos, cursor, more) = result.data
+                    nextCursor = cursor; hasMore = more
+                    val all  = if (append) _ui.value.forYouVideos + videos else videos
                     val cats = buildCategories(all)
-                    if (append) _ui.update { it.copy(forYouVideos = all, forYouLoadingMore = false, categories = cats, currentRequestId = page.requestId) }
+                    if (append) _ui.update { it.copy(forYouVideos = all, forYouLoadingMore = false, categories = cats) }
                     else        _ui.update { it.copy(
-                        forYouVideos     = all,
-                        forYouLoading    = false,
-                        categories       = cats,
-                        currentRequestId = page.requestId,
-                        error            = if (all.isEmpty()) "No videos right now — pull to refresh" else null,
+                        forYouVideos  = all,
+                        forYouLoading = false,
+                        categories    = cats,
+                        error         = if (all.isEmpty()) "No videos right now — pull to refresh" else null,
                     )}
                 }
                 else -> {
@@ -646,10 +644,6 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     val saved   by vm.saved.collectAsState()
     val deadIds by vm.deadIds.collectAsState()
 
-    // ── Drawer state ─────────────────────────────────────────────────────────
-    var showDrawer    by remember { mutableStateOf(false) }
-    var shortsSettings by remember { mutableStateOf(com.axio.reelz.ui.screens.shorts.ShortsSettings()) }
-
     val httpFactory = remember {
         DefaultHttpDataSource.Factory()
             .setUserAgent("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
@@ -820,25 +814,6 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
                 CinematicSpinner(size = d.spinnerMd)
             }
         }
-
-        // ── Drawer toggle — top-left, always visible ─────────────────────────
-        com.axio.reelz.ui.screens.shorts.ShortsDrawerToggle(
-            onClick  = { showDrawer = !showDrawer },
-            modifier = Modifier.align(Alignment.TopStart).statusBarsPadding(),
-        )
-
-        // ── Quick-settings drawer ────────────────────────────────────────────
-        com.axio.reelz.ui.screens.shorts.ShortsDrawer(
-            visible          = showDrawer,
-            settings         = shortsSettings,
-            onDismiss        = { showDrawer = false },
-            onSettingsChange = { shortsSettings = it },
-            onFeedback       = { rid ->
-                showDrawer = false
-                nav.navigate(com.axio.reelz.app.Route.Feedback.build("shorts", requestId = rid))
-            },
-            currentRequestId = ui.currentRequestId,
-        )
     }
 }
 

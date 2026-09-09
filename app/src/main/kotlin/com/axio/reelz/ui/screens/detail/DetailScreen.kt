@@ -138,7 +138,6 @@ class DetailViewModel @Inject constructor(
         val alreadyDownloadedQualities: Set<String> = emptySet(),
         val isResolvingQualities: Boolean = false,
         val downloadEnqueued: Boolean = false,
-        val downloadRequestId: String? = null,   // ENGINE request_id — attached to download feedback
         /**
          * The current tier's max download height in px (e.g. 480 for free, 2160
          * for premium), read once when the sheet opens. <= 0 means "no cap" —
@@ -357,10 +356,9 @@ class DetailViewModel @Inject constructor(
             )
             when (dlResult) {
                 is com.axio.reelz.core.network.NetworkResult.Success -> {
-                    val (links, subtitles, dlRequestId) = dlResult.data
+                    val (links, subtitles) = dlResult.data
                     // Cache subtitles for silent download after enqueue completes
                     preResolvedSubtitles = subtitles
-                    _ui.update { it.copy(downloadRequestId = dlRequestId) }
                     if (!links.isNullOrEmpty()) {
                         // Convert DownloadLink → QualityTrack for the download picker UI.
                         // Render exactly what the backend sends — no filtering, no inference.
@@ -441,7 +439,6 @@ class DetailViewModel @Inject constructor(
                 linkType    = linkType,
                 streamUrl   = track.url,
                 headers     = headers,
-                requestId   = state.downloadRequestId,
             )
             // Schedule silent subtitle download — fires invisibly once the movie is DONE.
             // Only runs if backend returned subtitles with the download response.
@@ -532,9 +529,6 @@ fun DetailScreen(
                     vm.openDownloadSheet(id, mediaType, s, e, name)
                 },
                 downloadedKeys = ui.downloadedKeys,
-                onFeedback = {
-                    nav.navigate(com.axio.reelz.app.Route.Feedback.build("detail", tmdbId = id))
-                },
             )
         }
 
@@ -966,7 +960,6 @@ private fun DetailContent(
     onDownloadMovie: () -> Unit,
     onDownloadEpisode: (Int, Int, String) -> Unit,
     downloadedKeys: Set<String> = emptySet(),
-    onFeedback: () -> Unit = {},
 ) {
     val d = LocalDimensions.current
     val detail  = ui.detail!!
@@ -993,16 +986,6 @@ private fun DetailContent(
                     modifier = Modifier.statusBarsPadding().padding(d.spaceSm)
                         .clip(CircleShape).background(Color.Black.copy(.5f))
                 ) { Icon(IconArrowLeft, null, tint = White) }
-
-                // Feedback icon — top-right, same level as back button
-                com.axio.reelz.ui.components.FeedbackIconButton(
-                    onOpen   = onFeedback,
-                    withBg   = true,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .statusBarsPadding()
-                        .padding(d.spaceSm),
-                )
 
                 // Poster + meta
                 Column(Modifier.align(Alignment.BottomStart).padding(d.heroPadding - d.spaceXs)) {

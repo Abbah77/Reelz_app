@@ -84,9 +84,9 @@ class StreamRepository @Inject constructor(
                     )
                 }
                 // expires_at_ms is inside data — it is content metadata (link expiry)
-                val model = payload.toModel(requestId = envelope.requestId)
+                val model = payload.toModel()
                 streamCache[key] = StreamEntry(result = model)
-                Log.d(tag, "Stream resolved: ${model.streams.size} track(s) for $key, rid=${envelope.requestId}")
+                Log.d(tag, "Stream resolved: ${model.streams.size} track(s) for $key")
                 NetworkResult.Success(model)
             }
             is NetworkResult.Error -> NetworkResult.Error(
@@ -113,7 +113,6 @@ class StreamRepository @Inject constructor(
     private data class DownloadLinksEntry(
         val links: List<DownloadLink>,
         val expiresAtMs: Long,
-        val requestId: String? = null,
     ) {
         fun isAlive() = System.currentTimeMillis() < expiresAtMs
     }
@@ -130,14 +129,14 @@ class StreamRepository @Inject constructor(
         mediaType: MediaType,
         season: Int = 0,
         episode: Int = 0,
-    ): NetworkResult<Triple<List<DownloadLink>, List<com.axio.reelz.data.model.Subtitle>, String?>> = withContext(Dispatchers.IO) {
+    ): NetworkResult<Pair<List<DownloadLink>, List<com.axio.reelz.data.model.Subtitle>>> = withContext(Dispatchers.IO) {
         val key = cacheKey(id, mediaType, season, episode)
 
         // Return cached links if still alive (expires_at_ms not passed).
         downloadLinksCache[key]?.let { entry ->
             if (entry.isAlive()) {
                 Log.d(tag, "Download links cache HIT for $key")
-                return@withContext NetworkResult.Success(Triple(entry.links, emptyList<com.axio.reelz.data.model.Subtitle>(), entry.requestId), fromCache = true)
+                return@withContext NetworkResult.Success(Pair(entry.links, emptyList()), fromCache = true)
             }
             downloadLinksCache.remove(key)
         }
@@ -161,10 +160,10 @@ class StreamRepository @Inject constructor(
                 val subtitles = payload.subtitles?.map { it.toModel() } ?: emptyList()
                 // Cache using expires_at_ms from backend (same pattern as stream cache).
                 if (payload.expiresAtMs > 0) {
-                    downloadLinksCache[key] = DownloadLinksEntry(links, payload.expiresAtMs, requestId = envelope.requestId)
+                    downloadLinksCache[key] = DownloadLinksEntry(links, payload.expiresAtMs)
                 }
-                Log.d(tag, "Download links: ${links.size} link(s), ${subtitles.size} subtitle(s) for $key, rid=${envelope.requestId}")
-                NetworkResult.Success(Triple(links, subtitles, envelope.requestId))
+                Log.d(tag, "Download links: ${links.size} link(s), ${subtitles.size} subtitle(s) for $key")
+                NetworkResult.Success(Pair(links, subtitles))
             }
             is NetworkResult.Error -> NetworkResult.Error(
                 message        = result.message,

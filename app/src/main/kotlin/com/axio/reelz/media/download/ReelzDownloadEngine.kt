@@ -6,6 +6,11 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.util.Log
+import androidx.media3.common.MediaItem
+import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.ExportException
+import com.axio.reelz.core.database.CompletedMediaDao
+import com.axio.reelz.core.database.CompletedMediaRow
 import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.data.model.DownloadStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -14,7 +19,9 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import okhttp3.*
 import java.io.*
+import android.os.Looper
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -52,6 +59,7 @@ import javax.inject.Singleton
 class ReelzDownloadEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val downloadDao: DownloadDao,
+    private val completedMediaDao: CompletedMediaDao,
 ) {
     companion object {
         private const val TAG = "ReelzDownloadEngine"
@@ -71,6 +79,7 @@ class ReelzDownloadEngine @Inject constructor(
         private const val PROGRESS_FLUSH_BYTES = 1 * 1024 * 1024L // 1 MB
 
         private const val DOWNLOADS_DIR = "reelz_downloads"
+        private const val LIBRARY_DIR   = "reelz_library"
     }
 
     // ── OkHttp client ─────────────────────────────────────────────────────────
@@ -151,8 +160,53 @@ class ReelzDownloadEngine @Inject constructor(
     fun segmentsDir(downloadId: String): File =
         File(downloadDir(downloadId), "segments").also { it.mkdirs() }
 
+    // subtitlesDir now lives in the library — stable even after job folder is deleted.
+    // downloadId is still accepted for backward compat but the path is under the library.
+    // Call the overload with (mediaId, season) for new code.
     fun subtitlesDir(downloadId: String): File =
         File(downloadDir(downloadId), "subtitles").also { it.mkdirs() }
+
+    // ── Library directories (permanent, post-remux) ────────────────────────────
+
+    private fun libraryRoot(): File {
+        val ext = context.getExternalFilesDir(null)
+        val dir = if (ext != null) File(ext, LIBRARY_DIR) else File(context.filesDir, LIBRARY_DIR)
+        dir.mkdirs()
+        return dir
+    }
+
+    fun movieLibraryDir(mediaId: String): File =
+        File(File(libraryRoot(), "movies"), mediaId).also { it.mkdirs() }
+
+    fun tvLibraryDir(mediaId: String, season: Int): File =
+        File(File(File(libraryRoot(), "tv"), mediaId), "S${season.toString().padStart(2, '0')}").also { it.mkdirs() }
+
+    fun subtitleLibraryDir(mediaId: String, season: Int): File {
+        val base = if (season > 0) tvLibraryDir(mediaId, season) else movieLibraryDir(mediaId)
+        return File(base, "subtitles").also { it.mkdirs() }
+    }
+
+    /**
+     * Stable .mp4 filename: no collisions, works for both movies and TV.
+     *   Avatar_720p.mp4
+     *   Breaking_Bad_S01E01_1080p.mp4
+     */
+    fun mp4FileName(title: String, season: Int, episode: Int, quality: String): String {
+        val safe = title.replace(Regex("[^A-Za-z0-9_-]"), "_").take(40)
+        return if (season > 0)
+            "${safe}_S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}_${quality}.mp4"
+        else
+            "${safe}_${quality}.mp4"
+    }
+
+    fun finalMp4Path(
+        mediaId: String, title: String, season: Int, episode: Int,
+        quality: String, mediaType: String,
+    ): File {
+        val name = mp4FileName(title, season, episode, quality)
+        val dir  = if (season > 0) tvLibraryDir(mediaId, season) else movieLibraryDir(mediaId)
+        return File(dir, name)
+    }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -295,14 +349,34 @@ class ReelzDownloadEngine @Inject constructor(
             response.close()
         }
 
-        // Atomic rename
+        // Atomic rename tmp→job dir mp4
         if (!tmpFile.renameTo(outFile)) {
             tmpFile.copyTo(outFile, overwrite = true)
             tmpFile.delete()
         }
 
-        markDone(downloadId, outFile, totalSizeOverride = outFile.length())
-        Log.i(TAG, "[$downloadId] MP4 done: ${outFile.absolutePath} (${outFile.length()} bytes)")
+        // Move to permanent library and insert into completed_media
+        val row = downloadDao.get(downloadId)
+        if (row != null) {
+            val libraryFile = finalMp4Path(row.mediaId, row.title, row.season, row.episode, row.quality, row.mediaType)
+            try {
+                outFile.copyTo(libraryFile, overwrite = true)
+                outFile.delete()
+                // Clean up job folder
+                downloadDir(downloadId).deleteRecursively()
+                insertIntoLibrary(downloadId, libraryFile, row.mediaId, row.title,
+                    row.posterUrl, row.mediaType, row.season, row.episode, row.episodeName,
+                    row.quality, libraryFile.length())
+                Log.i(TAG, "[$downloadId] MP4 → library: ${libraryFile.absolutePath}")
+            } catch (e: Exception) {
+                // If library move fails, fall back to keeping the job-dir copy
+                Log.w(TAG, "[$downloadId] library move failed, keeping job copy: ${e.message}")
+                markDone(downloadId, outFile, totalSizeOverride = outFile.length())
+            }
+        } else {
+            markDone(downloadId, outFile, totalSizeOverride = outFile.length())
+        }
+        Log.i(TAG, "[$downloadId] MP4 done (${outFile.length()} bytes)")
     }
 
     private fun probeRangeSupport(url: String, headers: Map<String, String>): Boolean = try {
@@ -390,7 +464,7 @@ class ReelzDownloadEngine @Inject constructor(
         }
         if (missing > 0) error("$missing HLS segments failed to download")
 
-        // Write local playlist
+        // Write local playlist (needed as FFmpeg input)
         val localM3u8 = File(segDir, "index.m3u8")
         localM3u8.writeText(buildLocalPlaylist(playlistContent, segments, segDir))
 
@@ -399,16 +473,88 @@ class ReelzDownloadEngine @Inject constructor(
             ?.filter { it.name.endsWith(".ts") }
             ?.sumOf { it.length() } ?: 0L
 
+        // Mark REMUXING so the UI can show "Merging…" state
         downloadDao.markDoneHls(
-            id          = downloadId,
-            status      = DownloadStatus.DONE.name,
-            path        = localM3u8.absolutePath,
-            at          = System.currentTimeMillis(),
-            sizeBytes   = totalSizeBytes,
-            done        = total,
-            total       = total,
+            id        = downloadId,
+            status    = DownloadStatus.REMUXING.name,
+            path      = localM3u8.absolutePath,
+            at        = System.currentTimeMillis(),
+            sizeBytes = totalSizeBytes,
+            done      = total,
+            total     = total,
         )
-        Log.i(TAG, "[$downloadId] HLS done: ${localM3u8.absolutePath} ($totalSizeBytes bytes, $total segments)")
+        Log.i(TAG, "[$downloadId] HLS segments done ($total segments, $totalSizeBytes bytes) — remuxing to MP4")
+
+        // Remux .ts segments → .mp4 via media3 Transformer (stream copy, no re-encoding)
+        val row = downloadDao.get(downloadId)
+        if (row != null) {
+            val tmpMp4 = File(downloadDir(downloadId), "output.mp4")
+            val success = remuxHlsToMp4(localM3u8, tmpMp4)
+            if (success && tmpMp4.exists() && tmpMp4.length() > 1024) {
+                val libraryFile = finalMp4Path(row.mediaId, row.title, row.season, row.episode, row.quality, row.mediaType)
+                try {
+                    tmpMp4.copyTo(libraryFile, overwrite = true)
+                    // Clean up: delete segments dir and job folder
+                    downloadDir(downloadId).deleteRecursively()
+                    insertIntoLibrary(downloadId, libraryFile, row.mediaId, row.title,
+                        row.posterUrl, row.mediaType, row.season, row.episode, row.episodeName,
+                        row.quality, libraryFile.length())
+                    Log.i(TAG, "[$downloadId] HLS→MP4 done → ${libraryFile.absolutePath} (${libraryFile.length()} bytes)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "[$downloadId] library move failed after remux: ${e.message}")
+                    // Fall back: keep the m3u8 path as DONE so playback still works
+                    downloadDao.markDoneHls(downloadId, DownloadStatus.DONE.name,
+                        localM3u8.absolutePath, System.currentTimeMillis(), totalSizeBytes, total, total)
+                }
+            } else {
+                // Remux failed — fall back to HLS-only mode so the user can still play
+                Log.w(TAG, "[$downloadId] remux failed — keeping HLS segments for playback")
+                downloadDao.markDoneHls(downloadId, DownloadStatus.DONE.name,
+                    localM3u8.absolutePath, System.currentTimeMillis(), totalSizeBytes, total, total)
+            }
+        } else {
+            downloadDao.markDoneHls(downloadId, DownloadStatus.DONE.name,
+                localM3u8.absolutePath, System.currentTimeMillis(), totalSizeBytes, total, total)
+        }
+    }
+
+    /**
+     * Remux the local HLS playlist → a single .mp4 using media3 Transformer (stream copy).
+     * Runs synchronously on the calling IO thread using a CountDownLatch.
+     * Returns true on success, false on any failure.
+     */
+    private fun remuxHlsToMp4(m3u8: File, outputMp4: File): Boolean {
+        outputMp4.delete() // clear any stale output
+        val latch   = CountDownLatch(1)
+        var success = false
+
+        // Transformer must be created and started on the main thread
+        val handler = android.os.Handler(Looper.getMainLooper())
+        handler.post {
+            try {
+                val mediaItem = MediaItem.fromUri(android.net.Uri.fromFile(m3u8))
+                val transformer = Transformer.Builder(context)
+                    .addListener(object : Transformer.Listener {
+                        override fun onCompleted(composition: androidx.media3.transformer.Composition, result: androidx.media3.transformer.ExportResult) {
+                            success = true
+                            latch.countDown()
+                        }
+                        override fun onError(composition: androidx.media3.transformer.Composition, result: androidx.media3.transformer.ExportResult, exception: ExportException) {
+                            Log.e(TAG, "Remux failed: ${exception.message}", exception)
+                            latch.countDown()
+                        }
+                    })
+                    .build()
+                transformer.start(mediaItem, outputMp4.absolutePath)
+            } catch (e: Exception) {
+                Log.e(TAG, "Remux start failed: ${e.message}", e)
+                latch.countDown()
+            }
+        }
+
+        // Wait up to 30 minutes (large files on slow devices)
+        latch.await(30, TimeUnit.MINUTES)
+        return success
     }
 
     private fun estimateSegmentSize(segDir: File): Long =
@@ -585,7 +731,51 @@ class ReelzDownloadEngine @Inject constructor(
     }
 
     /**
-     * Mark an MP4 download done.
+     * Insert a completed file into the permanent library (completed_media) and
+     * update the downloads row so any observers see DONE with the library path.
+     */
+    private suspend fun insertIntoLibrary(
+        downloadId: String,
+        libraryFile: File,
+        mediaId: String,
+        title: String,
+        posterUrl: String?,
+        mediaType: String,
+        season: Int,
+        episode: Int,
+        episodeName: String,
+        quality: String,
+        sizeBytes: Long,
+    ) {
+        val now = System.currentTimeMillis()
+        completedMediaDao.upsert(
+            CompletedMediaRow(
+                id          = downloadId,
+                mediaId     = mediaId,
+                title       = title,
+                posterUrl   = posterUrl,
+                mediaType   = mediaType,
+                season      = season,
+                episode     = episode,
+                episodeName = episodeName,
+                quality     = quality,
+                filePath    = libraryFile.absolutePath,
+                sizeBytes   = sizeBytes,
+                completedAt = now,
+            )
+        )
+        // Update the job row so observers (FilesScreen) see DONE + library path
+        downloadDao.markDoneMp4(
+            id        = downloadId,
+            status    = DownloadStatus.DONE.name,
+            path      = libraryFile.absolutePath,
+            at        = now,
+            sizeBytes = sizeBytes,
+        )
+    }
+
+    /**
+     * Mark an MP4 download done — fallback when library move fails.
      * [totalSizeOverride] lets us pass the actual file size even when
      * Content-Length was missing during download.
      */
@@ -608,12 +798,12 @@ class ReelzDownloadEngine @Inject constructor(
         try {
             val row = downloadDao.get(downloadId) ?: return
             downloadDao.updateProgress(
-                id       = downloadId,
-                status   = status.name,
-                bytes    = row.downloadedBytes,
-                done     = row.segmentsDone,
-                total    = row.totalSegments,
-                playlist = row.localPlaylistPath,
+                id        = downloadId,
+                status    = status.name,
+                bytes     = row.downloadedBytes,
+                done      = row.segmentsDone,
+                total     = row.totalSegments,
+                playlist  = row.localPlaylistPath,
                 sizeBytes = row.sizeBytes,
             )
         } catch (e: Exception) {
@@ -621,7 +811,11 @@ class ReelzDownloadEngine @Inject constructor(
         }
     }
 
-    /** Returns local path for offline ExoPlayer playback. */
+    /**
+     * Returns local path for offline ExoPlayer playback.
+     * The downloads row filePath already points to the library .mp4 after
+     * insertIntoLibrary() — fallback job-dir helpers handle legacy HLS content only.
+     */
     fun getLocalPlaybackPath(downloadId: String, type: String): String? =
         when (type.lowercase()) {
             "hls" -> File(segmentsDir(downloadId), "index.m3u8").takeIf { it.exists() }?.absolutePath

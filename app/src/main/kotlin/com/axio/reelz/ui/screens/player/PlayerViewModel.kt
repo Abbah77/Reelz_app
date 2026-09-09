@@ -108,7 +108,6 @@ data class PlayerUiState(
     val subtitles: List<Subtitle>              = emptyList(),
     val selectedSubtitle: String               = "Off",
     val preRollVastUrl: String?                = null,
-    val streamRequestId: String?               = null,   // ENGINE request_id — attached to player feedback
     val isPreRollPlaying: Boolean              = false,
     /**
      * True when the player is buffering WHILE already playing (network stall).
@@ -394,7 +393,7 @@ class PlayerViewModel @Inject constructor(
                 val qualities = stream.streams.map { t ->
                     QualityTrack(label = t.name, url = t.url)
                 }.ifEmpty { listOf(QualityTrack("Auto", "")) }
-                _ui.update { it.copy(availableQualities = qualities, streamRequestId = stream.requestId) }
+                _ui.update { it.copy(availableQualities = qualities) }
                 // Subtitles from primary stream track
                 val subs = stream.primaryStream?.subtitles ?: emptyList()
                 if (subs.isNotEmpty()) loadStreamSubtitles(subs)

@@ -279,19 +279,6 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = hiltViewModel()) 
                 subtitle = "Version info & credits",
                 onClick = { nav.navigate("settings_about") },
             )
-
-            Spacer(Modifier.height(d.spaceXs))
-
-            // ── Feedback ───────────────────────────────────────────────
-            SettingsSectionLabel("Feedback")
-
-            SettingsCard(
-                icon = com.axio.reelz.ui.components.FeedbackFlagIcon,
-                iconTint = com.axio.reelz.ui.theme.Error,
-                title = "Send Feedback",
-                subtitle = "Report bugs, request features, or share anything",
-                onClick = { nav.navigate(com.axio.reelz.app.Route.Feedback.build("settings")) },
-            )
         }
     }
 }

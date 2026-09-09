@@ -331,7 +331,6 @@ data class DownloadRow(
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
     val localPlaylistPath: String = "",
-    @androidx.room.ColumnInfo(name = "request_id", defaultValue = "") val requestId: String? = null,
 )
 
 @Dao
@@ -484,6 +483,75 @@ interface DownloadSubtitleDao {
     suspend fun deleteForContent(mediaId: String, season: Int, episode: Int)
 }
 
+// ── Completed media (permanent library — post-remux MP4 files) ────────────────
+@Entity(
+    tableName = "completed_media",
+    indices = [
+        Index(value = ["mediaId", "season", "episode", "quality"], unique = true),
+    ],
+)
+data class CompletedMediaRow(
+    @PrimaryKey val id: String,
+    val mediaId: String,
+    val title: String,
+    val posterUrl: String?,
+    val mediaType: String,
+    val season: Int = 0,
+    val episode: Int = 0,
+    val episodeName: String = "",
+    val quality: String = "720p",
+    val filePath: String = "",      // always an .mp4 path in reelz_library/
+    val sizeBytes: Long = 0,
+    val completedAt: Long = System.currentTimeMillis(),
+    val durationMs: Long = 0,
+    val watchProgressMs: Long = 0,
+    val lastPlayedAt: Long = 0,
+)
+
+@Dao
+interface CompletedMediaDao {
+    @Query("SELECT * FROM completed_media ORDER BY completedAt DESC")
+    fun observeAll(): Flow<List<CompletedMediaRow>>
+
+    @Query("SELECT * FROM completed_media WHERE id = :id LIMIT 1")
+    suspend fun get(id: String): CompletedMediaRow?
+
+    @Query("""
+        SELECT * FROM completed_media
+        WHERE mediaId = :mediaId AND season = :season AND episode = :episode
+    """)
+    suspend fun getForContent(mediaId: String, season: Int, episode: Int): List<CompletedMediaRow>
+
+    @Query("""
+        SELECT * FROM completed_media
+        WHERE mediaId = :mediaId AND season = :season AND episode = :episode AND quality = :quality
+        LIMIT 1
+    """)
+    suspend fun getExact(mediaId: String, season: Int, episode: Int, quality: String): CompletedMediaRow?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(row: CompletedMediaRow): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(row: CompletedMediaRow)
+
+    @Query("""
+        UPDATE completed_media
+        SET watchProgressMs = :pos, durationMs = :dur, lastPlayedAt = :at
+        WHERE mediaId = :mediaId AND season = :season AND episode = :episode
+    """)
+    suspend fun updateWatchProgress(
+        mediaId: String, season: Int, episode: Int,
+        pos: Long, dur: Long, at: Long,
+    )
+
+    @Query("DELETE FROM completed_media WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM completed_media WHERE mediaId = :mediaId AND season = :season AND episode = :episode AND quality = :quality")
+    suspend fun deleteExact(mediaId: String, season: Int, episode: Int, quality: String)
+}
+
 // ── Transfer types ─────────────────────────────────────────────────────────────
 @Entity(tableName = "transfer_history")
 data class TransferRecord(
@@ -494,6 +562,7 @@ data class TransferRecord(
     val peerName: String,
     val status: String,
     val createdAt: Long = System.currentTimeMillis(),
+    @androidx.room.ColumnInfo(defaultValue = "") val mediaMetadataJson: String = "",
 )
 
 @Dao
@@ -642,10 +711,53 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
-// Migration 7→8: add request_id column to downloads for feedback traceability
+// Migration 7→8: introduce completed_media table and mediaMetadataJson on transfer_history
 val MIGRATION_7_8 = object : Migration(7, 8) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("ALTER TABLE downloads ADD COLUMN request_id TEXT DEFAULT NULL")
+        // 1. Create the completed_media table
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS completed_media (
+                id               TEXT    NOT NULL PRIMARY KEY,
+                mediaId          TEXT    NOT NULL,
+                title            TEXT    NOT NULL,
+                posterUrl        TEXT,
+                mediaType        TEXT    NOT NULL,
+                season           INTEGER NOT NULL DEFAULT 0,
+                episode          INTEGER NOT NULL DEFAULT 0,
+                episodeName      TEXT    NOT NULL DEFAULT '',
+                quality          TEXT    NOT NULL DEFAULT '720p',
+                filePath         TEXT    NOT NULL DEFAULT '',
+                sizeBytes        INTEGER NOT NULL DEFAULT 0,
+                completedAt      INTEGER NOT NULL DEFAULT 0,
+                durationMs       INTEGER NOT NULL DEFAULT 0,
+                watchProgressMs  INTEGER NOT NULL DEFAULT 0,
+                lastPlayedAt     INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+
+        // 2. Unique index that enforces one row per (mediaId, season, episode, quality)
+        db.execSQL("""
+            CREATE UNIQUE INDEX IF NOT EXISTS index_completed_media_unique
+            ON completed_media (mediaId, season, episode, quality)
+        """.trimIndent())
+
+        // 3. Migrate all COMPLETED HLS/MP4 rows from downloads into completed_media.
+        //    HLS rows whose filePath ends in .m3u8 are not migrated because we can't
+        //    retroactively remux them here; they stay playable via the old path until
+        //    the user re-downloads. MP4 rows (filePath ends in .mp4) migrate cleanly.
+        db.execSQL("""
+            INSERT OR IGNORE INTO completed_media
+                (id, mediaId, title, posterUrl, mediaType, season, episode, episodeName,
+                 quality, filePath, sizeBytes, completedAt, durationMs, watchProgressMs, lastPlayedAt)
+            SELECT
+                id, mediaId, title, posterUrl, mediaType, season, episode, episodeName,
+                quality, filePath, sizeBytes, completedAt, durationMs, watchProgressMs, lastPlayedAt
+            FROM downloads
+            WHERE status = 'DONE' AND filePath LIKE '%.mp4'
+        """.trimIndent())
+
+        // 4. Add mediaMetadataJson column to transfer_history
+        db.execSQL("ALTER TABLE transfer_history ADD COLUMN mediaMetadataJson TEXT NOT NULL DEFAULT ''")
     }
 }
 
@@ -661,6 +773,7 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         AppConfigCacheRow::class,
         DownloadRow::class,
         DownloadSubtitleRow::class,
+        CompletedMediaRow::class,
         TransferRecord::class,
     ],
     version = 8,
@@ -677,6 +790,7 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun appConfigCacheDao(): AppConfigCacheDao
     abstract fun downloadDao(): DownloadDao
     abstract fun downloadSubtitleDao(): DownloadSubtitleDao
+    abstract fun completedMediaDao(): CompletedMediaDao
     abstract fun watchHistoryDao(): WatchHistoryDao
     abstract fun savedVideoDao(): SavedVideoDao
     abstract fun transferDao(): TransferDao

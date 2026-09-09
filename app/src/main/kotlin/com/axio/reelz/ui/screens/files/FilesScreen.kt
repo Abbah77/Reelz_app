@@ -161,6 +161,7 @@ class DownloadsViewModel @Inject constructor(
                 it.status == DownloadStatus.DOWNLOADING
                     || it.status == DownloadStatus.QUEUED
                     || it.status == DownloadStatus.PAUSED
+                    || it.status == DownloadStatus.REMUXING
                     || it.status == DownloadStatus.ERROR
             }
         }
@@ -716,6 +717,7 @@ private fun ActiveQueueCard(
     val isDownloading = item.status == DownloadStatus.DOWNLOADING
     val isPaused      = item.status == DownloadStatus.PAUSED
     val isQueued      = item.status == DownloadStatus.QUEUED
+    val isRemuxing    = item.status == DownloadStatus.REMUXING
     val isError       = item.status == DownloadStatus.ERROR
 
     // Compute progress — prefer segment-based, fall back to byte-based
@@ -728,7 +730,7 @@ private fun ActiveQueueCard(
             .width(cardW)
             .clip(RoundedCornerShape(d.radiusMd))
             .background(BgCard)
-            .border(1.dp, if (isDownloading) Brand.copy(.22f) else GlassBorderMd, RoundedCornerShape(d.radiusMd))
+            .border(1.dp, if (isDownloading || isRemuxing) Brand.copy(.22f) else GlassBorderMd, RoundedCornerShape(d.radiusMd))
             .padding(d.spaceSm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
@@ -768,14 +770,15 @@ private fun ActiveQueueCard(
             ) {
                 Box(
                     Modifier
-                        .fillMaxWidth(animPct)
+                        .fillMaxWidth(if (isRemuxing) 1f else animPct)
                         .fillMaxHeight()
                         .background(
                             brush = when {
-                                isError  -> SolidColor(Error)
-                                isPaused -> SolidColor(White40)
-                                isQueued -> SolidColor(White20)
-                                else     -> Brush.horizontalGradient(listOf(Brand, Brand2))
+                                isError    -> SolidColor(Error)
+                                isPaused   -> SolidColor(White40)
+                                isQueued   -> SolidColor(White20)
+                                isRemuxing -> Brush.horizontalGradient(listOf(Brand2, Brand, Brand2))
+                                else       -> Brush.horizontalGradient(listOf(Brand, Brand2))
                             }
                         )
                 )
@@ -788,12 +791,13 @@ private fun ActiveQueueCard(
             ) {
                 Text(
                     when {
-                        isQueued -> "Waiting…"
-                        isError  -> "Failed"
-                        isPaused -> "${(pct * 100).toInt()}% · Paused"
-                        else     -> "${(pct * 100).toInt()}%"
+                        isRemuxing -> "Merging…"
+                        isQueued   -> "Waiting…"
+                        isError    -> "Failed"
+                        isPaused   -> "${(pct * 100).toInt()}% · Paused"
+                        else       -> "${(pct * 100).toInt()}%"
                     },
-                    color    = if (isDownloading) Success.copy(.85f) else White40,
+                    color    = if (isDownloading || isRemuxing) Success.copy(.85f) else White40,
                     fontSize = (d.textXxs.value + 0.5f).sp,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(d.spaceXs)) {
@@ -802,7 +806,10 @@ private fun ActiveQueueCard(
                             .size(d.iconMd + d.spaceXxs)
                             .clip(CircleShape)
                             .background(GlassMd)
-                            .clickable(onClick = if (isDownloading) onPause else onResume),
+                            .clickable(
+                                enabled = !isRemuxing,
+                                onClick = if (isDownloading) onPause else onResume
+                            ),
                         Alignment.Center,
                     ) {
                         Icon(
@@ -1563,6 +1570,7 @@ fun StatusPill(status: DownloadStatus) {
     val (color, label) = when (status) {
         DownloadStatus.DONE        -> Success to "Ready"
         DownloadStatus.DOWNLOADING -> Brand to "Downloading"
+        DownloadStatus.REMUXING    -> Brand to "Merging…"
         DownloadStatus.QUEUED      -> White60 to "Queued"
         DownloadStatus.PAUSED      -> White40 to "Paused"
         DownloadStatus.ERROR       -> Error to "Failed"
@@ -1663,6 +1671,8 @@ private fun playDownload(ctx: Context, dl: DownloadItem) {
     }
     when {
         dl.status == DownloadStatus.DONE && dl.filePath.isNotBlank() -> {
+            // All post-upgrade files are .mp4 in the library.
+            // Legacy HLS content (pre-migration .m3u8) still works via the isHls flag.
             val isHls = dl.filePath.endsWith(".m3u8", ignoreCase = true)
             base.putExtra("streamUrl",   "file://${dl.filePath}")
             base.putExtra("streamIsHls", isHls)
