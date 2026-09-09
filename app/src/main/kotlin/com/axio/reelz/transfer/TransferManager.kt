@@ -33,6 +33,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.os.Build
+import android.util.Log
 import com.axio.reelz.core.database.CompletedMediaDao
 import com.axio.reelz.core.database.CompletedMediaRow
 import com.axio.reelz.core.database.TransferRecord
@@ -78,6 +79,9 @@ class TransferManager @Inject constructor(
     private val repo:              TransferRepository,
     private val completedMediaDao: CompletedMediaDao,
 ) {
+    companion object {
+        private const val TAG = "TransferManager"
+    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     val engineState: StateFlow<EngineState> = engine.state
@@ -426,7 +430,7 @@ class TransferManager @Inject constructor(
                 mediaType   = mediaType,
                 season      = season,
                 episode     = episode,
-                episodeName = meta.episodeName,
+                episodeName = "",
                 quality     = quality,
                 filePath    = finalPath,
                 sizeBytes   = if (libraryFile.exists()) libraryFile.length() else file.length(),
