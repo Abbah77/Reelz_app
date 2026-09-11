@@ -378,169 +378,239 @@ class ReelzDownloadEngine @Inject constructor(
 
     // ── Remux: .ts segments → .mp4 using MediaMuxer ──────────────────────────
     //
-    // Strategy: use Android's MediaExtractor + MediaMuxer to demux the MPEG-TS
-    // container and remux into MP4. This is a pure Java/NDK path — no FFmpeg
-    // binary needed. Works on API 26+ (minSdk=26). Fast: typically <5s for a
-    // 45-minute episode on any modern device.
-    //
-    // We process segments sequentially, accumulating timestamps so each
-    // segment picks up where the previous one left off (no timestamp resets).
+    // Rules:
+    //  1. One MediaExtractor per segment — track indices are per-segment local.
+    //     We remap by MIME type each time (video/* → videoMuxerTrack, audio/* → audioMuxerTrack).
+    //  2. Tracks are added to the muxer from segment 0 only, then muxer.start().
+    //  3. NO double-selectTrack. Select once, read all samples, release extractor.
+    //  4. Timestamp continuity: HLS .ts segments already carry continuous 90kHz PCR
+    //     timestamps. We keep them as-is for segment 0, then for each subsequent
+    //     segment we subtract the segment's first PTS and add (lastPts + frameDuration)
+    //     so the timeline is gapless. This avoids negative PTS which breaks ExoPlayer.
+    //  5. MediaMuxer requires writeSampleData on the main/worker thread but NOT
+    //     under coroutine IO — called from a plain blocking function, so fine.
 
     private fun remuxTsToMp4(tsFiles: List<File>, outFile: File) {
         val tmpOut = File(outFile.parent, "movie.mp4.tmp")
-        try {
-            val muxer = android.media.MediaMuxer(
-                tmpOut.absolutePath,
-                android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4,
-            )
+        tmpOut.delete()
 
-            // Track mapping: extractor track index → muxer track index
-            var audioTrackMuxer  = -1
-            var videoTrackMuxer  = -1
-            var audioTrackExtIdx = -1
-            var videoTrackExtIdx = -1
-            var muxerStarted     = false
+        val muxer = android.media.MediaMuxer(
+            tmpOut.absolutePath,
+            android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4,
+        )
 
-            var videoOffsetUs = 0L
-            var audioOffsetUs = 0L
-            var lastVideoUs   = 0L
-            var lastAudioUs   = 0L
+        var videoMuxerTrack = -1
+        var audioMuxerTrack = -1
+        var muxerStarted    = false
 
-            val bufferInfo = android.media.MediaCodec.BufferInfo()
-            val bufferSize = 2 * 1024 * 1024  // 2 MB read buffer
+        // Running last-seen PTS per track for timestamp stitching
+        var lastVideoPts = -1L
+        var lastAudioPts = -1L
 
-            for ((segIdx, tsFile) in tsFiles.withIndex()) {
-                if (!tsFile.exists() || tsFile.length() == 0L) continue
+        // Estimated frame duration (filled once we see ≥2 video frames in seg 0)
+        var videoPtsDelta = 33_333L   // default ~30fps in µs
+        var audioPtsDelta = 21_333L   // default ~AAC 1024 samples @ 48kHz in µs
 
-                val extractor = android.media.MediaExtractor()
-                try {
-                    extractor.setDataSource(tsFile.absolutePath)
+        val bufferInfo = android.media.MediaCodec.BufferInfo()
+        val readBuf    = java.nio.ByteBuffer.allocate(2 * 1024 * 1024)
 
-                    // On first segment: discover tracks and add them to muxer
-                    if (!muxerStarted) {
-                        for (i in 0 until extractor.trackCount) {
-                            val fmt = extractor.getTrackFormat(i)
-                            val mime = fmt.getString(android.media.MediaFormat.KEY_MIME) ?: continue
-                            when {
-                                mime.startsWith("video/") && videoTrackMuxer < 0 -> {
-                                    videoTrackMuxer  = muxer.addTrack(fmt)
-                                    videoTrackExtIdx = i
-                                }
-                                mime.startsWith("audio/") && audioTrackMuxer < 0 -> {
-                                    audioTrackMuxer  = muxer.addTrack(fmt)
-                                    audioTrackExtIdx = i
-                                }
+        for ((segIdx, tsFile) in tsFiles.withIndex()) {
+            if (!tsFile.exists() || tsFile.length() == 0L) {
+                Log.w(TAG, "Segment $segIdx missing or empty — skipping")
+                continue
+            }
+
+            val extractor = android.media.MediaExtractor()
+            try {
+                extractor.setDataSource(tsFile.absolutePath)
+
+                // ── Build per-segment track map: mimePrefix → (extIdx, muxerTrack) ──
+                data class TrackEntry(val extIdx: Int, val muxerTrack: Int)
+                var videoEntry: TrackEntry? = null
+                var audioEntry: TrackEntry? = null
+
+                for (i in 0 until extractor.trackCount) {
+                    val fmt  = extractor.getTrackFormat(i)
+                    val mime = fmt.getString(android.media.MediaFormat.KEY_MIME) ?: continue
+                    when {
+                        mime.startsWith("video/") && videoEntry == null -> {
+                            if (!muxerStarted) {
+                                videoMuxerTrack = muxer.addTrack(fmt)
                             }
+                            if (videoMuxerTrack >= 0) videoEntry = TrackEntry(i, videoMuxerTrack)
                         }
-                        if (videoTrackMuxer < 0 && audioTrackMuxer < 0) {
-                            Log.w(TAG, "Segment $segIdx: no A/V tracks found — skipping")
-                            continue
-                        }
-                        muxer.start()
-                        muxerStarted = true
-                    }
-
-                    // Select tracks present in this segment
-                    for (i in 0 until extractor.trackCount) {
-                        val fmt  = extractor.getTrackFormat(i)
-                        val mime = fmt.getString(android.media.MediaFormat.KEY_MIME) ?: continue
-                        if (mime.startsWith("video/") || mime.startsWith("audio/")) {
-                            extractor.selectTrack(i)
+                        mime.startsWith("audio/") && audioEntry == null -> {
+                            if (!muxerStarted) {
+                                audioMuxerTrack = muxer.addTrack(fmt)
+                            }
+                            if (audioMuxerTrack >= 0) audioEntry = TrackEntry(i, audioMuxerTrack)
                         }
                     }
-
-                    // Compute timestamp offsets for this segment
-                    // On segment > 0 we offset so timestamps continue from where last seg ended.
-                    var segVideoBase = Long.MAX_VALUE
-                    var segAudioBase = Long.MAX_VALUE
-
-                    if (segIdx > 0) {
-                        // Peek first timestamps to compute base
-                        for (i in 0 until extractor.trackCount) {
-                            val fmt  = extractor.getTrackFormat(i)
-                            val mime = fmt.getString(android.media.MediaFormat.KEY_MIME) ?: continue
-                            extractor.selectTrack(i)
-                            val pts = extractor.sampleTime
-                            if (pts >= 0) {
-                                when {
-                                    mime.startsWith("video/") -> segVideoBase = minOf(segVideoBase, pts)
-                                    mime.startsWith("audio/") -> segAudioBase = minOf(segAudioBase, pts)
-                                }
-                            }
-                            extractor.unselectTrack(i)
-                        }
-                        // Re-select after peeking
-                        for (i in 0 until extractor.trackCount) {
-                            val fmt  = extractor.getTrackFormat(i)
-                            val mime = fmt.getString(android.media.MediaFormat.KEY_MIME) ?: continue
-                            if (mime.startsWith("video/") || mime.startsWith("audio/")) {
-                                extractor.selectTrack(i)
-                            }
-                        }
-                        if (segVideoBase != Long.MAX_VALUE) videoOffsetUs = lastVideoUs - segVideoBase + 1
-                        if (segAudioBase != Long.MAX_VALUE) audioOffsetUs = lastAudioUs - segAudioBase + 1
-                    }
-
-                    // Mux all samples from this segment
-                    val buf = java.nio.ByteBuffer.allocate(bufferSize)
-                    while (true) {
-                        buf.clear()
-                        val sampleSize = extractor.readSampleData(buf, 0)
-                        if (sampleSize < 0) break
-
-                        val trackIdx = extractor.sampleTrackIndex
-                        val pts      = extractor.sampleTime
-                        val flags    = extractor.sampleFlags
-
-                        bufferInfo.offset        = 0
-                        bufferInfo.size          = sampleSize
-                        bufferInfo.flags         = flags
-                        bufferInfo.presentationTimeUs = when (trackIdx) {
-                            videoTrackExtIdx -> {
-                                val adjusted = pts + videoOffsetUs
-                                if (adjusted > lastVideoUs) lastVideoUs = adjusted
-                                adjusted
-                            }
-                            audioTrackExtIdx -> {
-                                val adjusted = pts + audioOffsetUs
-                                if (adjusted > lastAudioUs) lastAudioUs = adjusted
-                                adjusted
-                            }
-                            else -> pts
-                        }
-
-                        val muxTrack = when (trackIdx) {
-                            videoTrackExtIdx -> videoTrackMuxer
-                            audioTrackExtIdx -> audioTrackMuxer
-                            else             -> -1
-                        }
-
-                        if (muxTrack >= 0) {
-                            try { muxer.writeSampleData(muxTrack, buf, bufferInfo) }
-                            catch (e: Exception) { Log.w(TAG, "writeSampleData: ${e.message}") }
-                        }
-
-                        extractor.advance()
-                    }
-                } finally {
-                    extractor.release()
                 }
-            }
 
-            if (muxerStarted) {
-                muxer.stop()
-                muxer.release()
-            }
+                // Start muxer after adding all tracks from seg 0
+                if (!muxerStarted) {
+                    if (videoMuxerTrack < 0 && audioMuxerTrack < 0) {
+                        Log.w(TAG, "Segment 0: no A/V tracks — aborting remux")
+                        muxer.release(); tmpOut.delete(); return
+                    }
+                    muxer.start()
+                    muxerStarted = true
+                }
 
-            // Atomic rename
-            if (!tmpOut.renameTo(outFile)) {
-                tmpOut.copyTo(outFile, overwrite = true)
-                tmpOut.delete()
+                // Select only the tracks we care about
+                videoEntry?.let { extractor.selectTrack(it.extIdx) }
+                audioEntry?.let { extractor.selectTrack(it.extIdx) }
+
+                if (videoEntry == null && audioEntry == null) {
+                    Log.w(TAG, "Segment $segIdx: no matching tracks — skipping")
+                    continue
+                }
+
+                // ── Compute segment base PTS (first PTS seen in this segment) ──
+                // HLS segments carry absolute PCR timestamps. To make the output
+                // timeline start at 0 (for seg 0) and be gapless (for seg N>0)
+                // we shift all PTS by: offset = targetStart - segBasePts
+                // where targetStart = lastKnownPts + delta
+
+                var segVideoBase = Long.MAX_VALUE
+                var segAudioBase = Long.MAX_VALUE
+
+                // Peek first PTS without consuming samples (extractor is at start)
+                if (videoEntry != null || audioEntry != null) {
+                    // Use seekTo(0) to ensure we're at start
+                    extractor.seekTo(0, android.media.MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+
+                    // Read up to 8 samples just to find first PTS per track
+                    var peeked = 0
+                    while (peeked < 16 && (segVideoBase == Long.MAX_VALUE || segAudioBase == Long.MAX_VALUE)) {
+                        val tidx = extractor.sampleTrackIndex
+                        val pts  = extractor.sampleTime
+                        if (pts >= 0) {
+                            when {
+                                videoEntry != null && tidx == videoEntry.extIdx && segVideoBase == Long.MAX_VALUE ->
+                                    segVideoBase = pts
+                                audioEntry != null && tidx == audioEntry.extIdx && segAudioBase == Long.MAX_VALUE ->
+                                    segAudioBase = pts
+                            }
+                        }
+                        if (!extractor.advance()) break
+                        peeked++
+                    }
+                    // Rewind to start
+                    extractor.seekTo(0, android.media.MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                }
+
+                val segBase = when {
+                    segVideoBase != Long.MAX_VALUE -> segVideoBase
+                    segAudioBase != Long.MAX_VALUE -> segAudioBase
+                    else                           -> 0L
+                }
+
+                // For seg 0: target = 0 (start timeline at 0)
+                // For seg N: target = lastPts + estimated frame duration
+                val videoTarget = when {
+                    segIdx == 0 -> 0L
+                    lastVideoPts >= 0 -> lastVideoPts + videoPtsDelta
+                    lastAudioPts >= 0 -> lastAudioPts + audioPtsDelta
+                    else -> 0L
+                }
+                val audioTarget = when {
+                    segIdx == 0 -> 0L
+                    lastAudioPts >= 0 -> lastAudioPts + audioPtsDelta
+                    lastVideoPts >= 0 -> lastVideoPts + videoPtsDelta
+                    else -> 0L
+                }
+
+                val videoSegBase = if (segVideoBase != Long.MAX_VALUE) segVideoBase else segBase
+                val audioSegBase = if (segAudioBase != Long.MAX_VALUE) segAudioBase else segBase
+
+                val videoOffset = videoTarget - videoSegBase
+                val audioOffset = audioTarget - audioSegBase
+
+                // Track delta calibration for seg 0
+                var prevVideoPts = -1L
+                var prevAudioPts = -1L
+
+                // ── Read and mux all samples ──────────────────────────────────
+                while (true) {
+                    readBuf.clear()
+                    val sampleSize = extractor.readSampleData(readBuf, 0)
+                    if (sampleSize < 0) break
+
+                    val extTrackIdx = extractor.sampleTrackIndex
+                    val rawPts      = extractor.sampleTime
+                    val flags       = extractor.sampleFlags
+
+                    val (muxTrack, adjustedPts) = when {
+                        videoEntry != null && extTrackIdx == videoEntry.extIdx -> {
+                            val pts = (rawPts + videoOffset).coerceAtLeast(
+                                if (lastVideoPts >= 0) lastVideoPts + 1 else 0L
+                            )
+                            // Calibrate delta from first two frames of seg 0
+                            if (segIdx == 0 && prevVideoPts >= 0 && pts > prevVideoPts) {
+                                val d = pts - prevVideoPts
+                                if (d in 8_000..100_000) videoPtsDelta = d
+                            }
+                            prevVideoPts = pts
+                            lastVideoPts = pts
+                            Pair(videoEntry.muxerTrack, pts)
+                        }
+                        audioEntry != null && extTrackIdx == audioEntry.extIdx -> {
+                            val pts = (rawPts + audioOffset).coerceAtLeast(
+                                if (lastAudioPts >= 0) lastAudioPts + 1 else 0L
+                            )
+                            if (segIdx == 0 && prevAudioPts >= 0 && pts > prevAudioPts) {
+                                val d = pts - prevAudioPts
+                                if (d in 5_000..50_000) audioPtsDelta = d
+                            }
+                            prevAudioPts = pts
+                            lastAudioPts = pts
+                            Pair(audioEntry.muxerTrack, pts)
+                        }
+                        else -> {
+                            extractor.advance(); continue
+                        }
+                    }
+
+                    bufferInfo.offset             = 0
+                    bufferInfo.size               = sampleSize
+                    bufferInfo.flags              = flags
+                    bufferInfo.presentationTimeUs = adjustedPts
+
+                    try {
+                        muxer.writeSampleData(muxTrack, readBuf, bufferInfo)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "writeSampleData seg$segIdx: ${e.message}")
+                    }
+
+                    extractor.advance()
+                }
+
+            } finally {
+                extractor.release()
             }
-        } catch (e: Exception) {
-            tmpOut.delete()
-            throw IOException("Remux failed: ${e.message}", e)
         }
+
+        if (!muxerStarted) {
+            muxer.release(); tmpOut.delete()
+            throw java.io.IOException("No valid segments could be remuxed")
+        }
+
+        muxer.stop()
+        muxer.release()
+
+        // Atomic rename
+        if (!tmpOut.renameTo(outFile)) {
+            tmpOut.copyTo(outFile, overwrite = true)
+            tmpOut.delete()
+        }
+
+        if (!outFile.exists() || outFile.length() < 1024) {
+            throw java.io.IOException("Remux produced empty/missing output: ${outFile.absolutePath}")
+        }
+
+        Log.i(TAG, "Remux complete: ${outFile.name} = ${outFile.length() / 1_048_576}MB")
     }
 
     // ── Commit to files table + delete from downloads ─────────────────────────

@@ -330,20 +330,22 @@ class PlayerViewModel @Inject constructor(
             }
 
             if (streamUrl != null) {
-                // Pre-fetched URL passed in (e.g. from Detail screen pre-resolve)
+                // For offline playback, prefer the filePath from the files table.
+                // Falls back to the streamUrl passed from FilesScreen (already has file:// prefix).
                 val resolvedUrl = if (isOffline && offlineDownloads.isNotEmpty()) {
                     val preferred = _ui.value.selectedQuality
                     val match = offlineDownloads.firstOrNull { it.quality == preferred }
                         ?: offlineDownloads.firstOrNull()
-                    // Files table = always clean .mp4, use filePath directly
+                    // Ensure file:// prefix on the raw filePath
                     val localPath = match?.filePath
-                    localPath?.takeIf { it.isNotBlank() } ?: streamUrl
+                    if (!localPath.isNullOrBlank()) {
+                        if (localPath.startsWith("file://")) localPath else "file://$localPath"
+                    } else streamUrl
                 } else streamUrl
 
-                val track = StreamTrack(name = "Offline", url = resolvedUrl,
-                    type = if (resolvedUrl.endsWith(".m3u8") || streamIsHls) "hls" else "mp4")
-                val result = StreamResult(streams = listOf(track),
-                    expiresAtMs = Long.MAX_VALUE)
+                // Files table is always .mp4 — never HLS
+                val track = StreamTrack(name = "Offline", url = resolvedUrl, type = "mp4")
+                val result = StreamResult(streams = listOf(track), expiresAtMs = Long.MAX_VALUE)
                 lastResult = result
                 playStream(result)
             } else {
@@ -941,9 +943,9 @@ class PlayerViewModel @Inject constructor(
             val match = offlineDownloads.firstOrNull { it.quality == label }
                 ?: offlineDownloads.firstOrNull()
             if (match != null) {
-                // Files table = always clean .mp4 — use filePath directly
                 val rawPath = match.filePath.takeIf { it.isNotBlank() } ?: return
-                val url = if (!rawPath.startsWith("file://") && !rawPath.startsWith("http")) "file://$rawPath" else rawPath
+                // Ensure file:// prefix — files table stores raw absolute paths
+                val url = if (rawPath.startsWith("file://")) rawPath else "file://$rawPath"
                 val savedPos = exoPlayer?.currentPosition ?: 0L
                 val track = StreamTrack(name = label, url = url, type = "mp4")
                 val result = StreamResult(streams = listOf(track), expiresAtMs = Long.MAX_VALUE)
