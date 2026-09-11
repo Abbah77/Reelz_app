@@ -81,11 +81,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
-import com.axio.reelz.core.database.FileDao
-import com.axio.reelz.core.database.FileRow
+import com.axio.reelz.core.database.DownloadDao
+import com.axio.reelz.core.database.DownloadRow
 import com.axio.reelz.core.database.TransferDao
 import com.axio.reelz.core.database.TransferRecord
-import com.axio.reelz.data.model.FileItem
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.transfer.*
@@ -300,7 +299,7 @@ private fun Context.allTransferPermsGranted(forSend: Boolean): Boolean =
 @HiltViewModel
 class TransferViewModel @Inject constructor(
     private val transferManager: TransferManager,
-    private val fileDao:         FileDao,
+    private val downloadDao:     DownloadDao,
     private val transferDao:     TransferDao,
 ) : ViewModel() {
 
@@ -312,33 +311,104 @@ class TransferViewModel @Inject constructor(
     val history: StateFlow<List<TransferRecord>> = transferDao.getAll()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Files library from files table — all entries are clean, valid .mp4 files
-    val completedDownloads: StateFlow<List<FileItem>> = fileDao.observeAll()
-        .map { list -> list.map { it.toFileItem() } }
+    val completedDownloads: StateFlow<List<DownloadItem>> = downloadDao.observeAll()
+        .map { list ->
+            list.filter { it.status == DownloadStatus.DONE.name && it.filePath.isNotBlank() }
+                .map { it.toDownloadItem() }
+        }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     fun startAsSender()              = transferManager.startAsSender()
     fun connectFromQr(rawQr: String) = transferManager.connectFromQr(rawQr)
 
-    // Send selected FileItems — always .mp4, no HLS handling needed
-    fun sendSelected(items: List<FileItem>) {
-        val queueItems = items.mapNotNull { file ->
-            val mp4File = java.io.File(file.filePath)
-            if (!mp4File.exists() || mp4File.length() == 0L) return@mapNotNull null
-            TransferItem(
-                fileName  = buildFileName(file) + ".mp4",
-                filePath  = mp4File.absolutePath,
-                sizeBytes = mp4File.length(),
-                title     = file.title,
-                posterUrl = file.posterUrl ?: "",
-                mediaType = file.mediaType,
-                season    = file.season,
-                episode   = file.episode,
-                quality   = file.quality,
-                mediaId   = file.mediaId,
-            )
+    fun sendSelected(items: List<DownloadItem>) {
+        val queueItems = mutableListOf<TransferItem>()
+        items.forEach { dl ->
+            val isHls = dl.filePath.endsWith(".m3u8", ignoreCase = true)
+            if (isHls) {
+                // HLS: the filePath points to segments/index.m3u8.
+                // We must send ALL .ts segment files + a rewritten m3u8 with
+                // relative paths so the receiver can play it offline.
+                val m3u8File   = java.io.File(dl.filePath)
+                val segmentsDir = m3u8File.parentFile ?: return@forEach
+                val tsFiles = segmentsDir.listFiles()
+                    ?.filter { it.name.endsWith(".ts") && it.length() > 0 }
+                    ?.sortedBy { it.name }
+                    ?: emptyList()
+
+                val baseName = buildFileName(dl)
+
+                // --- Rewrite the m3u8 with relative-only segment URIs ---
+                val rewrittenPlaylist = try {
+                    val original = m3u8File.readText()
+                    val sb = StringBuilder()
+                    original.lines().forEach { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
+                            // Replace any path (absolute or relative) with just the filename
+                            sb.appendLine(java.io.File(trimmed).name)
+                        } else {
+                            sb.appendLine(line)
+                        }
+                    }
+                    sb.toString()
+                } catch (_: Exception) { null }
+
+                // Persist the rewritten m3u8 as a temp file next to the original
+                val rewrittenFile = java.io.File(segmentsDir, "index_rel.m3u8")
+                if (rewrittenPlaylist != null) {
+                    rewrittenFile.writeText(rewrittenPlaylist)
+                } else {
+                    rewrittenFile.delete()
+                    m3u8File.copyTo(rewrittenFile, overwrite = true)
+                }
+
+                // Enqueue all .ts segments first
+                tsFiles.forEach { tsFile ->
+                    queueItems += TransferItem(
+                        fileName  = tsFile.name,
+                        filePath  = tsFile.absolutePath,
+                        sizeBytes = tsFile.length(),
+                        title     = dl.title,
+                        posterUrl = dl.posterUrl ?: "",
+                        mediaType = dl.mediaType,
+                        season    = dl.season,
+                        episode   = dl.episode,
+                        quality   = dl.quality,
+                        mediaId   = dl.mediaId,
+                    )
+                }
+
+                // Enqueue the rewritten playlist last (receiver uses it to assemble)
+                queueItems += TransferItem(
+                    fileName  = "$baseName.m3u8",
+                    filePath  = rewrittenFile.absolutePath,
+                    sizeBytes = rewrittenFile.length(),
+                    title     = dl.title,
+                    posterUrl = dl.posterUrl ?: "",
+                    mediaType = dl.mediaType,
+                    season    = dl.season,
+                    episode   = dl.episode,
+                    quality   = dl.quality,
+                    mediaId   = dl.mediaId,
+                )
+            } else {
+                // MP4: single file — straightforward
+                queueItems += TransferItem(
+                    fileName  = buildFileName(dl) + ".mp4",
+                    filePath  = dl.filePath,
+                    sizeBytes = dl.sizeBytes,
+                    title     = dl.title,
+                    posterUrl = dl.posterUrl ?: "",
+                    mediaType = dl.mediaType,
+                    season    = dl.season,
+                    episode   = dl.episode,
+                    quality   = dl.quality,
+                    mediaId   = dl.mediaId,
+                )
+            }
         }
-        if (queueItems.isNotEmpty()) transferManager.enqueueToSend(queueItems)
+        transferManager.enqueueToSend(queueItems)
     }
 
     fun cancelActiveSend()               = transferManager.cancelActiveSend()
@@ -352,28 +422,21 @@ class TransferViewModel @Inject constructor(
         transferManager.release()
     }
 
-    private fun buildFileName(file: FileItem): String = when {
-        file.episode > 0 -> "${file.title} S${file.season.toString().padStart(2,'0')}E${file.episode.toString().padStart(2,'0')} ${file.quality}"
-        else             -> "${file.title} ${file.quality}"
+    private fun buildFileName(dl: DownloadItem): String = when {
+        dl.episode > 0 -> "${dl.title} S${dl.season.toString().padStart(2,'0')}E${dl.episode.toString().padStart(2,'0')} ${dl.quality}"
+        else           -> "${dl.title} ${dl.quality}"
     }
 }
 
-private fun FileRow.toFileItem() = FileItem(
-    id          = id,
-    mediaId     = mediaId,
-    title       = title,
-    posterUrl   = posterUrl,
-    mediaType   = mediaType,
-    season      = season,
-    episode     = episode,
-    episodeName = episodeName,
-    quality     = quality,
-    filePath    = filePath,
-    sizeBytes   = sizeBytes,
-    durationMs  = durationMs,
-    watchProgressMs = watchProgressMs,
-    lastPlayedAt = lastPlayedAt,
-    addedAt      = addedAt,
+private fun DownloadRow.toDownloadItem() = DownloadItem(
+    id = id, mediaId = mediaId, title = title, posterUrl = posterUrl,
+    mediaType = mediaType, season = season, episode = episode, episodeName = episodeName,
+    quality = quality,
+    // For HLS downloads filePath == localPlaylistPath == segments/index.m3u8
+    filePath          = if (localPlaylistPath.isNotBlank()) localPlaylistPath else filePath,
+    localPlaylistPath = localPlaylistPath,
+    sizeBytes = sizeBytes, downloadedBytes = downloadedBytes,
+    status = DownloadStatus.DONE, streamUrl = streamUrl, createdAt = createdAt, completedAt = completedAt,
 )
 
 // ─── Transfer intent ──────────────────────────────────────────────────────────
@@ -400,7 +463,7 @@ fun TransferScreen(
     var showPanel            by remember { mutableStateOf(false) }
     var showDisconnectDialog by remember { mutableStateOf(false) }
 
-    // Files selected on IdlePage before connection is established (by FileItem.id)
+    // Files selected on IdlePage before connection is established
     var pendingSendIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     val isConnected = uiState is TransferUiState.Connected || uiState is TransferUiState.Transferring
@@ -537,10 +600,10 @@ fun TransferScreen(
 
 @Composable
 private fun IdlePage(
-    downloads:      List<FileItem>,
+    downloads:     List<DownloadItem>,
     pendingSendIds: Set<String>,
-    onSend:         (Set<String>) -> Unit,
-    onReceive:      () -> Unit,
+    onSend:        (Set<String>) -> Unit,
+    onReceive:     () -> Unit,
 ) {
     val d = LocalDimensions.current
 
@@ -1017,7 +1080,7 @@ private fun ReceivePage(
 @Composable
 private fun BrowsePage(
     uiState:   TransferUiState,
-    downloads: List<FileItem>,
+    downloads: List<DownloadItem>,
     ctx:       Context,
     vm:        TransferViewModel,
 ) {
@@ -1202,7 +1265,7 @@ private fun BeamHeader(
 @Composable
 private fun MoviePosterCard(
     title:           String,
-    qualities:       List<FileItem>,
+    qualities:       List<DownloadItem>,
     selected:        Boolean,
     selectedIds:     Set<String>,
     expanded:        Boolean,
@@ -1359,7 +1422,7 @@ private fun MoviePosterCard(
 @Composable
 private fun SeriesBrowseRow(
     title:    String,
-    episodes: List<FileItem>,
+    episodes: List<DownloadItem>,
     selected: Set<String>,
     onToggle: (String) -> Unit,
 ) {

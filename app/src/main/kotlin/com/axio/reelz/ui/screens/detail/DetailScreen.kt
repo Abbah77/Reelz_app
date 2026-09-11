@@ -213,24 +213,16 @@ class DetailViewModel @Inject constructor(
     // Subtitles bundled with the download response — scheduled silently post-download.
     private var preResolvedSubtitles: List<com.axio.reelz.data.model.Subtitle> = emptyList()
 
-    /** Observe both active downloads and permanent files, push their keys into
-     *  UiState so the episode/movie download button shows IconDownloaded in real time. */
+    /** Observe all non-ERROR downloads and push their keys into UiState so the
+     *  episode/movie download button can show IconDownloaded in real time. */
     fun observeDownloads() {
         viewModelScope.launch {
-            // Active downloads (not ERROR)
             downloadRepo.observeAll().collect { items ->
-                val activeKeys = items
+                val keys = items
                     .filter { it.status != DownloadStatus.ERROR }
                     .map { "${it.mediaId}_${it.season}_${it.episode}" }
                     .toSet()
-                _ui.update { it.copy(downloadedKeys = _ui.value.downloadedKeys + activeKeys) }
-            }
-        }
-        viewModelScope.launch {
-            // Permanent library (files table — all are complete)
-            downloadRepo.observeFiles().collect { files ->
-                val fileKeys = files.map { "${it.mediaId}_${it.season}_${it.episode}" }.toSet()
-                _ui.update { it.copy(downloadedKeys = _ui.value.downloadedKeys + fileKeys) }
+                _ui.update { it.copy(downloadedKeys = keys) }
             }
         }
     }
@@ -351,7 +343,6 @@ class DetailViewModel @Inject constructor(
         // Load already-downloaded qualities for this content in background
         viewModelScope.launch {
             val downloaded = downloadRepo.getDownloadedItems(id, season, episode)
-            // FileItem has no status — all items in files table are complete
             val qualityLabels = downloaded.map { it.quality }.toSet()
             _ui.update { it.copy(alreadyDownloadedQualities = qualityLabels) }
         }

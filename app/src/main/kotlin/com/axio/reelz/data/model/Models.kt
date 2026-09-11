@@ -1,21 +1,16 @@
 package com.axio.reelz.data.model
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Domain Models — Reelz Schema v4  (two-table download architecture)
+//  Domain Models — Reelz Schema v3
 //
 //  Rules:
 //   • App only knows the BACKEND. All business logic lives on the server.
 //   • Image URLs are full absolute URLs supplied by the backend.
 //   • Guest == Free user. Login is opt-in.
-//
-//  Download flow:
-//   DownloadItem  — tracks active/paused/queued/remuxing downloads (downloads table)
-//   FileItem      — a clean, playable .mp4 in the user's permanent library (files table)
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class MediaType   { MOVIE, TV }
-// REMUXING = HLS segments downloaded, now converting to .mp4 with MediaMuxer
-enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, REMUXING, ERROR }
+enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
 enum class TransferStatus { IDLE, CONNECTING, TRANSFERRING, DONE, ERROR }
 enum class TransferDirection { SEND, RECEIVE }
 
@@ -135,12 +130,7 @@ data class ShortVideo(
     val thumbnail: String?,
 )
 
-// ── Download item (TEMPORARY — tracks active downloads in "downloads" table) ──
-//
-// This is the working domain model for the downloads table.
-// A DownloadItem is DELETED when the download completes (success → FileItem in "files").
-// The "downloads" table never holds DONE rows.
-//
+// ── Download item (local tracking) ───────────────────────────────────────────
 data class DownloadItem(
     val id: String,
     val mediaId: String,
@@ -158,34 +148,13 @@ data class DownloadItem(
     val streamUrl: String = "",
     val headers: Map<String, String> = emptyMap(),
     val createdAt: Long = System.currentTimeMillis(),
+    val completedAt: Long = 0,
     val segmentsDone: Int = 0,
     val totalSegments: Int = 0,
-    val localPlaylistPath: String = "",
-)
-
-// ── File item (PERMANENT — clean .mp4 in user's library, "files" table) ───────
-//
-// FileItem is the domain model for a fully downloaded, remuxed, playable .mp4.
-// Every row in the "files" table is a valid, complete mp4 file.
-// Both direct MP4 downloads and HLS→remux flows produce a FileItem.
-// File transfer received files also become FileItems.
-//
-data class FileItem(
-    val id: String,
-    val mediaId: String,
-    val title: String,
-    val posterUrl: String?,
-    val mediaType: String,          // "MOVIE" | "TV"
-    val season: Int = 0,
-    val episode: Int = 0,
-    val episodeName: String = "",
-    val quality: String = "720p",
-    val filePath: String,           // absolute path to the .mp4 file
-    val sizeBytes: Long = 0,
-    val durationMs: Long = 0,
     val watchProgressMs: Long = 0,
+    val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
-    val addedAt: Long = System.currentTimeMillis(),
+    val localPlaylistPath: String = "",  // HLS: path to local index.m3u8; MP4: same as filePath
 )
 
 // ── User session ──────────────────────────────────────────────────────────────
@@ -229,7 +198,7 @@ data class QualityTrack(
 ) {
     /** Parses the numeric height from labels like "1080p", "720p". Returns 0 if not parseable. */
     fun resolutionHeight(): Int {
-        val match = Regex("(\\d{3,4})p").find(label) ?: return 0
-        return match.groupValues[1].toIntOrNull() ?: 0
+        val m = Regex("""(\d{3,4})p""").find(label.lowercase())
+        return m?.groupValues?.get(1)?.toIntOrNull() ?: 0
     }
 }
