@@ -158,7 +158,7 @@ class PlayerViewModel @Inject constructor(
     private var trackSelector: DefaultTrackSelector? = null
     private var isOnMeteredConnection = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var offlineDownloads: List<DownloadItem> = emptyList()
+    private var offlineDownloads: List<com.axio.reelz.data.model.FileItem> = emptyList()
     private var preferredOfflineQuality: String = ""
     private var _wasInPipBeforeStop = false
     private var silentRetryCount = 0
@@ -316,15 +316,12 @@ class PlayerViewModel @Inject constructor(
                 loadDownloadedSubtitles(id, season, episode)
                 val allDownloads = downloadRepo.getDownloadedItems(id, season, episode)
                 offlineDownloads = allDownloads
+                // All FileItems are valid .mp4 — no status filter needed
                 val offlineQualities = allDownloads
-                    .filter { it.status == DownloadStatus.DONE }
                     .sortedByDescending { it.sizeBytes }
                     .map { item ->
-                        // For HLS: use localPlaylistPath (local index.m3u8)
-                        // For MP4: use filePath
-                        val playPath = if (item.streamUrl.contains(".m3u8") && item.localPlaylistPath.isNotBlank())
-                            item.localPlaylistPath else item.filePath
-                        QualityTrack(item.quality, playPath)
+                        // Files table always has clean .mp4 — use filePath directly
+                        QualityTrack(item.quality, item.filePath)
                     }
                 val startQuality = preferredOfflineQuality.takeIf { q ->
                     q.isNotBlank() && offlineQualities.any { it.label == q }
@@ -336,13 +333,10 @@ class PlayerViewModel @Inject constructor(
                 // Pre-fetched URL passed in (e.g. from Detail screen pre-resolve)
                 val resolvedUrl = if (isOffline && offlineDownloads.isNotEmpty()) {
                     val preferred = _ui.value.selectedQuality
-                    val match = offlineDownloads.firstOrNull { it.quality == preferred && it.status == DownloadStatus.DONE }
-                        ?: offlineDownloads.firstOrNull { it.status == DownloadStatus.DONE }
-                    // Prefer localPlaylistPath for HLS, fallback to filePath for MP4
-                    val localPath = match?.let { item ->
-                        if (item.streamUrl.contains(".m3u8") && item.localPlaylistPath.isNotBlank())
-                            item.localPlaylistPath else item.filePath
-                    }
+                    val match = offlineDownloads.firstOrNull { it.quality == preferred }
+                        ?: offlineDownloads.firstOrNull()
+                    // Files table = always clean .mp4, use filePath directly
+                    val localPath = match?.filePath
                     localPath?.takeIf { it.isNotBlank() } ?: streamUrl
                 } else streamUrl
 
@@ -944,14 +938,14 @@ class PlayerViewModel @Inject constructor(
         _ui.update { it.copy(selectedQuality = label) }
         if (_ui.value.isOfflinePlayback && offlineDownloads.isNotEmpty()) {
             preferredOfflineQuality = label
-            val match = offlineDownloads.firstOrNull { it.quality == label && it.status == DownloadStatus.DONE }
-                ?: offlineDownloads.firstOrNull { it.status == DownloadStatus.DONE }
+            val match = offlineDownloads.firstOrNull { it.quality == label }
+                ?: offlineDownloads.firstOrNull()
             if (match != null) {
+                // Files table = always clean .mp4 — use filePath directly
                 val rawPath = match.filePath.takeIf { it.isNotBlank() } ?: return
                 val url = if (!rawPath.startsWith("file://") && !rawPath.startsWith("http")) "file://$rawPath" else rawPath
                 val savedPos = exoPlayer?.currentPosition ?: 0L
-                val track = StreamTrack(name = label, url = url,
-                    type = if (url.contains(".m3u8", ignoreCase = true)) "hls" else "mp4")
+                val track = StreamTrack(name = label, url = url, type = "mp4")
                 val result = StreamResult(streams = listOf(track), expiresAtMs = Long.MAX_VALUE)
                 lastResult = result
                 viewModelScope.launch {

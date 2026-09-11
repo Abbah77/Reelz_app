@@ -3,8 +3,8 @@ package com.axio.reelz.transfer
 // ─────────────────────────────────────────────────────────────────────────────
 //  TransferManager — queue orchestration layer above P2pEngine
 //
-//  Key improvements in this revision (v2 — post remux upgrade)
-//  ────────────────────────────────────────────────────────────
+//  Key improvements in this revision
+//  ────────────────────────────────
 //  1. QR generation moved to Dispatchers.Default (off Main thread) so the UI
 //     never freezes while the 700×700 bitmap is being built.
 //
@@ -13,18 +13,17 @@ package com.axio.reelz.transfer
 //     call and is ~30× slower than a single Canvas.drawRect() per row-run.
 //     Result: 700 px QR renders in <20 ms on any SoC since 2016.
 //
-//  3. Received files are now registered in CompletedMediaDao (permanent library)
-//     instead of DownloadDao (job queue).  Duplicate detection uses the
-//     completed_media unique index on (mediaId, season, episode, quality).
-//     Received files are moved from ReelzBeam/ into reelz_library/ — identical
-//     path structure to self-downloaded content — so sender and receiver share
-//     one unified library.
+//  3. After a file is received it is registered in DownloadDao with full
+//     duplicate-prevention logic that matches the single-source-of-truth rule:
+//       • Same mediaId + season + episode + quality  → skip (already have it)
+//       • Same mediaId + season + episode, different quality → add new row
+//       • Same mediaId but no episode match (movie extra quality) → add new row
+//     This means a locally received episode and an online download of the same
+//     episode in the same quality are treated as identical; the DB entry is
+//     never duplicated.
 //
-//  4. Send side: completedDownloads now reads from completed_media (all .mp4).
-//     No HLS segment packaging on send — just a single clean .mp4 per item.
-//
-//  5. receiveFiles() passes the full FileMetadata to the completion callback
-//     so the DB row is filled with correct title / posterUrl / mediaId etc.
+//  4. receiveFiles() passes the full FileMetadata to the completion callback
+//     so the DB row is filled with the correct title / posterUrl / mediaId etc.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import android.content.Context
@@ -33,9 +32,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.os.Build
-import android.util.Log
-import com.axio.reelz.core.database.CompletedMediaDao
-import com.axio.reelz.core.database.CompletedMediaRow
+import com.axio.reelz.core.database.FileDao
+import com.axio.reelz.core.database.FileRow
 import com.axio.reelz.core.database.TransferRecord
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -75,13 +73,10 @@ enum class TransferItemStatus { QUEUED, ACTIVE, DONE, CANCELLED, ERROR }
 @Singleton
 class TransferManager @Inject constructor(
     @ApplicationContext private val ctx: Context,
-    private val engine:            P2pEngine,
-    private val repo:              TransferRepository,
-    private val completedMediaDao: CompletedMediaDao,
+    private val engine:      P2pEngine,
+    private val repo:        TransferRepository,
+    private val fileDao:     FileDao,
 ) {
-    companion object {
-        private const val TAG = "TransferManager"
-    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     val engineState: StateFlow<EngineState> = engine.state
@@ -283,13 +278,12 @@ class TransferManager @Inject constructor(
                         updateSendItem(next.id) { it.copy(status = TransferItemStatus.DONE) }
                         scope.launch {
                             repo.recordTransfer(TransferRecord(
-                                id                = UUID.randomUUID().toString(),
-                                fileName          = next.fileName,
-                                sizeBytes         = next.sizeBytes,
-                                direction         = "SEND",
-                                peerName          = peerName,
-                                status            = "DONE",
-                                mediaMetadataJson = meta.toJson(),
+                                id        = UUID.randomUUID().toString(),
+                                fileName  = next.fileName,
+                                sizeBytes = next.sizeBytes,
+                                direction = "SEND",
+                                peerName  = peerName,
+                                status    = "DONE",
                             ))
                         }
                         done.complete(true)
@@ -314,53 +308,121 @@ class TransferManager @Inject constructor(
     // ── Receive loop ──────────────────────────────────────────────────────────
 
     private fun startReceiveLoop() {
-        // Received files land in ReelzBeam/<mediaId>/ temporarily, then are
-        // moved to the permanent library by registerReceivedFile().
-        val beamRoot = File(ctx.getExternalFilesDir(null), "ReelzBeam")
+        // HLS downloads arrive as many .ts files + one final .m3u8.
+        // We place them all in a per-media subfolder so ExoPlayer can play
+        // the m3u8 with relative segment paths.
+        val saveDir = File(ctx.getExternalFilesDir(null), "ReelzBeam")
+
+        // ── HLS routing helper ────────────────────────────────────────────────
+        // The sender transmits all .ts segments first, then the m3u8 playlist
+        // (with relative paths). We need to save everything into the SAME folder
+        // so the m3u8 can resolve its sibling .ts files.
+        // We derive the folder from the meta.mediaId / title to be consistent
+        // across files belonging to the same piece of content.
+        fun hlsSubdir(meta: P2pEngine.FileMetadata): java.io.File {
+            val key = meta.mediaId.ifBlank {
+                buildString {
+                    append(meta.title.replace(Regex("[^A-Za-z0-9_-]"), "_").take(40))
+                    if (meta.season  > 0) append("_S${meta.season.toString().padStart(2,'0')}")
+                    if (meta.episode > 0) append("E${meta.episode.toString().padStart(2,'0')}")
+                    append("_${meta.quality}")
+                }
+            }
+            return java.io.File(saveDir, key).also { it.mkdirs() }
+        }
 
         engine.receiveFiles(
-            saveDir     = beamRoot,
+            saveDir     = saveDir,   // default landing; per-file routing done below via overrideSaveDir
             onFileStart = { fileName, total, meta ->
-                val item = TransferItem(
-                    fileName  = fileName,
-                    sizeBytes = total,
-                    status    = TransferItemStatus.ACTIVE,
-                    title     = meta.title.ifBlank { fileName },
-                    posterUrl = meta.posterUrl,
-                    mediaType = meta.mediaType,
-                    season    = meta.season,
-                    episode   = meta.episode,
-                    quality   = meta.quality,
-                    mediaId   = meta.mediaId,
-                )
-                _receiveQueue.value = _receiveQueue.value + item
+                // Show only meaningful items — hide raw .ts segments from UI;
+                // show one entry per media item (the m3u8 or the mp4)
+                val isRawTs = fileName.endsWith(".ts", ignoreCase = true)
+                if (!isRawTs) {
+                    val item = TransferItem(
+                        fileName  = fileName,
+                        sizeBytes = total,
+                        status    = TransferItemStatus.ACTIVE,
+                        title     = meta.title.ifBlank { fileName },
+                        posterUrl = meta.posterUrl,
+                        mediaType = meta.mediaType,
+                        season    = meta.season,
+                        episode   = meta.episode,
+                        quality   = meta.quality,
+                        mediaId   = meta.mediaId,
+                    )
+                    _receiveQueue.value = _receiveQueue.value + item
+                }
             },
             onProgress = { received, total, bps, fileName ->
-                _receiveQueue.value = _receiveQueue.value.map { item ->
-                    if (item.fileName == fileName && item.status == TransferItemStatus.ACTIVE)
-                        item.copy(bytesdone = received, speedBps = bps)
-                    else item
+                val isRawTs = fileName.endsWith(".ts", ignoreCase = true)
+                if (!isRawTs) {
+                    _receiveQueue.value = _receiveQueue.value.map { item ->
+                        if (item.fileName == fileName && item.status == TransferItemStatus.ACTIVE)
+                            item.copy(bytesdone = received, speedBps = bps)
+                        else item
+                    }
                 }
             },
             onFileDone = { file, meta ->
-                _receiveQueue.value = _receiveQueue.value.map { item ->
-                    if (item.fileName == file.name && item.status == TransferItemStatus.ACTIVE)
-                        item.copy(status = TransferItemStatus.DONE)
-                    else item
-                }
-                scope.launch {
-                    repo.recordTransfer(TransferRecord(
-                        id                = UUID.randomUUID().toString(),
-                        fileName          = file.name,
-                        sizeBytes         = file.length(),
-                        direction         = "RECEIVE",
-                        peerName          = peerName,
-                        status            = "DONE",
-                        mediaMetadataJson = meta.toJson(),
-                    ))
-                }
-                scope.launch(Dispatchers.IO) {
-                    registerReceivedFile(file, meta)
+                val isTs   = file.name.endsWith(".ts", ignoreCase = true)
+                val isM3u8 = file.name.endsWith(".m3u8", ignoreCase = true)
+
+                if (isTs || isM3u8) {
+                    // ── Route HLS files into per-media subdir ─────────────────
+                    val targetDir  = hlsSubdir(meta)
+                    val targetFile = java.io.File(targetDir, file.name)
+                    if (file.parentFile?.absolutePath != targetDir.absolutePath) {
+                        try {
+                            file.renameTo(targetFile)
+                        } catch (_: Exception) {
+                            file.copyTo(targetFile, overwrite = true)
+                            file.delete()
+                        }
+                    }
+
+                    if (isM3u8) {
+                        // m3u8 is the last file of an HLS bundle → finalize
+                        _receiveQueue.value = _receiveQueue.value.map { item ->
+                            if (item.fileName == file.name && item.status == TransferItemStatus.ACTIVE)
+                                item.copy(status = TransferItemStatus.DONE)
+                            else item
+                        }
+                        val bundleSize = targetDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+                        scope.launch {
+                            repo.recordTransfer(TransferRecord(
+                                id        = UUID.randomUUID().toString(),
+                                fileName  = file.name,
+                                sizeBytes = bundleSize,
+                                direction = "RECEIVE",
+                                peerName  = peerName,
+                                status    = "DONE",
+                            ))
+                        }
+                        scope.launch(Dispatchers.IO) {
+                            registerReceivedFile(targetFile, meta)
+                        }
+                    }
+                    // .ts files silently complete — no DB row, no UI update needed
+                } else {
+                    // ── MP4: single file, normal flow ─────────────────────────
+                    _receiveQueue.value = _receiveQueue.value.map { item ->
+                        if (item.fileName == file.name && item.status == TransferItemStatus.ACTIVE)
+                            item.copy(status = TransferItemStatus.DONE)
+                        else item
+                    }
+                    scope.launch {
+                        repo.recordTransfer(TransferRecord(
+                            id        = UUID.randomUUID().toString(),
+                            fileName  = file.name,
+                            sizeBytes = file.length(),
+                            direction = "RECEIVE",
+                            peerName  = peerName,
+                            status    = "DONE",
+                        ))
+                    }
+                    scope.launch(Dispatchers.IO) {
+                        registerReceivedFile(file, meta)
+                    }
                 }
             },
             onAllDone = { /* session stays open */ },
@@ -370,60 +432,45 @@ class TransferManager @Inject constructor(
         )
     }
 
-    // ── Register received file into permanent library ──────────────────────────
-
+    // ── Received file → FileDao registration ──────────────────────────────────
+    //
+    // File transfer always produces a clean .mp4 on the receiver's side.
+    // We insert directly into the "files" permanent library table — same schema
+    // used by completed downloads and HLS remux. The "downloads" table is never
+    // touched by file transfer.
+    //
     private suspend fun registerReceivedFile(
         file: File,
         meta: P2pEngine.FileMetadata,
     ) = withContext(Dispatchers.IO) {
-        val mediaId   = meta.mediaId.ifBlank { UUID.randomUUID().toString() }
+        val mediaId   = meta.mediaId.ifBlank  { meta.title.ifBlank { file.nameWithoutExtension } }
         val season    = meta.season
         val episode   = meta.episode
-        val quality   = meta.quality.ifBlank { "720p" }
-        val title     = meta.title.ifBlank { file.nameWithoutExtension }
-        val mediaType = meta.mediaType.ifBlank { if (season > 0) "tv" else "movie" }
+        val quality   = meta.quality.ifBlank  { "720p" }
+        val title     = meta.title.ifBlank    { file.nameWithoutExtension }
+        val mediaType = meta.mediaType.ifBlank { if (episode > 0) "TV" else "MOVIE" }
 
-        // 1. Duplicate check — same (mediaId, season, episode, quality) in library
-        val existing = completedMediaDao.getExact(mediaId, season, episode, quality)
-        if (existing != null) {
-            Log.i(TAG, "Duplicate received — already in library: ${existing.filePath}")
+        // Validate: must be a real .mp4 file
+        if (!file.exists() || file.length() == 0L) return@withContext
+        if (!file.name.endsWith(".mp4", ignoreCase = true)) {
+            // Not a .mp4 — skip (no HLS segments or playlists accepted)
             file.delete()
-            file.parentFile?.takeIf { it.list()?.isEmpty() == true }?.delete()
             return@withContext
         }
 
-        // 2. Move from ReelzBeam/ into permanent reelz_library/
-        val libraryDir = if (season > 0) {
-            File(
-                File(File(File(ctx.getExternalFilesDir(null), "reelz_library"), "tv"), mediaId),
-                "S${season.toString().padStart(2, '0')}"
-            ).also { it.mkdirs() }
-        } else {
-            File(File(File(ctx.getExternalFilesDir(null), "reelz_library"), "movies"), mediaId)
-                .also { it.mkdirs() }
-        }
-
-        val safeTitle = title.replace(Regex("[^A-Za-z0-9_-]"), "_").take(40)
-        val mp4Name = if (season > 0)
-            "${safeTitle}_S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}_${quality}.mp4"
-        else
-            "${safeTitle}_${quality}.mp4"
-
-        val libraryFile = File(libraryDir, mp4Name)
-        try {
-            file.copyTo(libraryFile, overwrite = true)
+        // Bulletproof duplicate check: same (mediaId, season, episode, quality) already in files?
+        val existing = fileDao.getExact(mediaId, season, episode, quality)
+        if (existing != null) {
+            // Exact duplicate already in library — discard the new copy
             file.delete()
-            file.parentFile?.takeIf { it.list()?.isEmpty() == true }?.delete()
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not move beam file to library: ${e.message}")
+            return@withContext
         }
 
-        val finalPath = if (libraryFile.exists()) libraryFile.absolutePath else file.absolutePath
-
-        // 3. Insert into completed_media — identical treatment to a self-downloaded file
-        completedMediaDao.insertIgnore(
-            CompletedMediaRow(
-                id          = UUID.randomUUID().toString(),
+        // Insert into the permanent files library
+        val newId = java.util.UUID.randomUUID().toString()
+        fileDao.insertIfNew(
+            FileRow(
+                id          = newId,
                 mediaId     = mediaId,
                 title       = title,
                 posterUrl   = meta.posterUrl.ifBlank { null },
@@ -432,12 +479,12 @@ class TransferManager @Inject constructor(
                 episode     = episode,
                 episodeName = "",
                 quality     = quality,
-                filePath    = finalPath,
-                sizeBytes   = if (libraryFile.exists()) libraryFile.length() else file.length(),
-                completedAt = System.currentTimeMillis(),
+                filePath    = file.absolutePath,
+                sizeBytes   = file.length(),
+                durationMs  = 0L,
+                addedAt     = System.currentTimeMillis(),
             )
         )
-        Log.i(TAG, "Received file registered in library: $finalPath")
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

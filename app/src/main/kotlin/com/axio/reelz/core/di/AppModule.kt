@@ -108,8 +108,8 @@ object AppModule {
     @Provides fun provideAppConfigCacheDao(db: ReelzDatabase)     = db.appConfigCacheDao()
     @Provides fun provideDownloadDao(db: ReelzDatabase)           = db.downloadDao()
     @Provides fun provideDownloadSubtitleDao(db: ReelzDatabase)   = db.downloadSubtitleDao()
-    @Provides fun provideCompletedMediaDao(db: ReelzDatabase)     = db.completedMediaDao()
     @Provides fun provideWatchHistoryDao(db: ReelzDatabase)       = db.watchHistoryDao()
     @Provides fun provideSavedVideoDao(db: ReelzDatabase)         = db.savedVideoDao()
     @Provides fun provideTransferDao(db: ReelzDatabase)           = db.transferDao()
+    @Provides fun provideFileDao(db: ReelzDatabase)               = db.fileDao()
 }
