@@ -98,7 +98,7 @@
 # and P2pEngine. If ProGuard renames these the when() dispatch breaks at runtime
 # in release builds even though the debug build works fine.
 -keep class com.axio.reelz.transfer.** { *; }
--keep sealed class com.axio.reelz.transfer.EngineState { *; }
+-keep class com.axio.reelz.transfer.EngineState { *; }
 
 # ── Suppress common noise warnings ────────────────────────────────────────────
 -dontwarn org.bouncycastle.**
