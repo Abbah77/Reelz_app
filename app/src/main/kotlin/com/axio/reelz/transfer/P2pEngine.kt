@@ -572,7 +572,7 @@ class P2pEngine @Inject constructor(
                     }
                     Log.w(TAG, "Hotspot start failed reason=$reason isTetheringDisallowed=$isTetheringDisallowed")
                     _state.value = EngineState.Error(
-                        message = if (isTetheringDisallowed)
+                        msg = if (isTetheringDisallowed)
                             "Could not create Wi-Fi connection. Disable VPN or mobile data hotspot blocking in Settings."
                         else
                             "Could not create Wi-Fi connection (error $reason).",
