@@ -169,14 +169,16 @@ dependencies {
     // Ads — AppLovin MAX + IMA
     implementation("com.applovin:applovin-sdk:12.5.0")
     implementation("com.google.ads.interactivemedia.v3:interactivemedia:3.33.0")
-    implementation("androidx.media3:media3-exoplayer-ima:1.3.1")
+    // Pinned to 1.4.1 to match the rest of media3 — mixed minor versions cause subtle playback bugs
+    implementation("androidx.media3:media3-exoplayer-ima:1.4.1")
 
     // QR code (transfer screen)
     implementation("com.google.zxing:core:3.5.3")
-    implementation("androidx.camera:camera-core:1.3.4")
-    implementation("androidx.camera:camera-camera2:1.3.4")
-    implementation("androidx.camera:camera-lifecycle:1.3.4")
-    implementation("androidx.camera:camera-view:1.3.4")
+    // Updated from 1.3.4 → 1.4.0 (current stable as of audit)
+    implementation("androidx.camera:camera-core:1.4.0")
+    implementation("androidx.camera:camera-camera2:1.4.0")
+    implementation("androidx.camera:camera-lifecycle:1.4.0")
+    implementation("androidx.camera:camera-view:1.4.0")
 
     // Nearby Connections (transfer feature)
     implementation("com.google.android.gms:play-services-nearby:19.3.0")

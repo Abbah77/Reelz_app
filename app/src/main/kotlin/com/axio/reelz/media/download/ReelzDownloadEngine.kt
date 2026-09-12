@@ -262,8 +262,11 @@ class ReelzDownloadEngine @Inject constructor(
             response.close()
         }
 
-        // Atomic rename
+        // Atomic rename — renameTo() silently returns false on some OEM builds
+        // (Xiaomi/MIUI, Samsung One UI 6) when tmp and out are on different mount
+        // points. Log the fallback so Crashlytics catches the pattern in the wild.
         if (!tmpFile.renameTo(outFile)) {
+            Log.w(TAG, "[$downloadId] renameTo() failed (cross-mount?), falling back to copyTo+delete")
             tmpFile.copyTo(outFile, overwrite = true)
             tmpFile.delete()
         }
@@ -316,15 +319,23 @@ class ReelzDownloadEngine @Inject constructor(
         val total = segments.size
         Log.d(TAG, "[$downloadId] $total segments to download")
 
+        // R5 fix: track cumulative bytes from actual segment sizes as they complete,
+        // instead of multiplying done * estimateSegmentSize() which can exceed the real
+        // total early in a download (wildly-off estimate → progress bar jumps past 100%).
         val completedCount = AtomicLong(
             segments.count { seg ->
                 File(segDir, segFilename(seg.index)).let { it.exists() && it.length() > 0 }
             }.toLong()
         )
+        val completedBytes = AtomicLong(
+            segments.sumOf { seg ->
+                File(segDir, segFilename(seg.index)).let { if (it.exists()) it.length() else 0L }
+            }
+        )
 
         downloadDao.updateProgress(
             id = downloadId, status = "DOWNLOADING",
-            bytes = completedCount.get() * estimateSegmentSize(segDir),
+            bytes = completedBytes.get(),
             done  = completedCount.get().toInt(),
             total = total,
             playlist = "",
@@ -342,11 +353,12 @@ class ReelzDownloadEngine @Inject constructor(
                     semaphore.withPermit {
                         checkPause(downloadId)
                         downloadSegmentWithRetry(seg, segDir, headers)
-                        val done = completedCount.incrementAndGet()
-                        val approxBytes = done * estimateSegmentSize(segDir)
+                        val segFile = File(segDir, segFilename(seg.index))
+                        val done  = completedCount.incrementAndGet()
+                        val bytes = completedBytes.addAndGet(segFile.length())
                         downloadDao.updateProgress(
                             id = downloadId, status = "DOWNLOADING",
-                            bytes = approxBytes, done = done.toInt(),
+                            bytes = bytes, done = done.toInt(),
                             total = total, playlist = "",
                             sizeBytes = 0L,
                         )
@@ -391,7 +403,14 @@ class ReelzDownloadEngine @Inject constructor(
     //     under coroutine IO — called from a plain blocking function, so fine.
 
     private fun remuxTsToMp4(tsFiles: List<File>, outFile: File) {
-        val tmpOut = File(outFile.parent, "movie.mp4.tmp")
+        // R3 fix: MediaMuxer on API 26 (Android 8.0) throws IOException if the output
+        // path is on external storage (getExternalFilesDir()). For API < 28 we write
+        // the mux to internal storage first, then move the result to the final location.
+        val tmpOut = if (android.os.Build.VERSION.SDK_INT < 28) {
+            File(context.filesDir, "mux_${outFile.nameWithoutExtension}.tmp").also { it.delete() }
+        } else {
+            File(outFile.parent, "movie.mp4.tmp")
+        }
         tmpOut.delete()
 
         val muxer = android.media.MediaMuxer(
@@ -412,7 +431,9 @@ class ReelzDownloadEngine @Inject constructor(
         var audioPtsDelta = 21_333L   // default ~AAC 1024 samples @ 48kHz in µs
 
         val bufferInfo = android.media.MediaCodec.BufferInfo()
-        val readBuf    = java.nio.ByteBuffer.allocate(2 * 1024 * 1024)
+        // R6 fix: 2MB is insufficient for high-bitrate 4K keyframes. We'll resize readBuf
+        // per segment after probing KEY_MAX_INPUT_SIZE. Start with a 2MB default.
+        var readBuf    = java.nio.ByteBuffer.allocate(2 * 1024 * 1024)
 
         for ((segIdx, tsFile) in tsFiles.withIndex()) {
             if (!tsFile.exists() || tsFile.length() == 0L) {
@@ -423,6 +444,20 @@ class ReelzDownloadEngine @Inject constructor(
             val extractor = android.media.MediaExtractor()
             try {
                 extractor.setDataSource(tsFile.absolutePath)
+
+                // R6 fix: query KEY_MAX_INPUT_SIZE across all tracks and grow readBuf if needed
+                var maxInputSize = readBuf.capacity()
+                for (i in 0 until extractor.trackCount) {
+                    val fmt = extractor.getTrackFormat(i)
+                    if (fmt.containsKey(android.media.MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                        val trackMax = fmt.getInteger(android.media.MediaFormat.KEY_MAX_INPUT_SIZE)
+                        if (trackMax > maxInputSize) maxInputSize = trackMax
+                    }
+                }
+                if (maxInputSize > readBuf.capacity()) {
+                    Log.d(TAG, "Seg $segIdx: growing readBuf ${readBuf.capacity()} → $maxInputSize bytes")
+                    readBuf = java.nio.ByteBuffer.allocate(maxInputSize)
+                }
 
                 // ── Build per-segment track map: mimePrefix → (extIdx, muxerTrack) ──
                 data class TrackEntry(val extIdx: Int, val muxerTrack: Int)
@@ -448,11 +483,38 @@ class ReelzDownloadEngine @Inject constructor(
                     }
                 }
 
-                // Start muxer after adding all tracks from seg 0
+                // Start muxer after adding all tracks from seg 0.
+                // R7 fix: some HLS streams have a silent first segment (pre-roll or bumper
+                // with video only). If segment 0 has no audio we scan up to 3 more segments
+                // before calling muxer.start() so audio is not silently dropped.
                 if (!muxerStarted) {
                     if (videoMuxerTrack < 0 && audioMuxerTrack < 0) {
                         Log.w(TAG, "Segment 0: no A/V tracks — aborting remux")
                         muxer.release(); tmpOut.delete(); return
+                    }
+                    if (audioMuxerTrack < 0 && segIdx == 0) {
+                        // Audio not found in seg 0 — scan the next 3 segments to look for it
+                        for (lookAhead in 1..3) {
+                            val lookFile = tsFiles.getOrNull(lookAhead)
+                                ?: break
+                            if (!lookFile.exists() || lookFile.length() == 0L) continue
+                            val lookExtractor = android.media.MediaExtractor()
+                            try {
+                                lookExtractor.setDataSource(lookFile.absolutePath)
+                                for (i in 0 until lookExtractor.trackCount) {
+                                    val fmt  = lookExtractor.getTrackFormat(i)
+                                    val mime = fmt.getString(android.media.MediaFormat.KEY_MIME) ?: continue
+                                    if (mime.startsWith("audio/") && audioMuxerTrack < 0) {
+                                        audioMuxerTrack = muxer.addTrack(fmt)
+                                        Log.d(TAG, "Audio track found in look-ahead seg$lookAhead, muxerTrack=$audioMuxerTrack")
+                                        break
+                                    }
+                                }
+                            } finally {
+                                lookExtractor.release()
+                            }
+                            if (audioMuxerTrack >= 0) break
+                        }
                     }
                     muxer.start()
                     muxerStarted = true
@@ -477,27 +539,43 @@ class ReelzDownloadEngine @Inject constructor(
                 var segAudioBase = Long.MAX_VALUE
 
                 // Peek first PTS without consuming samples (extractor is at start)
+                // R2 fix: On API 26-27 some MediaExtractor implementations for H.264 TS
+                // don't honour seekTo(0) correctly — the extractor may stay at the last
+                // read position. We seek once BEFORE track selection, then verify that
+                // sampleTime is actually 0 (or close to it). If not, we use 0 as the
+                // safe default so the PTS offset calculation is never corrupted.
                 if (videoEntry != null || audioEntry != null) {
-                    // Use seekTo(0) to ensure we're at start
                     extractor.seekTo(0, android.media.MediaExtractor.SEEK_TO_CLOSEST_SYNC)
 
-                    // Read up to 8 samples just to find first PTS per track
-                    var peeked = 0
-                    while (peeked < 16 && (segVideoBase == Long.MAX_VALUE || segAudioBase == Long.MAX_VALUE)) {
-                        val tidx = extractor.sampleTrackIndex
-                        val pts  = extractor.sampleTime
-                        if (pts >= 0) {
-                            when {
-                                videoEntry != null && tidx == videoEntry.extIdx && segVideoBase == Long.MAX_VALUE ->
-                                    segVideoBase = pts
-                                audioEntry != null && tidx == audioEntry.extIdx && segAudioBase == Long.MAX_VALUE ->
-                                    segAudioBase = pts
+                    // Verify seek actually landed at the start; if not, treat segBase = 0.
+                    val seekVerified = extractor.sampleTime.let { it < 0 || it < 1_000_000L }
+
+                    if (seekVerified) {
+                        // Read up to 16 samples just to find first PTS per track
+                        var peeked = 0
+                        while (peeked < 16 && (segVideoBase == Long.MAX_VALUE || segAudioBase == Long.MAX_VALUE)) {
+                            val tidx = extractor.sampleTrackIndex
+                            val pts  = extractor.sampleTime
+                            if (pts >= 0) {
+                                when {
+                                    videoEntry != null && tidx == videoEntry.extIdx && segVideoBase == Long.MAX_VALUE ->
+                                        segVideoBase = pts
+                                    audioEntry != null && tidx == audioEntry.extIdx && segAudioBase == Long.MAX_VALUE ->
+                                        segAudioBase = pts
+                                }
                             }
+                            if (!extractor.advance()) break
+                            peeked++
                         }
-                        if (!extractor.advance()) break
-                        peeked++
+                    } else {
+                        // seekTo(0) did not land at start (pre-API-28 OEM bug) — use 0 as
+                        // the safe default for segBase so PTS offsets are not corrupted.
+                        Log.w(TAG, "Seg $segIdx: seekTo(0) returned sampleTime=${extractor.sampleTime} (OEM bug); defaulting segBase=0")
+                        segVideoBase = 0L
+                        segAudioBase = 0L
                     }
-                    // Rewind to start
+
+                    // Rewind to start for the actual read loop
                     extractor.seekTo(0, android.media.MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                 }
 
@@ -600,8 +678,11 @@ class ReelzDownloadEngine @Inject constructor(
         muxer.stop()
         muxer.release()
 
-        // Atomic rename
+        // Move tmpOut → outFile. On API < 28 tmpOut is on internal storage while outFile
+        // may be on external, so renameTo() will always return false across mount points —
+        // fall back to copy+delete in that case (same pattern used for MP4 downloads).
         if (!tmpOut.renameTo(outFile)) {
+            Log.w(TAG, "remux renameTo() failed (API<28 cross-mount expected), copying instead")
             tmpOut.copyTo(outFile, overwrite = true)
             tmpOut.delete()
         }

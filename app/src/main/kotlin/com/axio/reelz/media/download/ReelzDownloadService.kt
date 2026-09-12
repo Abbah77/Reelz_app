@@ -134,7 +134,13 @@ class ReelzDownloadService : Service() {
 
     private fun resumeAllPaused() {
         scope.launch {
-            val paused = downloadDao.getByStatus("PAUSED") + downloadDao.getByStatus("QUEUED")
+            // R4 fix: include REMUXING rows — if the process was killed during remux the
+            // row stays in REMUXING state forever because it is never picked up here.
+            // The engine's downloadHls() will detect that outFile doesn't exist yet and
+            // re-attempt the full remux from the existing .ts segments, which is correct.
+            val paused = downloadDao.getByStatus("PAUSED") +
+                         downloadDao.getByStatus("QUEUED") +
+                         downloadDao.getByStatus("REMUXING")
             paused.forEach { row ->
                 val type = when {
                     row.streamUrl.contains(".m3u8", ignoreCase = true) -> "hls"

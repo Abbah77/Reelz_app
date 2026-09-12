@@ -92,6 +92,14 @@
     public static ** valueOf(java.lang.String);
 }
 
+# ── Transfer package ──────────────────────────────────────────────────────────
+# TransferItem, TransferItemStatus, EngineState, BeamPayload are used in
+# when-expressions on sealed classes and enum comparisons inside TransferManager
+# and P2pEngine. If ProGuard renames these the when() dispatch breaks at runtime
+# in release builds even though the debug build works fine.
+-keep class com.axio.reelz.transfer.** { *; }
+-keep sealed class com.axio.reelz.transfer.EngineState { *; }
+
 # ── Suppress common noise warnings ────────────────────────────────────────────
 -dontwarn org.bouncycastle.**
 -dontwarn org.conscrypt.**

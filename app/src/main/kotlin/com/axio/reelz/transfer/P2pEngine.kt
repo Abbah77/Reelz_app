@@ -110,8 +110,13 @@ data class BeamPayload(
     val ssid:       String = "",
     val password:   String = "",
 ) {
-    fun encode(): String =
-        "reelzbeam://$sessionId|$deviceName|$tier|$ip|$port|$ssid|$password"
+    fun encode(): String {
+        // R11 fix: URL-encode the device name so that pipe characters (|) in Xiaomi/Redmi
+        // model strings (e.g. "Redmi Note|8") don't shift subsequent fields and corrupt
+        // the payload. Decode symmetrically in decode().
+        val encodedName = java.net.URLEncoder.encode(deviceName, "UTF-8")
+        return "reelzbeam://$sessionId|$encodedName|$tier|$ip|$port|$ssid|$password"
+    }
 
     companion object {
         fun decode(raw: String): BeamPayload? = try {
@@ -120,7 +125,8 @@ data class BeamPayload(
             if (p.size < 5) null
             else BeamPayload(
                 sessionId  = p[0],
-                deviceName = p[1],
+                // R11 fix: URL-decode the device name to reverse the encoding in encode()
+                deviceName = java.net.URLDecoder.decode(p[1], "UTF-8"),
                 tier       = p[2],
                 ip         = p[3],
                 port       = p[4].toInt(),
@@ -553,7 +559,25 @@ class P2pEngine @Inject constructor(
                     }
                 }
                 override fun onFailed(reason: Int) {
-                    Log.w(TAG, "Hotspot start failed reason=$reason")
+                    // R8 fix: Huawei EMUI 9-13 and MIUI 12-14 silently call onFailed() when
+                    // a VPN or active mobile data connection blocks LocalOnlyHotspot.
+                    // On API 30+ the system exposes ERROR_TETHERING_DISALLOWED (3); surface
+                    // a specific message so the user knows what to change.
+                    val isTetheringDisallowed = android.os.Build.VERSION.SDK_INT >= 30 &&
+                            reason == 3 // WifiManager.LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED
+                    val errorMsg = if (isTetheringDisallowed) {
+                        "hotspot_tethering_disallowed"
+                    } else {
+                        "hotspot_failed_reason_$reason"
+                    }
+                    Log.w(TAG, "Hotspot start failed reason=$reason isTetheringDisallowed=$isTetheringDisallowed")
+                    _state.value = EngineState.Error(
+                        message = if (isTetheringDisallowed)
+                            "Could not create Wi-Fi connection. Disable VPN or mobile data hotspot blocking in Settings."
+                        else
+                            "Could not create Wi-Fi connection (error $reason).",
+                        retryable = true, kind = errorMsg
+                    )
                     cont.resume(null, null)
                 }
                 override fun onStopped() { Log.d(TAG, "Hotspot stopped") }
@@ -632,6 +656,16 @@ class P2pEngine @Inject constructor(
             return null  // pre-Q: no Network object, caller handles null
         }
 
+        // R9 fix: Samsung One UI 2.x (API 29) frequently triggers the system Wi-Fi picker
+        // dialog instead of connecting silently, so onAvailable() may never fire.
+        // Detect Samsung API 29 and use the legacy path directly to avoid the hang.
+        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
+            Build.MANUFACTURER.equals("samsung", ignoreCase = true)) {
+            Log.d(TAG, "Samsung API 29 detected — using legacy hotspot join path")
+            joinHotspotLegacy(ssid, password)
+            return null
+        }
+
         val cm = connectivityManager()
         releaseNetworkCallback()
 
@@ -669,7 +703,9 @@ class P2pEngine @Inject constructor(
             networkCallback = cb
 
             try {
-                cm.requestNetwork(request, cb)
+                // R9 fix: set a 20-second timeout so we never hang forever waiting for
+                // onAvailable (e.g. if the system shows a picker dialog the user ignores).
+                cm.requestNetwork(request, cb, 20_000)
             } catch (e: Exception) {
                 Log.w(TAG, "requestNetwork failed: ${e.message}")
                 networkCallback = null

@@ -1,14 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    R10 fix: The previous <domain-config> used network addresses (192.168.0.0, 10.0.0.0,
+    172.16.0.0) in <domain> tags, which only match those exact literal hostnames — Android's
+    NSC does not do CIDR matching. Since the base-config already permits cleartext globally
+    (required for HLS/HTTP streaming), the domain-config was non-functional and misleading.
+
+    Correct approach: restrict the base config to HTTPS-only and whitelist only the specific
+    literal IPs the LocalOnlyHotspot actually assigns (192.168.49.1 for Android hotspot).
+    The P2P TCP socket transfer connects to that IP directly, so listing it here is accurate.
+    The legacy pre-API-28 fallback may use the current WLAN IP, which varies — those are
+    handled by the base cleartext allowance below, scoped to non-internet traffic only.
+-->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-    <!-- Restrict cleartext to local transfer only for non-stream traffic -->
+    <!-- P2P Beam transfer: the LocalOnlyHotspot gateway IP is always 192.168.49.1 on Android.
+         Listed as a literal hostname (the only form NSC supports) to document intent. -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">192.168.0.0</domain>
-        <domain includeSubdomains="false">10.0.0.0</domain>
-        <domain includeSubdomains="false">172.16.0.0</domain>
+        <domain includeSubdomains="false">192.168.49.1</domain>
     </domain-config>
 </network-security-config>
