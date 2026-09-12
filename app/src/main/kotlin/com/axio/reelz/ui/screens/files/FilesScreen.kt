@@ -23,7 +23,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
-import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.data.model.*
 import com.axio.reelz.data.repository.DownloadRepository
 import com.axio.reelz.app.Route
@@ -37,26 +36,24 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Data structures
+// Data structures — backed by files table (FileItem), not downloads table
 // ─────────────────────────────────────────────────────────────────────────────
 
-data class MovieGroup(
-    val mediaId: String,
-    val title: String,
-    val posterPath: String?,
-    val downloads: List<DownloadItem>,
+/**
+ * A single movie quality entry shown as a flat row in the Movies list.
+ * Avatar(480p), Avatar(720p), Avatar(1080p) each become their own card.
+ */
+data class MovieFileCard(
+    val fileItem: FileItem,
 ) {
-    val doneDownloads: List<DownloadItem> get() = downloads.filter { it.status == DownloadStatus.DONE }
-    val totalSize: Long get() = doneDownloads.sumOf { it.sizeBytes }
-    val primaryDownload: DownloadItem get() =
-        doneDownloads.maxByOrNull { it.lastPlayedAt }
-            ?: doneDownloads.maxByOrNull { it.sizeBytes }
-            ?: downloads.first()
-    val watchProgressMs: Long get() = primaryDownload.watchProgressMs
-    val durationMs: Long get() = primaryDownload.durationMs
-    val lastPlayedAt: Long get() = primaryDownload.lastPlayedAt
-    val completedAt: Long get() = doneDownloads.maxOfOrNull { it.completedAt } ?: 0L
-    val hasMultipleQualities: Boolean get() = doneDownloads.size > 1
+    val title: String         get() = fileItem.title
+    val quality: String       get() = fileItem.quality
+    val posterPath: String?   get() = fileItem.posterUrl
+    val sizeBytes: Long       get() = fileItem.sizeBytes
+    val watchProgressMs: Long get() = fileItem.watchProgressMs
+    val durationMs: Long      get() = fileItem.durationMs
+    val lastPlayedAt: Long    get() = fileItem.lastPlayedAt
+    val addedAt: Long         get() = fileItem.addedAt
 }
 
 data class SeriesGroup(
@@ -66,12 +63,10 @@ data class SeriesGroup(
     val seasons: List<SeasonGroup>,
 ) {
     val totalEpisodes: Int get() = seasons.sumOf { it.episodeGroups.size }
-    val doneEpisodes: Int get() = seasons.sumOf { s -> s.episodeGroups.count { it.doneDownloads.isNotEmpty() } }
-    val isFullyDownloaded: Boolean get() = totalEpisodes > 0 && doneEpisodes == totalEpisodes
     val lastWatchedLabel: String? get() {
         val lastPlayed = seasons
             .flatMap { it.episodeGroups }
-            .flatMap { it.downloads }
+            .flatMap { it.files }
             .filter { it.lastPlayedAt > 0 }
             .maxByOrNull { it.lastPlayedAt }
         return lastPlayed?.let { "S%02dE%02d".format(it.season, it.episode) }
@@ -84,95 +79,79 @@ data class SeasonGroup(
     val season: Int,
     val episodeGroups: List<EpisodeGroup>,
 ) {
-    val doneCount: Int get() = episodeGroups.count { it.doneDownloads.isNotEmpty() }
-    val totalSize: Long get() = episodeGroups.sumOf { eg -> eg.doneDownloads.sumOf { it.sizeBytes } }
+    val totalSize: Long get() = episodeGroups.sumOf { it.totalSize }
 }
 
+/**
+ * All quality variants of one episode shown as separate rows inside the episode group.
+ * episode1(360p), episode1(1080p) — each listed explicitly, no hiding/switching.
+ */
 data class EpisodeGroup(
     val mediaId: String,
     val season: Int,
     val episode: Int,
     val episodeName: String,
     val posterPath: String?,
-    val downloads: List<DownloadItem>,
+    val files: List<FileItem>,         // all quality variants of this episode
 ) {
-    val doneDownloads: List<DownloadItem> get() = downloads.filter { it.status == DownloadStatus.DONE }
-    val primaryDownload: DownloadItem get() =
-        doneDownloads.maxByOrNull { it.lastPlayedAt }
-            ?: doneDownloads.maxByOrNull { it.sizeBytes }
-            ?: downloads.first()
-    val watchProgressMs: Long get() = primaryDownload.watchProgressMs
-    val durationMs: Long get() = primaryDownload.durationMs
-    val lastPlayedAt: Long get() = primaryDownload.lastPlayedAt
-    val hasMultipleQualities: Boolean get() = doneDownloads.size > 1
-    val totalSize: Long get() = doneDownloads.sumOf { it.sizeBytes }
+    val primaryFile: FileItem get() =
+        files.maxByOrNull { it.lastPlayedAt }
+            ?: files.maxByOrNull { it.sizeBytes }
+            ?: files.first()
+    val watchProgressMs: Long get() = primaryFile.watchProgressMs
+    val durationMs: Long      get() = primaryFile.durationMs
+    val lastPlayedAt: Long    get() = primaryFile.lastPlayedAt
+    val totalSize: Long       get() = files.sumOf { it.sizeBytes }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ViewModel
+// ViewModel — reads from files table, not downloads table
 // ─────────────────────────────────────────────────────────────────────────────
 
 @HiltViewModel
 class DownloadsViewModel @Inject constructor(
-    private val dao: DownloadDao,
     private val repo: DownloadRepository,
 ) : ViewModel() {
 
-    private val allDownloads: StateFlow<List<DownloadItem>> = repo.observeAll()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    // ── Movies: only DONE items appear in the library grid ───────────────────
-    val movieGroups: StateFlow<List<MovieGroup>> = allDownloads
-        .map { list ->
-            list.filter { it.mediaType == "MOVIE" && it.status == DownloadStatus.DONE }
-                .groupBy { it.mediaId }
-                .map { (mediaId, items) ->
-                    MovieGroup(
-                        mediaId    = mediaId,
-                        title      = items.first().title,
-                        posterPath = items.first().posterUrl,
-                        downloads  = items.sortedByDescending { it.sizeBytes },
-                    )
-                }
-                .sortedByDescending { it.completedAt }
-        }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    // ── Series: only series that have AT LEAST ONE fully done episode appear ─
-    //
-    // BUG FIX: Previously, ALL TV items were grouped (including DOWNLOADING,
-    // QUEUED, PAUSED) so a series appeared in the library immediately after
-    // download started.  Now we only include episodes whose status == DONE,
-    // and we only surface a SeriesGroup when it has at least one done episode.
-    //
-    val seriesGroups: StateFlow<List<SeriesGroup>> = allDownloads
-        .map { list ->
-            buildSeriesGroups(
-                // Only DONE episodes belong in the library list
-                list.filter { it.mediaType == "TV" && it.status == DownloadStatus.DONE }
-            )
-        }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    // ── Active: any non-DONE, non-cancelled state ─────────────────────────────
-    val activeDownloads: StateFlow<List<DownloadItem>> = allDownloads
+    // Active downloads (downloads table — in-progress only)
+    val activeDownloads: StateFlow<List<DownloadItem>> = repo.observeAll()
         .map { list ->
             list.filter {
                 it.status == DownloadStatus.DOWNLOADING
                     || it.status == DownloadStatus.QUEUED
                     || it.status == DownloadStatus.PAUSED
+                    || it.status == DownloadStatus.REMUXING
                     || it.status == DownloadStatus.ERROR
             }
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    val readyCount: StateFlow<Int> = allDownloads
-        .map { list -> list.count { it.status == DownloadStatus.DONE } }
+    // All files from files table
+    private val allFiles: StateFlow<List<FileItem>> = repo.observeFiles()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // Movies: each (mediaId + quality) = one flat card at the root
+    // Avatar(480p) and Avatar(720p) appear as two separate entries
+    val movieCards: StateFlow<List<MovieFileCard>> = allFiles
+        .map { list ->
+            list.filter { it.mediaType == "MOVIE" }
+                .map { MovieFileCard(it) }
+                .sortedByDescending { it.addedAt }
+        }
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // Series: grouped by show → season → episode, qualities listed per episode
+    val seriesGroups: StateFlow<List<SeriesGroup>> = allFiles
+        .map { list -> buildSeriesGroups(list.filter { it.mediaType == "TV" }) }
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val readyCount: StateFlow<Int> = allFiles
+        .map { it.size }
         .stateIn(viewModelScope, SharingStarted.Lazily, 0)
 
-    private fun buildSeriesGroups(items: List<DownloadItem>): List<SeriesGroup> =
+    private fun buildSeriesGroups(items: List<FileItem>): List<SeriesGroup> =
         items.groupBy { it.mediaId }
-            .map { (groupMediaId, eps) ->
+            .map { (mediaId, eps) ->
                 val seasons = eps
                     .groupBy { it.season }
                     .map { (season, seasonEps) ->
@@ -180,52 +159,58 @@ class DownloadsViewModel @Inject constructor(
                             .groupBy { it.episode }
                             .map { (_, epItems) ->
                                 EpisodeGroup(
-                                    mediaId     = groupMediaId,
+                                    mediaId     = mediaId,
                                     season      = epItems.first().season,
                                     episode     = epItems.first().episode,
                                     episodeName = epItems.firstOrNull()?.episodeName ?: "",
                                     posterPath  = epItems.firstOrNull()?.posterUrl,
-                                    downloads   = epItems.sortedByDescending { it.sizeBytes },
+                                    files       = epItems.sortedByDescending { it.sizeBytes },
                                 )
                             }
                             .sortedBy { it.episode }
                         SeasonGroup(season, episodeGroups)
                     }
                     .sortedBy { it.season }
-                SeriesGroup(groupMediaId, eps.first().title, eps.first().posterUrl, seasons)
+                SeriesGroup(mediaId, eps.first().title, eps.first().posterUrl, seasons)
             }
-            // Only include series that have at least 1 done episode
-            .filter { g -> g.doneEpisodes > 0 }
+            .filter { it.totalEpisodes > 0 }
             .sortedByDescending { g ->
-                g.seasons.flatMap { it.episodeGroups }.flatMap { it.downloads }
-                    .maxOfOrNull { it.completedAt } ?: 0L
+                g.seasons.flatMap { it.episodeGroups }.flatMap { it.files }
+                    .maxOfOrNull { it.addedAt } ?: 0L
             }
 
-    fun delete(item: DownloadItem, ctx: Context) { viewModelScope.launch { repo.delete(ctx, item) } }
-    fun deleteItems(items: List<DownloadItem>, ctx: Context) { viewModelScope.launch { items.forEach { repo.delete(ctx, it) } } }
-    fun resume(ctx: Context, item: DownloadItem) { viewModelScope.launch { repo.resume(ctx, item) } }
-    fun pause(ctx: Context, item: DownloadItem)  { viewModelScope.launch { repo.pause(ctx, item) } }
-
-    fun deleteMovieGroup(group: MovieGroup, ctx: Context) {
-        viewModelScope.launch { group.downloads.forEach { repo.delete(ctx, it) } }
+    fun deleteFile(item: FileItem, ctx: Context) {
+        viewModelScope.launch { repo.deleteFile(item) }
     }
+
+    fun deleteEpisodeGroup(eg: EpisodeGroup, ctx: Context) {
+        viewModelScope.launch { eg.files.forEach { repo.deleteFile(it) } }
+    }
+
     fun deleteSeries(group: SeriesGroup, ctx: Context) {
         viewModelScope.launch {
-            group.seasons.flatMap { it.episodeGroups }.flatMap { it.downloads }.forEach { repo.delete(ctx, it) }
+            group.seasons.flatMap { it.episodeGroups }.flatMap { it.files }.forEach { repo.deleteFile(it) }
         }
     }
+
     fun deleteSeason(season: SeasonGroup, ctx: Context) {
         viewModelScope.launch {
-            season.episodeGroups.flatMap { it.downloads }.forEach { repo.delete(ctx, it) }
+            season.episodeGroups.flatMap { it.files }.forEach { repo.deleteFile(it) }
         }
     }
-    fun deleteEpisodeGroup(eg: EpisodeGroup, ctx: Context) {
-        viewModelScope.launch { eg.downloads.forEach { repo.delete(ctx, it) } }
+
+    fun deleteMovieCard(card: MovieFileCard, ctx: Context) {
+        viewModelScope.launch { repo.deleteFile(card.fileItem) }
     }
+
+    // Active download controls
+    fun resume(ctx: Context, item: DownloadItem) { viewModelScope.launch { repo.resume(ctx, item) } }
+    fun pause(ctx: Context, item: DownloadItem)  { viewModelScope.launch { repo.pause(ctx, item) } }
+    fun cancelDownload(item: DownloadItem, ctx: Context) { viewModelScope.launch { repo.delete(ctx, item) } }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bottom sheet menu data
+// Bottom sheet menu
 // ─────────────────────────────────────────────────────────────────────────────
 
 data class MenuOption(
@@ -234,10 +219,6 @@ data class MenuOption(
     val isDestructive: Boolean = false,
     val onClick: () -> Unit,
 )
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Reusable bottom sheet menu (Netflix/YouTube style)
-// ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -249,12 +230,11 @@ private fun DownloadOptionsSheet(
 ) {
     val d = LocalDimensions.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState       = sheetState,
         containerColor   = BgCard,
-        dragHandle       = {
+        dragHandle = {
             Box(
                 Modifier
                     .padding(top = d.spaceMd)
@@ -275,23 +255,14 @@ private fun DownloadOptionsSheet(
                     .fillMaxWidth()
                     .padding(horizontal = d.screenHorizPad, vertical = d.spaceMd),
             ) {
-                Text(
-                    title,
-                    color      = White,
-                    fontSize   = d.textMd,
-                    fontWeight = FontWeight.Bold,
-                    maxLines   = 2,
-                    overflow   = TextOverflow.Ellipsis,
-                )
+                Text(title, color = White, fontSize = d.textMd, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (subtitle.isNotBlank()) {
                     Spacer(Modifier.height(d.spaceXxs))
                     Text(subtitle, color = White40, fontSize = d.textXs)
                 }
             }
-
             HorizontalDivider(color = GlassBorder, thickness = 0.5.dp)
             Spacer(Modifier.height(d.spaceXs))
-
             options.forEach { opt ->
                 Row(
                     Modifier
@@ -305,13 +276,9 @@ private fun DownloadOptionsSheet(
                         Modifier
                             .size(d.iconLg + d.spaceXs)
                             .clip(CircleShape)
-                            .background(
-                                if (opt.isDestructive) Error.copy(.12f) else GlassSm
-                            ),
+                            .background(if (opt.isDestructive) Error.copy(.12f) else GlassSm),
                         Alignment.Center,
-                    ) {
-                        Text(opt.icon, fontSize = d.textMd)
-                    }
+                    ) { Text(opt.icon, fontSize = d.textMd) }
                     Text(
                         opt.label,
                         color      = if (opt.isDestructive) Error else White,
@@ -325,14 +292,14 @@ private fun DownloadOptionsSheet(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Screen
+// Screen root
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 fun FilesScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = null, vm: DownloadsViewModel = hiltViewModel()) {
     val d               = LocalDimensions.current
     val ctx             = LocalContext.current
-    val movieGroups     by vm.movieGroups.collectAsState()
+    val movieCards      by vm.movieCards.collectAsState()
     val seriesGroups    by vm.seriesGroups.collectAsState()
     val activeDownloads by vm.activeDownloads.collectAsState()
     val readyCount      by vm.readyCount.collectAsState()
@@ -340,8 +307,7 @@ fun FilesScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = nul
 
     val showMovies = tab == 0 || tab == 1
     val showSeries = tab == 0 || tab == 2
-    // Empty = no finished content (active downloads live in the strip, not the library)
-    val isEmpty    = movieGroups.isEmpty() && seriesGroups.isEmpty()
+    val isEmpty    = movieCards.isEmpty() && seriesGroups.isEmpty()
 
     var seriesDetailGroup by remember { mutableStateOf<SeriesGroup?>(null) }
 
@@ -380,7 +346,7 @@ fun FilesScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = nul
                 item {
                     TabFilterBar(
                         selected    = tab,
-                        movieCount  = movieGroups.size,
+                        movieCount  = movieCards.size,
                         seriesCount = seriesGroups.size,
                         onSelect    = { tab = it },
                     )
@@ -388,34 +354,35 @@ fun FilesScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = nul
 
                 if (isEmpty && activeDownloads.isEmpty()) {
                     item { EmptyDownloadsState() }
-                    // Banner ad — shown when no active downloads (non-intrusive placement)
                     adEngine?.let { engine ->
                         item { com.axio.reelz.ads.FilesScreenBanner(engine) }
                     }
+                } else if (isEmpty) {
+                    item { LibraryPendingState() }
                 }
-                else if (isEmpty) { item { LibraryPendingState() } }
 
-                if (showMovies && movieGroups.isNotEmpty()) {
+                // ── Movies: flat list — every (title + quality) is its own card ──
+                if (showMovies && movieCards.isNotEmpty()) {
                     item {
                         SectionLabel(
                             "Movies",
-                            "${movieGroups.size} title${if (movieGroups.size > 1) "s" else ""}",
+                            "${movieCards.size} file${if (movieCards.size > 1) "s" else ""}",
                             modifier = Modifier.padding(horizontal = d.screenHorizPad, vertical = d.spaceSm),
                         )
                     }
-                    items(movieGroups, key = { "mg-${it.mediaId}" }) { group ->
-                        MovieGroupCard(
-                            group           = group,
-                            onPlay          = { item -> playDownload(ctx, item) },
-                            onDelete        = { vm.deleteMovieGroup(group, ctx) },
-                            onDeleteQuality = { item -> vm.delete(item, ctx) },
-                            modifier        = Modifier
+                    items(movieCards, key = { "mc-${it.fileItem.id}" }) { card ->
+                        MovieFileCardRow(
+                            card     = card,
+                            onPlay   = { playFile(ctx, card.fileItem) },
+                            onDelete = { vm.deleteMovieCard(card, ctx) },
+                            modifier = Modifier
                                 .padding(horizontal = d.screenHorizPad)
                                 .padding(bottom = d.spaceSm + d.spaceXxs),
                         )
                     }
                 }
 
+                // ── TV Shows ──────────────────────────────────────────────────
                 if (showSeries && seriesGroups.isNotEmpty()) {
                     item {
                         SectionLabel(
@@ -431,14 +398,13 @@ fun FilesScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = nul
                             onPlay   = {
                                 val lastEp = group.seasons
                                     .flatMap { it.episodeGroups }
-                                    .flatMap { it.downloads }
-                                    .filter { it.status == DownloadStatus.DONE && it.lastPlayedAt > 0 }
+                                    .flatMap { it.files }
+                                    .filter { it.lastPlayedAt > 0 }
                                     .maxByOrNull { it.lastPlayedAt }
-                                val firstEp = group.seasons
-                                    .firstOrNull()?.episodeGroups?.firstOrNull()
-                                    ?.doneDownloads?.firstOrNull()
+                                val firstEp = group.seasons.firstOrNull()
+                                    ?.episodeGroups?.firstOrNull()?.primaryFile
                                 val toPlay = lastEp ?: firstEp
-                                if (toPlay != null) playDownload(ctx, toPlay)
+                                if (toPlay != null) playFile(ctx, toPlay)
                             },
                             onDelete = { vm.deleteSeries(group, ctx) },
                             modifier = Modifier
@@ -466,33 +432,21 @@ private fun SeriesDetailPage(
     val d = LocalDimensions.current
     var selectedSeason by remember { mutableStateOf(group.seasons.firstOrNull()?.season ?: 1) }
     val currentSeason = group.seasons.firstOrNull { it.season == selectedSeason } ?: group.seasons.firstOrNull()
-    val episodeListState = rememberLazyListState()
+    val listState = rememberLazyListState()
     var showSeasonMenu by remember { mutableStateOf(false) }
 
-    LaunchedEffect(selectedSeason) { episodeListState.scrollToItem(0) }
+    LaunchedEffect(selectedSeason) { listState.scrollToItem(0) }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Bg)
-            .statusBarsPadding()
-    ) {
+    Column(Modifier.fillMaxSize().background(Bg).statusBarsPadding()) {
+        // Header
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = d.screenHorizPad, vertical = d.spaceMd),
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad, vertical = d.spaceMd),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier
-                    .size(d.iconLg + d.spaceSm)
-                    .clip(CircleShape)
-                    .background(GlassMd)
-                    .clickable(onClick = onBack),
+                Modifier.size(d.iconLg + d.spaceSm).clip(CircleShape).background(GlassMd).clickable(onClick = onBack),
                 Alignment.Center,
-            ) {
-                Text("←", color = White, fontSize = d.textLg, fontWeight = FontWeight.Bold)
-            }
+            ) { Text("←", color = White, fontSize = d.textLg, fontWeight = FontWeight.Bold) }
             Spacer(Modifier.width(d.spaceMd))
             Text(
                 group.title,
@@ -505,18 +459,14 @@ private fun SeriesDetailPage(
             )
             if (currentSeason != null) {
                 Box(
-                    Modifier
-                        .size(d.iconLg + d.spaceSm)
-                        .clip(CircleShape)
-                        .background(GlassMd)
+                    Modifier.size(d.iconLg + d.spaceSm).clip(CircleShape).background(GlassMd)
                         .clickable { showSeasonMenu = true },
                     Alignment.Center,
-                ) {
-                    Text("⋮", color = White60, fontSize = d.textLg)
-                }
+                ) { Text("⋮", color = White60, fontSize = d.textLg) }
             }
         }
 
+        // Season tabs
         LazyRow(
             contentPadding = PaddingValues(horizontal = d.screenHorizPad),
             horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
@@ -548,8 +498,9 @@ private fun SeriesDetailPage(
 
         HorizontalDivider(color = GlassBorder, thickness = 0.5.dp)
 
+        // Episode list — each episode shows all its quality variants as separate rows
         LazyColumn(
-            state = episodeListState,
+            state = listState,
             contentPadding = PaddingValues(horizontal = d.screenHorizPad, vertical = d.spaceMd),
             verticalArrangement = Arrangement.spacedBy(d.spaceSm),
         ) {
@@ -557,9 +508,9 @@ private fun SeriesDetailPage(
                 items(currentSeason.episodeGroups, key = { "eg-${it.mediaId}-${it.season}-${it.episode}" }) { eg ->
                     EpisodeGroupCard(
                         eg              = eg,
-                        onPlay          = { item -> playDownload(ctx, item) },
-                        onDelete        = { vm.deleteEpisodeGroup(eg, ctx) },
-                        onDeleteQuality = { item -> vm.delete(item, ctx) },
+                        onPlayFile      = { file -> playFile(ctx, file) },
+                        onDeleteFile    = { file -> vm.deleteFile(file, ctx) },
+                        onDeleteAll     = { vm.deleteEpisodeGroup(eg, ctx) },
                     )
                 }
             }
@@ -567,10 +518,9 @@ private fun SeriesDetailPage(
     }
 
     if (showSeasonMenu && currentSeason != null) {
-        val seasonSizeStr = formatSize(currentSeason.totalSize)
         DownloadOptionsSheet(
             title    = "Season ${currentSeason.season}",
-            subtitle = "${currentSeason.episodeGroups.size} episodes · $seasonSizeStr",
+            subtitle = "${currentSeason.episodeGroups.size} episodes · ${formatSize(currentSeason.totalSize)}",
             options  = listOf(
                 MenuOption("🗑", "Delete Season ${currentSeason.season}", isDestructive = true) {
                     vm.deleteSeason(currentSeason, ctx)
@@ -589,9 +539,7 @@ private fun SeriesDetailPage(
 private fun DownloadsHeader(readyCount: Int, activeCount: Int, onTransfer: () -> Unit) {
     val d = LocalDimensions.current
     Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = d.screenHorizPad + d.spaceXxs, vertical = d.spaceLg),
+        Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad + d.spaceXxs, vertical = d.spaceLg),
         verticalAlignment = Alignment.Top,
     ) {
         Column(Modifier.weight(1f)) {
@@ -620,7 +568,6 @@ private fun DownloadsHeader(readyCount: Int, activeCount: Int, onTransfer: () ->
                 )
             }
         }
-
         Row(
             Modifier
                 .clip(RoundedCornerShape(d.radiusPill))
@@ -638,7 +585,7 @@ private fun DownloadsHeader(readyCount: Int, activeCount: Int, onTransfer: () ->
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Active Queue Strip
+// Active Queue Strip (shows in-progress downloads, not files)
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -651,9 +598,7 @@ private fun ActiveQueueStrip(
     val d = LocalDimensions.current
     Column(Modifier.padding(bottom = d.spaceLg)) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = d.screenHorizPad, vertical = d.spaceXs),
+            Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad, vertical = d.spaceXs),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -666,9 +611,7 @@ private fun ActiveQueueStrip(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
             ) {
-                Box(
-                    Modifier.size(d.spaceXs + 2.dp).clip(CircleShape).background(Brand.copy(alpha = pulseAlpha))
-                )
+                Box(Modifier.size(d.spaceXs + 2.dp).clip(CircleShape).background(Brand.copy(alpha = pulseAlpha)))
                 Text(
                     "ACTIVE",
                     color         = White40,
@@ -688,7 +631,6 @@ private fun ActiveQueueStrip(
                     .padding(horizontal = d.spaceSm, vertical = d.spaceXxs),
             )
         }
-
         LazyRow(
             contentPadding = PaddingValues(horizontal = d.screenHorizPad),
             horizontalArrangement = Arrangement.spacedBy(d.spaceMd),
@@ -698,7 +640,7 @@ private fun ActiveQueueStrip(
                     item     = item,
                     onPause  = { vm.pause(ctx, item) },
                     onResume = { vm.resume(ctx, item) },
-                    onCancel = { vm.delete(item, ctx) },
+                    onCancel = { vm.cancelDownload(item, ctx) },
                 )
             }
         }
@@ -712,16 +654,16 @@ private fun ActiveQueueCard(
     onResume: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val d = LocalDimensions.current
-    val isDownloading = item.status == DownloadStatus.DOWNLOADING
-    val isPaused      = item.status == DownloadStatus.PAUSED
-    val isQueued      = item.status == DownloadStatus.QUEUED
-    val isError       = item.status == DownloadStatus.ERROR
+    val d           = LocalDimensions.current
+    val isRemuxing  = item.status == DownloadStatus.REMUXING
+    val isDownloading = item.status == DownloadStatus.DOWNLOADING || isRemuxing
+    val isPaused    = item.status == DownloadStatus.PAUSED
+    val isQueued    = item.status == DownloadStatus.QUEUED
+    val isError     = item.status == DownloadStatus.ERROR
 
-    // Compute progress — prefer segment-based, fall back to byte-based
-    val pct = downloadProgress(item)
+    val pct     = downloadProgress(item)
     val animPct by animateFloatAsState(pct.coerceIn(0f, 1f), label = "aq-pct")
-    val cardW = d.continueCardWidth + d.spaceLg
+    val cardW   = d.continueCardWidth + d.spaceLg
 
     Row(
         Modifier
@@ -739,23 +681,11 @@ private fun ActiveQueueCard(
                 .clip(RoundedCornerShape(d.radiusSm))
                 .background(BgRaised),
         ) {
-            AsyncImage(
-                model = item.posterUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
+            AsyncImage(model = item.posterUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         }
 
         Column(Modifier.weight(1f)) {
-            Text(
-                item.title,
-                color      = White,
-                fontSize   = d.textXs,
-                fontWeight = FontWeight.SemiBold,
-                maxLines   = 1,
-                overflow   = TextOverflow.Ellipsis,
-            )
+            Text(item.title, color = White, fontSize = d.textXs, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (item.mediaType == "TV" && item.season > 0) {
                 Text("S${item.season}E${item.episode}", color = White40, fontSize = (d.textXxs.value + 0.5f).sp)
             }
@@ -763,23 +693,21 @@ private fun ActiveQueueCard(
                 Text(item.quality, color = Brand.copy(.8f), fontSize = (d.textXxs.value + 0.5f).sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(d.spaceXxs + 2.dp))
-            Box(
-                Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)
-            ) {
+
+            Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(GlassMd)) {
                 Box(
-                    Modifier
-                        .fillMaxWidth(animPct)
-                        .fillMaxHeight()
-                        .background(
-                            brush = when {
-                                isError  -> SolidColor(Error)
-                                isPaused -> SolidColor(White40)
-                                isQueued -> SolidColor(White20)
-                                else     -> Brush.horizontalGradient(listOf(Brand, Brand2))
-                            }
-                        )
+                    Modifier.fillMaxWidth(animPct).fillMaxHeight().background(
+                        brush = when {
+                            isError   -> SolidColor(Error)
+                            isPaused  -> SolidColor(White40)
+                            isQueued  -> SolidColor(White20)
+                            isRemuxing -> SolidColor(Color(0xFFFF9800))
+                            else      -> Brush.horizontalGradient(listOf(Brand, Brand2))
+                        }
+                    )
                 )
             }
+
             Spacer(Modifier.height(d.spaceXxs))
             Row(
                 Modifier.fillMaxWidth(),
@@ -788,40 +716,34 @@ private fun ActiveQueueCard(
             ) {
                 Text(
                     when {
-                        isQueued -> "Waiting…"
-                        isError  -> "Failed"
-                        isPaused -> "${(pct * 100).toInt()}% · Paused"
-                        else     -> "${(pct * 100).toInt()}%"
+                        isQueued   -> "Waiting…"
+                        isError    -> "Failed"
+                        isRemuxing -> "Converting…"
+                        isPaused   -> "${(pct * 100).toInt()}% · Paused"
+                        else       -> "${(pct * 100).toInt()}%"
                     },
                     color    = if (isDownloading) Success.copy(.85f) else White40,
                     fontSize = (d.textXxs.value + 0.5f).sp,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(d.spaceXs)) {
-                    Box(
-                        Modifier
-                            .size(d.iconMd + d.spaceXxs)
-                            .clip(CircleShape)
-                            .background(GlassMd)
-                            .clickable(onClick = if (isDownloading) onPause else onResume),
-                        Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = if (isDownloading) IconPause else IconPlay,
-                            contentDescription = null,
-                            tint     = if (isPaused || isError) Brand else White60,
-                            modifier = Modifier.size(d.iconSm - 4.dp),
-                        )
+                    if (!isRemuxing) {
+                        Box(
+                            Modifier.size(d.iconMd + d.spaceXxs).clip(CircleShape).background(GlassMd)
+                                .clickable(onClick = if (isDownloading) onPause else onResume),
+                            Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = if (isDownloading) IconPause else IconPlay,
+                                contentDescription = null,
+                                tint     = if (isPaused || isError) Brand else White60,
+                                modifier = Modifier.size(d.iconSm - 4.dp),
+                            )
+                        }
                     }
                     Box(
-                        Modifier
-                            .size(d.iconMd + d.spaceXxs)
-                            .clip(CircleShape)
-                            .background(GlassMd)
-                            .clickable(onClick = onCancel),
+                        Modifier.size(d.iconMd + d.spaceXxs).clip(CircleShape).background(GlassMd).clickable(onClick = onCancel),
                         Alignment.Center,
-                    ) {
-                        Text("✕", color = White40, fontSize = (d.textXxs.value + 1f).sp)
-                    }
+                    ) { Text("✕", color = White40, fontSize = (d.textXxs.value + 1f).sp) }
                 }
             }
         }
@@ -829,64 +751,31 @@ private fun ActiveQueueCard(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tab Filter Bar
+// Tab filter bar
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun TabFilterBar(
-    selected: Int,
-    movieCount: Int,
-    seriesCount: Int,
-    onSelect: (Int) -> Unit,
-) {
+private fun TabFilterBar(selected: Int, movieCount: Int, seriesCount: Int, onSelect: (Int) -> Unit) {
     val d = LocalDimensions.current
-    val tabs = listOf(
-        "All"    to null,
-        "Movies" to movieCount,
-        "Shows"  to seriesCount,
-    )
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad),
-        horizontalArrangement = Arrangement.spacedBy(d.spaceXs + 1.dp),
-    ) {
+    val tabs = listOf("All" to null, "Movies" to movieCount, "Shows" to seriesCount)
+    Row(Modifier.fillMaxWidth().padding(horizontal = d.screenHorizPad), horizontalArrangement = Arrangement.spacedBy(d.spaceXs + 1.dp)) {
         tabs.forEachIndexed { i, (label, count) ->
             val isSelected = selected == i
             Box(
                 Modifier
                     .clip(RoundedCornerShape(d.radiusPill))
-                    .background(
-                        if (isSelected) Brush.horizontalGradient(listOf(BrandDeep.copy(.9f), Brand.copy(.8f)))
-                        else SolidColor(GlassSm)
-                    )
+                    .background(if (isSelected) Brush.horizontalGradient(listOf(BrandDeep.copy(.9f), Brand.copy(.8f))) else SolidColor(GlassSm))
                     .border(1.dp, if (isSelected) Brand.copy(.5f) else GlassBorderMd, RoundedCornerShape(d.radiusPill))
                     .clickable { onSelect(i) }
                     .padding(horizontal = d.spaceLg - d.spaceXxs, vertical = d.spaceSm + d.spaceXxs),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                ) {
-                    Text(
-                        label,
-                        color      = if (isSelected) White else White40,
-                        fontSize   = d.textSm,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp)) {
+                    Text(label, color = if (isSelected) White else White40, fontSize = d.textSm, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)
                     if (count != null && count > 0) {
                         Box(
-                            Modifier
-                                .clip(CircleShape)
-                                .background(if (isSelected) White20 else GlassMd)
-                                .padding(horizontal = d.spaceXs, vertical = 1.dp),
+                            Modifier.clip(CircleShape).background(if (isSelected) White20 else GlassMd).padding(horizontal = d.spaceXs, vertical = 1.dp),
                             Alignment.Center,
-                        ) {
-                            Text(
-                                "$count",
-                                color      = if (isSelected) White else White40,
-                                fontSize   = (d.textXxs.value + 0.5f).sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
+                        ) { Text("$count", color = if (isSelected) White else White40, fontSize = (d.textXxs.value + 0.5f).sp, fontWeight = FontWeight.Bold) }
                     }
                 }
             }
@@ -902,19 +791,10 @@ private fun TabFilterBar(
 @Composable
 private fun SectionLabel(title: String, subtitle: String, modifier: Modifier = Modifier) {
     val d = LocalDimensions.current
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-        ) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceSm)) {
             Box(
-                Modifier
-                    .width(d.sectionAccentWidth)
-                    .height(d.sectionAccentHeight + d.spaceXxs)
+                Modifier.width(d.sectionAccentWidth).height(d.sectionAccentHeight + d.spaceXxs)
                     .clip(RoundedCornerShape(d.radiusPill))
                     .background(Brush.verticalGradient(listOf(Brand, Brand.copy(.3f))))
             )
@@ -925,25 +805,23 @@ private fun SectionLabel(title: String, subtitle: String, modifier: Modifier = M
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Movie Group Card
+// Movie file card — one card per (title + quality), flat at root
+// e.g. Avatar(480p) and Avatar(720p) are two separate rows
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun MovieGroupCard(
-    group: MovieGroup,
-    onPlay: (DownloadItem) -> Unit,
+fun MovieFileCardRow(
+    card: MovieFileCard,
+    onPlay: () -> Unit,
     onDelete: () -> Unit,
-    onDeleteQuality: (DownloadItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val d = LocalDimensions.current
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
-    val primary = group.primaryDownload
-    val doneDownloads = group.doneDownloads
 
-    val watchFraction = if (group.durationMs > 0) (group.watchProgressMs.toFloat() / group.durationMs).coerceIn(0f, 1f) else 0f
-    val hasProgress = group.watchProgressMs > 0 && group.durationMs > 0
+    val watchFraction = if (card.durationMs > 0) (card.watchProgressMs.toFloat() / card.durationMs).coerceIn(0f, 1f) else 0f
+    val hasProgress = card.watchProgressMs > 0 && card.durationMs > 0
 
     Box(
         modifier
@@ -953,44 +831,29 @@ fun MovieGroupCard(
             .border(1.dp, Success.copy(.2f), RoundedCornerShape(d.radiusLg - d.spaceXxs))
     ) {
         Box(
-            Modifier
-                .width(3.dp).fillMaxHeight()
+            Modifier.width(3.dp).fillMaxHeight()
                 .background(Brush.verticalGradient(listOf(Success.copy(.8f), Success.copy(.3f))))
                 .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
         )
 
         Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.CenterVertically) {
-            // Slim poster — same proportional thumb used in ActiveDownloadCard
             Box(
                 Modifier
                     .width(d.avatarMd + d.spaceXxs + 2.dp)
                     .height(d.avatarLg + d.spaceXxs)
                     .clip(RoundedCornerShape(d.radiusSm + 2.dp))
                     .background(BgRaised)
-                    .clickable { onPlay(primary) }
+                    .clickable(onClick = onPlay)
             ) {
-                AsyncImage(
-                    model = primary.posterUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                AsyncImage(model = card.posterPath, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(.35f)), Alignment.Center) {
                     Box(
-                        Modifier.size(d.iconLg).clip(CircleShape)
-                            .background(Color.Black.copy(.55f))
-                            .border(1.5.dp, White60, CircleShape),
+                        Modifier.size(d.iconLg).clip(CircleShape).background(Color.Black.copy(.55f)).border(1.5.dp, White60, CircleShape),
                         Alignment.Center,
-                    ) {
-                        Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp))
-                    }
+                    ) { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp)) }
                 }
                 if (hasProgress) {
-                    Box(
-                        Modifier.fillMaxWidth().height(3.dp)
-                            .background(Color.Black.copy(.5f))
-                            .align(Alignment.BottomCenter)
-                    ) {
+                    Box(Modifier.fillMaxWidth().height(3.dp).background(Color.Black.copy(.5f)).align(Alignment.BottomCenter)) {
                         Box(Modifier.fillMaxWidth(watchFraction).fillMaxHeight().background(Brand))
                     }
                 }
@@ -999,42 +862,29 @@ fun MovieGroupCard(
             Spacer(Modifier.width(d.spaceMd))
 
             Column(Modifier.weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    // Title (quality) — e.g. "Avatar (720p)"
                     Text(
-                        primary.title,
+                        "${card.title} (${card.quality})",
                         color      = White,
                         fontSize   = d.textMd,
                         fontWeight = FontWeight.Bold,
-                        maxLines   = 1,
+                        maxLines   = 2,
                         overflow   = TextOverflow.Ellipsis,
                         modifier   = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(d.spaceXs))
                     Box(
-                        Modifier
-                            .size(d.iconLg)
-                            .clip(CircleShape)
-                            .background(GlassMd)
-                            .clickable { showMenu = true },
+                        Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd).clickable { showMenu = true },
                         Alignment.Center,
                     ) { Text("⋮", color = White60, fontSize = d.textMd) }
                 }
 
                 Spacer(Modifier.height(d.spaceXxs))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
+
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(Modifier.weight(1f)) {
-                        if (group.totalSize > 0) {
-                            Text(formatSize(group.totalSize), color = White40, fontSize = d.textXs)
-                        }
-                        MultiQualityBadges(doneDownloads.map { it.quality })
+                        if (card.sizeBytes > 0) Text(formatSize(card.sizeBytes), color = White40, fontSize = d.textXs)
                         Spacer(Modifier.height(d.spaceXxs))
                         Text(
                             when {
@@ -1042,7 +892,7 @@ fun MovieGroupCard(
                                     val pct = (watchFraction * 100).toInt()
                                     if (pct >= 95) "Watched" else "$pct% watched"
                                 }
-                                group.lastPlayedAt > 0 -> "Played recently"
+                                card.lastPlayedAt > 0 -> "Played recently"
                                 else -> "Not opened"
                             },
                             color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
@@ -1055,13 +905,10 @@ fun MovieGroupCard(
                             .clip(RoundedCornerShape(d.radiusPill))
                             .background(Brand.copy(.15f))
                             .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
-                            .clickable { onPlay(primary) }
+                            .clickable(onClick = onPlay)
                             .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 2.dp),
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp)) {
                             Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm - 1.dp))
                             Text("Play", color = Brand, fontSize = d.textXs, fontWeight = FontWeight.Bold)
                         }
@@ -1072,31 +919,21 @@ fun MovieGroupCard(
     }
 
     if (showMenu) {
-        val qualityOptions = if (doneDownloads.size > 1)
-            doneDownloads.map { item ->
-                MenuOption("🗑", "Delete ${item.quality} (${formatSize(item.sizeBytes)})", isDestructive = true) {
-                    onDeleteQuality(item)
-                    showMenu = false
-                }
-            }
-        else emptyList()
-
         DownloadOptionsSheet(
-            title    = primary.title,
-            subtitle = formatSize(group.totalSize),
-            options  = buildList {
-                add(MenuOption("▶", "Play") { onPlay(primary); showMenu = false })
-                addAll(qualityOptions)
-                add(MenuOption("🗑", "Delete All", isDestructive = true) { showDeleteDialog = true; showMenu = false })
-            },
+            title    = "${card.title} (${card.quality})",
+            subtitle = if (card.sizeBytes > 0) formatSize(card.sizeBytes) else "",
+            options  = listOf(
+                MenuOption("▶", "Play") { onPlay(); showMenu = false },
+                MenuOption("🗑", "Delete", isDestructive = true) { showDeleteDialog = true; showMenu = false },
+            ),
             onDismiss = { showMenu = false },
         )
     }
 
     if (showDeleteDialog) {
         ReelzDeleteDialog(
-            title     = "Delete \"${primary.title}\"?",
-            message   = "This will remove all ${doneDownloads.size} version${if (doneDownloads.size > 1) "s" else ""} (${formatSize(group.totalSize)}) from your device.",
+            title     = "Delete \"${card.title} (${card.quality})\"?",
+            message   = "This will remove this file (${formatSize(card.sizeBytes)}) from your device.",
             onDelete  = { onDelete(); showDeleteDialog = false },
             onDismiss = { showDeleteDialog = false },
         )
@@ -1118,6 +955,7 @@ fun SeriesRootCard(
     val d = LocalDimensions.current
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    val totalEpisodes = group.totalEpisodes
 
     Box(
         modifier
@@ -1128,7 +966,6 @@ fun SeriesRootCard(
             .clickable(onClick = onTap)
     ) {
         Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.CenterVertically) {
-            // Slim poster — same height as ActiveDownloadCard
             Box(
                 Modifier
                     .width(d.avatarMd + d.spaceXxs + 2.dp)
@@ -1136,23 +973,10 @@ fun SeriesRootCard(
                     .clip(RoundedCornerShape(d.radiusSm + 2.dp))
                     .background(BgRaised)
             ) {
-                AsyncImage(
-                    model = group.posterPath,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                if (group.isFullyDownloaded) {
-                    Box(
-                        Modifier.fillMaxSize().background(Success.copy(.25f)),
-                        Alignment.Center,
-                    ) { Text("✓", color = Success, fontSize = d.textLg, fontWeight = FontWeight.Black) }
-                }
+                AsyncImage(model = group.posterPath, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(.25f)), Alignment.Center) {
                     Box(
-                        Modifier.size(d.iconLg).clip(CircleShape)
-                            .background(Color.Black.copy(.5f))
-                            .border(1.5.dp, White60, CircleShape),
+                        Modifier.size(d.iconLg).clip(CircleShape).background(Color.Black.copy(.5f)).border(1.5.dp, White60, CircleShape),
                         Alignment.Center,
                     ) { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp)) }
                 }
@@ -1161,41 +985,22 @@ fun SeriesRootCard(
             Spacer(Modifier.width(d.spaceMd))
 
             Column(Modifier.weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        group.title,
-                        color      = White,
-                        fontSize   = d.textMd,
-                        fontWeight = FontWeight.Bold,
-                        maxLines   = 1,
-                        overflow   = TextOverflow.Ellipsis,
-                        modifier   = Modifier.weight(1f),
-                    )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(group.title, color = White, fontSize = d.textMd, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(d.spaceXs))
                     Box(
-                        Modifier
-                            .size(d.iconLg)
-                            .clip(CircleShape)
-                            .background(GlassMd)
-                            .clickable(onClick = { showMenu = true }),
+                        Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd).clickable { showMenu = true },
                         Alignment.Center,
                     ) { Text("⋮", color = White60, fontSize = d.textMd) }
                 }
 
                 Spacer(Modifier.height(d.spaceXxs))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
+
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             buildString {
-                                append("${group.doneEpisodes} ep · ${group.seasonCount} season${if (group.seasonCount > 1) "s" else ""}")
+                                append("$totalEpisodes ep · ${group.seasonCount} season${if (group.seasonCount > 1) "s" else ""}")
                                 if (group.totalSize > 0) append(" · ${formatSize(group.totalSize)}")
                             },
                             color = White40, fontSize = d.textXs,
@@ -1213,10 +1018,7 @@ fun SeriesRootCard(
                             .clickable(onClick = onPlay)
                             .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 2.dp),
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp)) {
                             Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm - 1.dp))
                             Text("Play", color = Brand, fontSize = d.textXs, fontWeight = FontWeight.Bold)
                         }
@@ -1229,7 +1031,7 @@ fun SeriesRootCard(
     if (showMenu) {
         DownloadOptionsSheet(
             title    = group.title,
-            subtitle = "${group.doneEpisodes} episodes · ${group.seasonCount} season${if (group.seasonCount > 1) "s" else ""}${if (group.totalSize > 0) " · ${formatSize(group.totalSize)}" else ""}",
+            subtitle = "$totalEpisodes episodes · ${group.seasonCount} season${if (group.seasonCount > 1) "s" else ""}${if (group.totalSize > 0) " · ${formatSize(group.totalSize)}" else ""}",
             options  = listOf(
                 MenuOption("▶", "Resume Watching") { onPlay(); showMenu = false },
                 MenuOption("📂", "Browse Episodes") { onTap(); showMenu = false },
@@ -1250,214 +1052,199 @@ fun SeriesRootCard(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Episode group card (inside series detail page)
+// Episode group card — shows all quality variants as separate rows
+// e.g. Episode 1 (360p), Episode 1 (1080p) listed individually with 3-dot menu
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 fun EpisodeGroupCard(
     eg: EpisodeGroup,
-    onPlay: (DownloadItem) -> Unit,
-    onDelete: () -> Unit,
-    onDeleteQuality: (DownloadItem) -> Unit,
+    onPlayFile: (FileItem) -> Unit,
+    onDeleteFile: (FileItem) -> Unit,
+    onDeleteAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val d = LocalDimensions.current
-    var showMenu by remember { mutableStateOf(false) }
-    var showDeleteDialog by remember { mutableStateOf(false) }
-    val primary = eg.primaryDownload
-    val doneDownloads = eg.doneDownloads
+    var showGroupMenu by remember { mutableStateOf(false) }
+    var showDeleteAllDialog by remember { mutableStateOf(false) }
     val label = if (eg.episodeName.isNotBlank()) eg.episodeName else "Episode ${eg.episode}"
 
-    val watchFraction = if (eg.durationMs > 0) (eg.watchProgressMs.toFloat() / eg.durationMs).coerceIn(0f, 1f) else 0f
-    val hasProgress = eg.watchProgressMs > 0 && eg.durationMs > 0
-
-    Box(
+    Column(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
             .background(BgCard)
-            .border(1.dp, if (doneDownloads.isNotEmpty()) Success.copy(.15f) else GlassBorderMd, RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .border(1.dp, Success.copy(.15f), RoundedCornerShape(d.radiusLg - d.spaceXxs))
     ) {
-        if (doneDownloads.isNotEmpty()) {
-            Box(
-                Modifier.width(3.dp).fillMaxHeight()
-                    .background(Brush.verticalGradient(listOf(Success.copy(.7f), Success.copy(.2f))))
-                    .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
+        // Episode header row
+        Box(
+            Modifier.width(3.dp).height(2.dp)
+                .background(Brush.verticalGradient(listOf(Success.copy(.7f), Success.copy(.2f))))
+                .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
+        )
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = d.spaceMd, vertical = d.spaceSm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                "E${eg.episode}${if (eg.episodeName.isNotBlank()) " · ${eg.episodeName}" else ""}",
+                color      = White60,
+                fontSize   = d.textXs,
+                fontWeight = FontWeight.SemiBold,
+                modifier   = Modifier.weight(1f),
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
             )
+            if (eg.files.size > 1) {
+                Box(
+                    Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd).clickable { showGroupMenu = true },
+                    Alignment.Center,
+                ) { Text("⋮", color = White60, fontSize = d.textMd) }
+            }
         }
 
-        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.CenterVertically) {
-            // 16:9 thumbnail — same slim height as all other cards
-            Box(
-                Modifier
-                    .width(d.avatarMd + d.spaceXxs + 2.dp)
-                    .height(d.avatarLg + d.spaceXxs)
-                    .clip(RoundedCornerShape(d.radiusSm + 2.dp))
-                    .background(BgRaised)
-                    .clickable { onPlay(primary) }
-            ) {
-                AsyncImage(
-                    model = primary.posterUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(.35f)), Alignment.Center) {
-                    Box(
-                        Modifier.size(d.iconLg).clip(CircleShape)
-                            .background(Color.Black.copy(.55f))
-                            .border(1.5.dp, White60, CircleShape),
-                        Alignment.Center,
-                    ) { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp)) }
-                }
-                if (hasProgress) {
-                    Box(
-                        Modifier.fillMaxWidth().height(3.dp)
-                            .background(Color.Black.copy(.5f))
-                            .align(Alignment.BottomCenter)
-                    ) {
-                        Box(Modifier.fillMaxWidth(watchFraction).fillMaxHeight().background(Brand))
-                    }
-                }
-            }
+        HorizontalDivider(color = GlassBorder.copy(alpha = 0.5f), thickness = 0.5.dp)
 
-            Spacer(Modifier.width(d.spaceMd))
-
-            Column(Modifier.weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "E${eg.episode}${if (eg.episodeName.isNotBlank()) " · ${eg.episodeName}" else ""}",
-                        color      = White,
-                        fontSize   = d.textSm,
-                        fontWeight = FontWeight.Bold,
-                        maxLines   = 1,
-                        overflow   = TextOverflow.Ellipsis,
-                        modifier   = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(d.spaceXs))
-                    Box(
-                        Modifier
-                            .size(d.iconLg)
-                            .clip(CircleShape)
-                            .background(GlassMd)
-                            .clickable { showMenu = true },
-                        Alignment.Center,
-                    ) { Text("⋮", color = White60, fontSize = d.textMd) }
-                }
-
-                Spacer(Modifier.height(d.spaceXxs))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
-                        ) {
-                            if (eg.totalSize > 0) {
-                                Text(formatSize(eg.totalSize), color = White40, fontSize = d.textXs)
-                            }
-                            MultiQualityBadges(doneDownloads.map { it.quality })
-                        }
-                        Spacer(Modifier.height(d.spaceXxs))
-                        Text(
-                            when {
-                                hasProgress -> {
-                                    val pct = (watchFraction * 100).toInt()
-                                    if (pct >= 95) "Watched" else "$pct% watched"
-                                }
-                                eg.lastPlayedAt > 0 -> "Played recently"
-                                else -> "Not opened"
-                            },
-                            color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
-                            fontSize   = (d.textXxs.value + 1f).sp,
-                            fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    }
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(d.radiusPill))
-                            .background(Brand.copy(.15f))
-                            .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
-                            .clickable { onPlay(primary) }
-                            .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 2.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                        ) {
-                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm - 1.dp))
-                            Text("Play", color = Brand, fontSize = d.textXs, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
+        // Each quality variant as a separate row
+        eg.files.forEach { file ->
+            EpisodeQualityRow(
+                file          = file,
+                episodeLabel  = label,
+                season        = eg.season,
+                episode       = eg.episode,
+                onPlay        = { onPlayFile(file) },
+                onDelete      = { onDeleteFile(file) },
+            )
+            if (file != eg.files.last()) {
+                HorizontalDivider(color = GlassBorder.copy(alpha = 0.3f), thickness = 0.3.dp, modifier = Modifier.padding(horizontal = d.spaceMd))
             }
         }
     }
 
-    if (showMenu) {
-        val qualityOptions = if (doneDownloads.size > 1)
-            doneDownloads.map { item ->
-                MenuOption("🗑", "Delete ${item.quality} (${formatSize(item.sizeBytes)})", isDestructive = true) {
-                    onDeleteQuality(item)
-                    showMenu = false
-                }
-            }
-        else emptyList()
-
+    if (showGroupMenu) {
         DownloadOptionsSheet(
             title    = label,
-            subtitle = "S${eg.season.toString().padStart(2,'0')}E${eg.episode.toString().padStart(2,'0')}${if (eg.totalSize > 0) " · ${formatSize(eg.totalSize)}" else ""}",
-            options  = buildList {
-                add(MenuOption("▶", "Play") { onPlay(primary); showMenu = false })
-                addAll(qualityOptions)
-                add(MenuOption("🗑", "Delete Episode", isDestructive = true) { showDeleteDialog = true; showMenu = false })
-            },
+            subtitle = "S${eg.season.toString().padStart(2,'0')}E${eg.episode.toString().padStart(2,'0')} · ${eg.files.size} qualities · ${formatSize(eg.totalSize)}",
+            options  = listOf(
+                MenuOption("🗑", "Delete All Qualities", isDestructive = true) { showDeleteAllDialog = true; showGroupMenu = false },
+            ),
+            onDismiss = { showGroupMenu = false },
+        )
+    }
+
+    if (showDeleteAllDialog) {
+        ReelzDeleteDialog(
+            title     = "Delete Episode",
+            message   = "Remove all ${eg.files.size} quality versions of \"$label\"?",
+            onDelete  = { onDeleteAll(); showDeleteAllDialog = false },
+            onDismiss = { showDeleteAllDialog = false },
+        )
+    }
+}
+
+// One quality row inside an episode group
+@Composable
+private fun EpisodeQualityRow(
+    file: FileItem,
+    episodeLabel: String,
+    season: Int,
+    episode: Int,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val d = LocalDimensions.current
+    var showMenu by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    val watchFraction = if (file.durationMs > 0) (file.watchProgressMs.toFloat() / file.durationMs).coerceIn(0f, 1f) else 0f
+    val hasProgress = file.watchProgressMs > 0 && file.durationMs > 0
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onPlay)
+            .padding(horizontal = d.spaceMd, vertical = d.spaceSm + d.spaceXxs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
+    ) {
+        // Thumbnail
+        Box(
+            Modifier
+                .width(d.avatarSm + d.spaceMd)
+                .height(d.avatarSm + d.spaceXxs)
+                .clip(RoundedCornerShape(d.radiusSm))
+                .background(BgRaised)
+        ) {
+            AsyncImage(model = file.posterUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(.3f)), Alignment.Center) {
+                Icon(IconPlay, null, tint = White60, modifier = Modifier.size(d.iconSm - 2.dp))
+            }
+            if (hasProgress) {
+                Box(Modifier.fillMaxWidth().height(2.dp).background(Color.Black.copy(.5f)).align(Alignment.BottomCenter)) {
+                    Box(Modifier.fillMaxWidth(watchFraction).fillMaxHeight().background(Brand))
+                }
+            }
+        }
+
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp)) {
+                // Quality badge
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(d.radiusPill))
+                        .background(Brand.copy(.15f))
+                        .border(1.dp, Brand.copy(.3f), RoundedCornerShape(d.radiusPill))
+                        .padding(horizontal = d.spaceSm, vertical = 2.dp)
+                ) {
+                    Text(file.quality, color = Brand, fontSize = (d.textXxs.value + 1f).sp, fontWeight = FontWeight.Bold)
+                }
+                if (file.sizeBytes > 0) {
+                    Text(formatSize(file.sizeBytes), color = White40, fontSize = (d.textXxs.value + 0.5f).sp)
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                when {
+                    hasProgress -> {
+                        val pct = (watchFraction * 100).toInt()
+                        if (pct >= 95) "Watched" else "$pct% watched"
+                    }
+                    file.lastPlayedAt > 0 -> "Played recently"
+                    else -> "Not opened"
+                },
+                color    = if (hasProgress && watchFraction < 0.95f) Brand.copy(.7f) else White40,
+                fontSize = (d.textXxs.value + 0.5f).sp,
+            )
+        }
+
+        // 3-dot action menu
+        Box(
+            Modifier.size(d.iconLg).clip(CircleShape).background(GlassMd).clickable { showMenu = true },
+            Alignment.Center,
+        ) { Text("⋮", color = White60, fontSize = d.textSm) }
+    }
+
+    if (showMenu) {
+        DownloadOptionsSheet(
+            title    = "$episodeLabel (${file.quality})",
+            subtitle = "S${season.toString().padStart(2,'0')}E${episode.toString().padStart(2,'0')}${if (file.sizeBytes > 0) " · ${formatSize(file.sizeBytes)}" else ""}",
+            options  = listOf(
+                MenuOption("▶", "Play (${file.quality})") { onPlay(); showMenu = false },
+                MenuOption("🗑", "Delete ${file.quality}", isDestructive = true) { showDeleteDialog = true; showMenu = false },
+            ),
             onDismiss = { showMenu = false },
         )
     }
 
     if (showDeleteDialog) {
         ReelzDeleteDialog(
-            title     = "Delete Episode",
-            message   = "Remove \"$label\"?",
+            title     = "Delete ${file.quality} version?",
+            message   = "Remove the ${file.quality} copy of \"$episodeLabel\"${if (file.sizeBytes > 0) " (${formatSize(file.sizeBytes)})" else ""}?",
             onDelete  = { onDelete(); showDeleteDialog = false },
             onDismiss = { showDeleteDialog = false },
         )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Multi-quality badge row
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun MultiQualityBadges(qualities: List<String>) {
-    if (qualities.isEmpty()) return
-    val d = LocalDimensions.current
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        qualities.distinct().sorted().forEach { q ->
-            if (q.isNotBlank()) {
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(d.radiusPill))
-                        .background(GlassMd)
-                        .border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusPill))
-                        .padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)
-                ) {
-                    Text(q, color = White60, fontSize = (d.textXxs.value + 1f).sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
     }
 }
 
@@ -1475,58 +1262,28 @@ private fun EmptyDownloadsState() {
             modifier = Modifier.padding(horizontal = d.spaceXxl),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Box(
-                    Modifier.size(d.avatarLg + d.spaceXxl + d.spaceLg)
-                        .clip(CircleShape)
-                        .background(Brush.radialGradient(listOf(Brand.copy(.06f), Color.Transparent)))
-                )
-                Box(
-                    Modifier.size(d.avatarLg + d.spaceXxl)
-                        .clip(CircleShape)
-                        .background(BlueGlass)
-                        .border(1.dp, BlueBorder, CircleShape)
-                )
-                Box(
-                    Modifier.size(d.avatarLg + d.spaceLg)
-                        .clip(CircleShape)
-                        .background(GlassSm)
-                        .border(1.dp, GlassBorderMd, CircleShape)
-                )
-                Icon(
-                    IconDownloadCloud,
-                    contentDescription = null,
-                    tint = Brand.copy(.8f),
-                    modifier = Modifier.size(d.avatarSm + d.spaceMd),
-                )
+                Box(Modifier.size(d.avatarLg + d.spaceXxl + d.spaceLg).clip(CircleShape).background(Brush.radialGradient(listOf(Brand.copy(.06f), Color.Transparent))))
+                Box(Modifier.size(d.avatarLg + d.spaceXxl).clip(CircleShape).background(BlueGlass).border(1.dp, BlueBorder, CircleShape))
+                Box(Modifier.size(d.avatarLg + d.spaceLg).clip(CircleShape).background(GlassSm).border(1.dp, GlassBorderMd, CircleShape))
+                Icon(IconDownloadCloud, contentDescription = null, tint = Brand.copy(.8f), modifier = Modifier.size(d.avatarSm + d.spaceMd))
             }
             Spacer(Modifier.height(d.spaceXs))
-            Text(
-                "Your offline library is empty",
-                color      = White,
-                fontSize   = d.textXl,
-                fontWeight = FontWeight.Bold,
-                textAlign  = androidx.compose.ui.text.style.TextAlign.Center,
-            )
+            Text("Your offline library is empty", color = White, fontSize = d.textXl, fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             Text(
                 "Download movies & shows to watch anywhere — even without Wi-Fi or mobile data.",
-                color     = White40,
-                fontSize  = d.textSm,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                color = White40, fontSize = d.textSm, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 lineHeight = (d.textSm.value * 1.6f).sp,
             )
             Spacer(Modifier.height(d.spaceXs))
             Text(
                 "Look for the ↓ icon on any title to save it for offline viewing.",
-                color     = Brand.copy(.7f),
-                fontSize  = d.textXs,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                color = Brand.copy(.7f), fontSize = d.textXs, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 lineHeight = (d.textXs.value * 1.5f).sp,
             )
         }
     }
 }
 
-/** Shown when active downloads exist but nothing is DONE yet. */
 @Composable
 private fun LibraryPendingState() {
     val d = LocalDimensions.current
@@ -1536,17 +1293,10 @@ private fun LibraryPendingState() {
             verticalArrangement = Arrangement.spacedBy(d.spaceSm),
             modifier = Modifier.padding(horizontal = d.spaceXxl),
         ) {
-            Text(
-                "Downloading…",
-                color      = Brand,
-                fontSize   = d.textLg,
-                fontWeight = FontWeight.Bold,
-            )
+            Text("Downloading…", color = Brand, fontSize = d.textLg, fontWeight = FontWeight.Bold)
             Text(
                 "Your content will appear here once it finishes downloading.",
-                color     = White40,
-                fontSize  = d.textSm,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                color = White40, fontSize = d.textSm, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 lineHeight = (d.textSm.value * 1.5f).sp,
             )
         }
@@ -1554,31 +1304,24 @@ private fun LibraryPendingState() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shared atoms
+// Shared atoms (kept for compatibility — used in other screens)
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 fun StatusPill(status: DownloadStatus) {
     val d = LocalDimensions.current
     val (color, label) = when (status) {
-        DownloadStatus.DONE        -> Success to "Ready"
         DownloadStatus.DOWNLOADING -> Brand to "Downloading"
         DownloadStatus.QUEUED      -> White60 to "Queued"
         DownloadStatus.PAUSED      -> White40 to "Paused"
+        DownloadStatus.REMUXING    -> Color(0xFFFF9800) to "Converting"
         DownloadStatus.ERROR       -> Error to "Failed"
     }
     Row(
-        Modifier
-            .clip(RoundedCornerShape(d.radiusPill))
-            .background(color.copy(.12f))
-            .border(1.dp, color.copy(.3f), RoundedCornerShape(d.radiusPill))
-            .padding(horizontal = d.spaceSm + 1.dp, vertical = d.spaceXxs + 1.dp),
+        Modifier.clip(RoundedCornerShape(d.radiusPill)).background(color.copy(.12f)).border(1.dp, color.copy(.3f), RoundedCornerShape(d.radiusPill)).padding(horizontal = d.spaceSm + 1.dp, vertical = d.spaceXxs + 1.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
     ) {
-        if (status == DownloadStatus.DONE) {
-            Box(Modifier.size(d.spaceXs).clip(CircleShape).background(Success))
-        }
         Text(label, color = color, fontSize = (d.textXxs.value + 1f).sp, fontWeight = FontWeight.SemiBold)
     }
 }
@@ -1587,12 +1330,7 @@ fun StatusPill(status: DownloadStatus) {
 fun QualityChip(quality: String) {
     val d = LocalDimensions.current
     if (quality.isBlank()) return
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(d.radiusPill))
-            .background(GlassMd)
-            .padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)
-    ) {
+    Box(Modifier.clip(RoundedCornerShape(d.radiusPill)).background(GlassMd).padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)) {
         Text(quality, color = White40, fontSize = (d.textXxs.value + 1f).sp, fontWeight = FontWeight.Bold)
     }
 }
@@ -1601,12 +1339,22 @@ fun QualityChip(quality: String) {
 @Composable fun StatusBadge(status: DownloadStatus) = StatusPill(status)
 
 @Composable
-private fun ReelzDeleteDialog(
-    title: String,
-    message: String,
-    onDelete: () -> Unit,
-    onDismiss: () -> Unit,
-) {
+fun MultiQualityBadges(qualities: List<String>) {
+    if (qualities.isEmpty()) return
+    val d = LocalDimensions.current
+    Row(horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp), verticalAlignment = Alignment.CenterVertically) {
+        qualities.distinct().sorted().forEach { q ->
+            if (q.isNotBlank()) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(d.radiusPill)).background(GlassMd).border(1.dp, GlassBorderMd, RoundedCornerShape(d.radiusPill)).padding(horizontal = d.spaceSm, vertical = d.spaceXxs + 1.dp)
+                ) { Text(q, color = White60, fontSize = (d.textXxs.value + 1f).sp, fontWeight = FontWeight.Bold) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReelzDeleteDialog(title: String, message: String, onDelete: () -> Unit, onDismiss: () -> Unit) {
     val d = LocalDimensions.current
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1616,17 +1364,12 @@ private fun ReelzDeleteDialog(
         text   = { Text(message, color = White60, fontSize = d.textMd) },
         confirmButton = {
             Box(
-                Modifier.clip(RoundedCornerShape(d.radiusPill)).background(Error.copy(.15f))
-                    .border(1.dp, Error.copy(.35f), RoundedCornerShape(d.radiusPill))
-                    .clickable(onClick = onDelete)
-                    .padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
+                Modifier.clip(RoundedCornerShape(d.radiusPill)).background(Error.copy(.15f)).border(1.dp, Error.copy(.35f), RoundedCornerShape(d.radiusPill)).clickable(onClick = onDelete).padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
             ) { Text("Delete", color = Error, fontWeight = FontWeight.Bold, fontSize = d.textSm) }
         },
         dismissButton = {
             Box(
-                Modifier.clip(RoundedCornerShape(d.radiusPill)).background(GlassMd)
-                    .clickable(onClick = onDismiss)
-                    .padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
+                Modifier.clip(RoundedCornerShape(d.radiusPill)).background(GlassMd).clickable(onClick = onDismiss).padding(horizontal = d.spaceLg, vertical = d.spaceSm + d.spaceXxs),
             ) { Text("Cancel", color = White60, fontSize = d.textSm) }
         },
     )
@@ -1636,39 +1379,29 @@ private fun ReelzDeleteDialog(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Unified progress fraction [0..1] for a DownloadItem.
- * Prefers segment-based progress for HLS (most accurate), falls back to
- * byte-based for MP4, then 0.
- */
 fun downloadProgress(item: DownloadItem): Float = when {
-    item.totalSegments > 0 ->
-        item.segmentsDone.toFloat() / item.totalSegments
-    item.sizeBytes > 0 ->
-        (item.downloadedBytes.toFloat() / item.sizeBytes).coerceIn(0f, 1f)
+    item.status == DownloadStatus.REMUXING -> 0.95f   // show near-done during remux
+    item.totalSegments > 0 -> item.segmentsDone.toFloat() / item.totalSegments
+    item.sizeBytes > 0     -> (item.downloadedBytes.toFloat() / item.sizeBytes).coerceIn(0f, 1f)
     else -> 0f
 }
 
-private fun playDownload(ctx: Context, dl: DownloadItem) {
-    val base = Intent(ctx, PlayerActivity::class.java).apply {
-        putExtra("mediaId",          dl.mediaId)
-        putExtra("mediaType",        dl.mediaType)
-        putExtra("season",           dl.season)
-        putExtra("episode",          dl.episode)
-        putExtra("title",            dl.title)
-        putExtra("posterUrl",        dl.posterUrl)
-        putExtra("downloadId",       dl.id)
-        putExtra("preferredQuality", dl.quality)
+// Play a file from the files table — always .mp4, never HLS
+private fun playFile(ctx: Context, file: FileItem) {
+    val intent = Intent(ctx, PlayerActivity::class.java).apply {
+        putExtra("mediaId",          file.mediaId)
+        putExtra("mediaType",        file.mediaType)
+        putExtra("season",           file.season)
+        putExtra("episode",          file.episode)
+        putExtra("title",            file.title)
+        putExtra("posterUrl",        file.posterUrl)
+        putExtra("downloadId",       file.id)
+        putExtra("preferredQuality", file.quality)
         putExtra("isOffline",        true)
+        putExtra("streamUrl",        "file://${file.filePath}")
+        putExtra("streamIsHls",      false)   // files table = always .mp4
     }
-    when {
-        dl.status == DownloadStatus.DONE && dl.filePath.isNotBlank() -> {
-            val isHls = dl.filePath.endsWith(".m3u8", ignoreCase = true)
-            base.putExtra("streamUrl",   "file://${dl.filePath}")
-            base.putExtra("streamIsHls", isHls)
-            ctx.startActivity(base)
-        }
-    }
+    ctx.startActivity(intent)
 }
 
 fun formatSize(bytes: Long): String = when {

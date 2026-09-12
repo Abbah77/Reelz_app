@@ -5,13 +5,14 @@ import android.util.Log
 import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.core.database.DownloadSubtitleDao
 import com.axio.reelz.core.database.DownloadSubtitleRow
-import com.axio.reelz.data.model.Subtitle
-import java.io.File
-import java.net.URL
-import com.axio.reelz.core.database.DownloadRow
+import com.axio.reelz.core.database.FileDao
+import com.axio.reelz.core.database.FileRow
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
+import com.axio.reelz.data.model.FileItem
 import com.axio.reelz.data.model.MediaType
+import com.axio.reelz.core.database.DownloadRow
+import com.axio.reelz.data.model.Subtitle
 import com.axio.reelz.media.download.ReelzDownloadEngine
 import com.axio.reelz.media.download.ReelzDownloadService
 import com.google.gson.Gson
@@ -19,101 +20,135 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.net.URL
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class DownloadRepository @Inject constructor(
-    private val dao:             DownloadDao,
-    private val subtitleDao:     DownloadSubtitleDao,
-    private val engine:          ReelzDownloadEngine,
-    private val gson:            Gson,
+    private val dao:         DownloadDao,
+    private val fileDao:     FileDao,
+    private val subtitleDao: DownloadSubtitleDao,
+    private val engine:      ReelzDownloadEngine,
+    private val gson:        Gson,
 ) {
     private val tag = "DownloadRepository"
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    // ── Observable list for Downloads screen ──────────────────────────────────
-    fun observeAll(): Flow<List<DownloadItem>> = dao.observeAll().map { rows ->
-        rows.map { it.toModel() }
+
+    // ── Active downloads (from downloads table) ───────────────────────────────
+    fun observeAll(): Flow<List<DownloadItem>> =
+        dao.observeAll().map { rows -> rows.map { it.toModel() } }
+
+    // ── Files library (from files table) ─────────────────────────────────────
+    fun observeFiles(): Flow<List<FileItem>> =
+        fileDao.observeAll().map { rows -> rows.map { it.toFileItem() } }
+
+    // ── Bullet-proof duplicate guard: queries BOTH tables ─────────────────────
+    //
+    //  For movies:  mediaId=X, season=0,  episode=0,  quality="720p"
+    //  For TV:      mediaId=X, season=3,  episode=7,  quality="720p"
+    //
+    //  Returns true if this exact content+quality exists in EITHER table.
+    //  This guarantees that file transfers (which write directly to files table)
+    //  also prevent duplicate downloads.
+    //
+    suspend fun isAlreadyPresent(
+        mediaId: String,
+        season: Int = 0,
+        episode: Int = 0,
+        quality: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        // Check downloads table (active/paused/queued/remuxing)
+        val inDownloads = dao.getForContent(mediaId, season, episode)
+            .any { it.quality == quality }
+        if (inDownloads) return@withContext true
+
+        // Check files table (completed + file transferred)
+        val inFiles = fileDao.getExact(mediaId, season, episode, quality) != null
+        inFiles
     }
 
-    // ── Check if already downloaded ───────────────────────────────────────────
+    // Legacy alias used by PlayerViewModel / DownloadSheet
     suspend fun isAlreadyDownloaded(
-        id:      String,
-        season:  Int    = 0,
-        episode: Int    = 0,
+        id: String,
+        season: Int = 0,
+        episode: Int = 0,
         quality: String = "",
     ): Boolean = withContext(Dispatchers.IO) {
-        dao.getForContent(id, season, episode)
-            .any { it.quality == quality || quality.isBlank() }
+        if (quality.isBlank()) {
+            // Any quality check
+            val inDownloads = dao.getForContent(id, season, episode).isNotEmpty()
+            val inFiles = fileDao.getForContent(id, season, episode).isNotEmpty()
+            inDownloads || inFiles
+        } else {
+            isAlreadyPresent(id, season, episode, quality)
+        }
     }
 
+    // ── Get downloaded/filed items for a content (used by player) ─────────────
     suspend fun getDownloadedItems(
-        id:      String,
-        season:  Int = 0,
+        id: String,
+        season: Int = 0,
         episode: Int = 0,
-    ): List<DownloadItem> = withContext(Dispatchers.IO) {
-        dao.getForContent(id, season, episode).map { it.toModel() }
+    ): List<FileItem> = withContext(Dispatchers.IO) {
+        fileDao.getForContent(id, season, episode).map { it.toFileItem() }
     }
 
     // ── Enqueue a new download ────────────────────────────────────────────────
-    /**
-     * @param linkType  "mp4" | "hls" — from DownloadLink.type (backend tells us)
-     * @param streamUrl The exact URL to download (mp4 direct URL or quality-specific index.m3u8)
-     */
     suspend fun enqueue(
-        ctx:         Context,
-        id:          String,
-        title:       String,
-        posterUrl:   String?,
-        mediaType:   MediaType,
-        season:      Int    = 0,
-        episode:     Int    = 0,
+        ctx: Context,
+        id: String,
+        title: String,
+        posterUrl: String?,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
         episodeName: String = "",
-        quality:     String = "720p",
-        linkType:    String = "mp4",     // "mp4" | "hls"
-        streamUrl:   String,
-        headers:     Map<String, String> = emptyMap(),
+        quality: String = "720p",
+        linkType: String = "mp4",
+        streamUrl: String,
+        headers: Map<String, String> = emptyMap(),
     ): String = withContext(Dispatchers.IO) {
-        // Duplicate guard — same quality of same content must not be enqueued twice
-        val existing = dao.getForContent(id, season, episode)
-            .firstOrNull { it.quality == quality && it.status != DownloadStatus.ERROR.name }
-        if (existing != null) return@withContext existing.id
-
-        val downloadId = UUID.randomUUID().toString()
-        dao.insert(
-            DownloadRow(
-                id          = downloadId,
-                mediaId     = id,
-                title       = title,
-                posterUrl   = posterUrl,
-                mediaType   = mediaType.name,
-                season      = season,
-                episode     = episode,
-                episodeName = episodeName,
-                quality     = quality,
-                streamUrl   = streamUrl,
-                headersJson = gson.toJson(headers),
-                status      = DownloadStatus.QUEUED.name,
+        // Bulletproof duplicate guard — check both tables
+        if (isAlreadyPresent(id, season, episode, quality)) {
+            // Return the existing download or file id
+            dao.getForContent(id, season, episode)
+                .firstOrNull { it.quality == quality }?.id
+                ?: fileDao.getExact(id, season, episode, quality)?.id
+                ?: UUID.randomUUID().toString()
+        } else {
+            val downloadId = UUID.randomUUID().toString()
+            dao.insert(
+                DownloadRow(
+                    id          = downloadId,
+                    mediaId     = id,
+                    title       = title,
+                    posterUrl   = posterUrl,
+                    mediaType   = mediaType.name,
+                    season      = season,
+                    episode     = episode,
+                    episodeName = episodeName,
+                    quality     = quality,
+                    streamUrl   = streamUrl,
+                    headersJson = gson.toJson(headers),
+                    status      = DownloadStatus.QUEUED.name,
+                )
             )
-        )
-
-        // Kick off the download via service (keeps alive in background)
-        ReelzDownloadService.startDownload(
-            ctx        = ctx,
-            downloadId = downloadId,
-            url        = streamUrl,
-            type       = linkType,
-            headers    = headers,
-            title      = title,
-        )
-
-        downloadId
+            ReelzDownloadService.startDownload(
+                ctx        = ctx,
+                downloadId = downloadId,
+                url        = streamUrl,
+                type       = linkType,
+                headers    = headers,
+                title      = title,
+            )
+            downloadId
+        }
     }
 
     // ── Pause ─────────────────────────────────────────────────────────────────
@@ -128,10 +163,7 @@ class DownloadRepository @Inject constructor(
         val headers = runCatching {
             gson.fromJson(row.headersJson, Map::class.java) as Map<String, String>
         }.getOrDefault(emptyMap())
-
-        // Infer type from URL or stored metadata
         val type = if (row.streamUrl.contains(".m3u8")) "hls" else "mp4"
-
         ReelzDownloadService.startDownload(
             ctx        = ctx,
             downloadId = item.id,
@@ -142,42 +174,51 @@ class DownloadRepository @Inject constructor(
         )
     }
 
-    // ── Delete — single source of truth: movie + subtitles ───────────────────
+    // ── Delete active download ────────────────────────────────────────────────
     suspend fun delete(ctx: Context, item: DownloadItem) = withContext(Dispatchers.IO) {
         engine.cancel(item.id)
-        // 1. Delete subtitle files from disk
         val subtitleRows = subtitleDao.getForContent(item.mediaId, item.season, item.episode)
-        subtitleRows.forEach { row ->
-            try { File(row.localFilePath).delete() } catch (_: Exception) {}
-        }
-        // 2. Delete subtitle rows from DB (by content identity — covers all qualities)
+        subtitleRows.forEach { row -> try { File(row.localFilePath).delete() } catch (_: Exception) {} }
         subtitleDao.deleteForContent(item.mediaId, item.season, item.episode)
-        // 3. Delete the download itself
         dao.delete(item.id)
     }
 
-    // ── Trigger silent subtitle download when a movie/episode download finishes ──
-    /**
-     * Waits for the given download to reach DONE status, then silently downloads
-     * all available subtitles. Called right after enqueue() when the backend
-     * response included subtitle entries. Fire-and-forget — no UI involvement.
-     */
+    // ── Delete a file from permanent library ──────────────────────────────────
+    suspend fun deleteFile(fileItem: FileItem) = withContext(Dispatchers.IO) {
+        try { File(fileItem.filePath).delete() } catch (_: Exception) {}
+        val subtitleRows = subtitleDao.getForContent(fileItem.mediaId, fileItem.season, fileItem.episode)
+        subtitleRows.forEach { row -> try { File(row.localFilePath).delete() } catch (_: Exception) {} }
+        subtitleDao.deleteForContent(fileItem.mediaId, fileItem.season, fileItem.episode)
+        fileDao.delete(fileItem.id)
+    }
+
+    // ── Delete by exact quality from files table ──────────────────────────────
+    suspend fun deleteFileByQuality(mediaId: String, season: Int, episode: Int, quality: String) =
+        withContext(Dispatchers.IO) {
+            val row = fileDao.getExact(mediaId, season, episode, quality) ?: return@withContext
+            try { File(row.filePath).delete() } catch (_: Exception) {}
+            fileDao.deleteExact(mediaId, season, episode, quality)
+        }
+
+    // ── Subtitle download ─────────────────────────────────────────────────────
     fun scheduleSubtitleDownload(
         downloadId: String,
-        mediaId:    String,
-        season:     Int,
-        episode:    Int,
-        subtitles:  List<com.axio.reelz.data.model.Subtitle>,
+        mediaId: String,
+        season: Int,
+        episode: Int,
+        subtitles: List<Subtitle>,
     ) {
         if (subtitles.isEmpty()) return
         repoScope.launch {
             try {
-                // Wait for this download to reach DONE
-                dao.observeAll()
-                    .map { rows -> rows.firstOrNull { it.id == downloadId } }
-                    .filter { row -> row?.status == com.axio.reelz.data.model.DownloadStatus.DONE.name }
-                    .first()
-                // Now download each subtitle silently
+                // Watch files table for the item to appear
+                var attempts = 0
+                while (attempts < 60) {
+                    val exists = fileDao.getForContent(mediaId, season, episode).isNotEmpty()
+                    if (exists) break
+                    kotlinx.coroutines.delay(2000)
+                    attempts++
+                }
                 subtitles.forEach { sub ->
                     downloadSubtitleSilently(downloadId, mediaId, season, episode, sub)
                 }
@@ -187,12 +228,6 @@ class DownloadRepository @Inject constructor(
         }
     }
 
-    // ── Download subtitle silently after content is done ──────────────────────
-    /**
-     * Called after a movie/episode download completes.
-     * Downloads subtitle file to disk invisibly and persists to DB.
-     * No UI involvement — completely silent.
-     */
     suspend fun downloadSubtitleSilently(
         downloadId: String,
         mediaId: String,
@@ -201,18 +236,13 @@ class DownloadRepository @Inject constructor(
         subtitle: Subtitle,
     ) = withContext(Dispatchers.IO) {
         try {
-            // Guard: don't re-download the same language
             val existing = subtitleDao.getForContent(mediaId, season, episode)
-            if (existing.any { it.language == subtitle.language }) {
-                Log.d(tag, "Subtitle ${subtitle.language} already saved — skipping")
-                return@withContext
-            }
+            if (existing.any { it.language == subtitle.language }) return@withContext
 
             val subtitlesDir = engine.subtitlesDir(downloadId)
             val ext = subtitle.format.ifBlank { "srt" }
             val file = File(subtitlesDir, "${subtitle.language}.$ext")
 
-            // Download subtitle file
             URL(subtitle.url).openStream().use { input ->
                 file.outputStream().use { output -> input.copyTo(output) }
             }
@@ -230,38 +260,49 @@ class DownloadRepository @Inject constructor(
                     isEnabled     = true,
                 )
             )
-            Log.d(tag, "Subtitle ${subtitle.language} downloaded → ${file.absolutePath}")
         } catch (e: Exception) {
             Log.w(tag, "Silent subtitle download failed for ${subtitle.language}: ${e.message}")
         }
     }
 
-    // ── Local playback path (for ExoPlayer offline) ───────────────────────────
-    fun getLocalPlaybackPath(downloadId: String, type: String): String? =
-        engine.getLocalPlaybackPath(downloadId, type)
+    // ── Local playback path (reads from engine — always returns .mp4 path) ─────
+    fun getLocalPlaybackPath(downloadId: String): String? =
+        engine.getLocalPlaybackPath(downloadId)
 
-    // ── Watch progress ────────────────────────────────────────────────────────
+    // ── Watch progress (writes to files table) ────────────────────────────────
     suspend fun updateWatchProgress(
-        mediaId:    String,
-        season:     Int,
-        episode:    Int,
+        mediaId: String,
+        season: Int,
+        episode: Int,
         positionMs: Long,
         durationMs: Long,
     ) = withContext(Dispatchers.IO) {
-        dao.updateWatchProgress(
-            id  = mediaId,
-            s   = season,
-            ep  = episode,
-            pos = positionMs,
-            dur = durationMs,
-            at  = System.currentTimeMillis(),
-        )
+        fileDao.updateWatchProgress(mediaId, season, episode, positionMs, durationMs, System.currentTimeMillis())
     }
 
     suspend fun getDownload(id: String): DownloadItem? =
         withContext(Dispatchers.IO) { dao.get(id)?.toModel() }
 
-    // ── Row → Domain ──────────────────────────────────────────────────────────
+    // ── FileRow → FileItem ────────────────────────────────────────────────────
+    private fun FileRow.toFileItem() = FileItem(
+        id             = id,
+        mediaId        = mediaId,
+        title          = title,
+        posterUrl      = posterUrl,
+        mediaType      = mediaType,
+        season         = season,
+        episode        = episode,
+        episodeName    = episodeName,
+        quality        = quality,
+        filePath       = filePath,
+        sizeBytes      = sizeBytes,
+        durationMs     = durationMs,
+        watchProgressMs = watchProgressMs,
+        lastPlayedAt   = lastPlayedAt,
+        addedAt        = addedAt,
+    )
+
+    // ── DownloadRow → DownloadItem ────────────────────────────────────────────
     @Suppress("UNCHECKED_CAST")
     private fun DownloadRow.toModel() = DownloadItem(
         id              = id,
@@ -281,13 +322,9 @@ class DownloadRepository @Inject constructor(
         headers         = runCatching {
             gson.fromJson(headersJson, Map::class.java) as Map<String, String>
         }.getOrDefault(emptyMap()),
-        createdAt          = createdAt,
-        completedAt        = completedAt,
-        segmentsDone       = segmentsDone,
-        totalSegments      = totalSegments,
-        watchProgressMs    = watchProgressMs,
-        durationMs         = durationMs,
-        lastPlayedAt       = lastPlayedAt,
-        localPlaylistPath  = localPlaylistPath,
+        createdAt        = createdAt,
+        segmentsDone     = segmentsDone,
+        totalSegments    = totalSegments,
+        localPlaylistPath = localPlaylistPath,
     )
 }

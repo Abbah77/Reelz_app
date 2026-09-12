@@ -439,7 +439,7 @@ private fun ActiveDownloadCard(
             message  = "Remove \"${item.title}\"${
                 if (item.quality.isNotBlank()) " (${item.quality})" else ""
             } from downloads?",
-            onDelete  = { vm.delete(item, ctx); showDeleteDialog = false },
+            onDelete  = { vm.cancelDownload(item, ctx); showDeleteDialog = false },
             onDismiss = { showDeleteDialog = false },
         )
     }

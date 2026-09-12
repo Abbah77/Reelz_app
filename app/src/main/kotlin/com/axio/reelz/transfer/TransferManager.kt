@@ -32,10 +32,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.os.Build
-import com.axio.reelz.core.database.DownloadDao
-import com.axio.reelz.core.database.DownloadRow
+import com.axio.reelz.core.database.FileDao
+import com.axio.reelz.core.database.FileRow
 import com.axio.reelz.core.database.TransferRecord
-import com.axio.reelz.data.model.DownloadStatus
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -76,7 +75,7 @@ class TransferManager @Inject constructor(
     @ApplicationContext private val ctx: Context,
     private val engine:      P2pEngine,
     private val repo:        TransferRepository,
-    private val downloadDao: DownloadDao,
+    private val fileDao:     FileDao,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -433,62 +432,57 @@ class TransferManager @Inject constructor(
         )
     }
 
-    // ── Received file → DownloadDao registration ──────────────────────────────
-
+    // ── Received file → FileDao registration ──────────────────────────────────
+    //
+    // File transfer always produces a clean .mp4 on the receiver's side.
+    // We insert directly into the "files" permanent library table — same schema
+    // used by completed downloads and HLS remux. The "downloads" table is never
+    // touched by file transfer.
+    //
     private suspend fun registerReceivedFile(
         file: File,
         meta: P2pEngine.FileMetadata,
     ) = withContext(Dispatchers.IO) {
-        val mediaId  = meta.mediaId.ifBlank  { meta.title.ifBlank { file.nameWithoutExtension } }
-        val season   = meta.season
-        val episode  = meta.episode
-        val quality  = meta.quality.ifBlank  { "720p" }
-        val title    = meta.title.ifBlank    { file.nameWithoutExtension }
+        val mediaId   = meta.mediaId.ifBlank  { meta.title.ifBlank { file.nameWithoutExtension } }
+        val season    = meta.season
+        val episode   = meta.episode
+        val quality   = meta.quality.ifBlank  { "720p" }
+        val title     = meta.title.ifBlank    { file.nameWithoutExtension }
         val mediaType = meta.mediaType.ifBlank { if (episode > 0) "TV" else "MOVIE" }
 
-        // ── Duplicate check ───────────────────────────────────────────────────
-        // getForContent uses (mediaId, season, episode) as the unique identity
-        // for a piece of content. Duplicate = same quality already exists and
-        // is not in ERROR state.
-        val existing = downloadDao.getForContent(mediaId, season, episode)
-        val alreadyHaveSameQuality = existing.any {
-            it.quality.equals(quality, ignoreCase = true) &&
-            it.status != DownloadStatus.ERROR.name
-        }
-
-        if (alreadyHaveSameQuality) {
-            // Exact duplicate (same movie/episode/quality) — do nothing.
-            // The user already has this file; the new local copy in ReelzBeam/
-            // is a redundant duplicate — leave the existing DB row pointing to
-            // its original path.
+        // Validate: must be a real .mp4 file
+        if (!file.exists() || file.length() == 0L) return@withContext
+        if (!file.name.endsWith(".mp4", ignoreCase = true)) {
+            // Not a .mp4 — skip (no HLS segments or playlists accepted)
+            file.delete()
             return@withContext
         }
 
-        // ── New quality or first-time receive — insert row ────────────────────
-        // If the movie/series already exists (e.g. different quality or different
-        // episode of same series), we still create a new DownloadRow because each
-        // row represents one (mediaId, season, episode, quality) combination.
-        // The UI groups them by mediaId/title so they still appear as ONE item.
-        val newId = UUID.randomUUID().toString()
-        downloadDao.insert(
-            DownloadRow(
-                id              = newId,
-                mediaId         = mediaId,
-                title           = title,
-                posterUrl       = meta.posterUrl.ifBlank { null },
-                mediaType       = mediaType,
-                season          = season,
-                episode         = episode,
-                episodeName     = "",
-                quality         = quality,
-                filePath        = file.absolutePath,
-                sizeBytes       = file.length(),
-                downloadedBytes = file.length(),
-                status          = DownloadStatus.DONE.name,
-                streamUrl       = "",
-                headersJson     = "{}",
-                createdAt       = System.currentTimeMillis(),
-                completedAt     = System.currentTimeMillis(),
+        // Bulletproof duplicate check: same (mediaId, season, episode, quality) already in files?
+        val existing = fileDao.getExact(mediaId, season, episode, quality)
+        if (existing != null) {
+            // Exact duplicate already in library — discard the new copy
+            file.delete()
+            return@withContext
+        }
+
+        // Insert into the permanent files library
+        val newId = java.util.UUID.randomUUID().toString()
+        fileDao.insertIfNew(
+            FileRow(
+                id          = newId,
+                mediaId     = mediaId,
+                title       = title,
+                posterUrl   = meta.posterUrl.ifBlank { null },
+                mediaType   = mediaType,
+                season      = season,
+                episode     = episode,
+                episodeName = "",
+                quality     = quality,
+                filePath    = file.absolutePath,
+                sizeBytes   = file.length(),
+                durationMs  = 0L,
+                addedAt     = System.currentTimeMillis(),
             )
         )
     }

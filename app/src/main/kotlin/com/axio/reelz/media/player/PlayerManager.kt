@@ -26,7 +26,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
-import com.axio.reelz.data.model.DownloadStatus
+import com.axio.reelz.data.model.FileItem
 import com.axio.reelz.data.model.MediaType
 import com.axio.reelz.data.model.QualityTrack
 import com.axio.reelz.data.model.StreamResult
@@ -96,7 +96,7 @@ class PlayerManager(
 
     // ── Offline state ─────────────────────────────────────────────────────────
 
-    var offlineDownloads: List<com.axio.reelz.data.model.DownloadItem> = emptyList()
+    var offlineDownloads: List<FileItem> = emptyList()
     var preferredOfflineQuality: String = ""
 
     // ── PiP ───────────────────────────────────────────────────────────────────
@@ -274,14 +274,14 @@ class PlayerManager(
     fun setQuality(label: String, isOfflinePlayback: Boolean) {
         if (isOfflinePlayback && offlineDownloads.isNotEmpty()) {
             preferredOfflineQuality = label
-            val match = offlineDownloads.firstOrNull { it.quality == label && it.status == DownloadStatus.DONE }
-                ?: offlineDownloads.firstOrNull { it.status == DownloadStatus.DONE }
+            val match = offlineDownloads.firstOrNull { it.quality == label }
+                ?: offlineDownloads.firstOrNull()
             if (match != null) {
+                // Files table = always clean .mp4 — use filePath directly
                 val url = match.filePath.takeIf { it.isNotBlank() } ?: return
                 val savedPos = _player.value?.currentPosition ?: 0L
                 val track  = com.axio.reelz.data.model.StreamTrack(
-                    name = "Offline", url = url,
-                    type = if (url.contains(".m3u8", ignoreCase = true)) "hls" else "mp4")
+                    name = "Offline", url = url, type = "mp4")
                 val result = StreamResult(streams = listOf(track), expiresAtMs = Long.MAX_VALUE)
                 scope.launch {
                     playStream(result)

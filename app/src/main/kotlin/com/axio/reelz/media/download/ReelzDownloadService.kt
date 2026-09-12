@@ -158,28 +158,31 @@ class ReelzDownloadService : Service() {
         observing = true
         scope.launch {
             downloadDao.observeAll().collect { rows ->
-                val active   = rows.filter { it.status == "DOWNLOADING" }
-                val paused   = rows.filter { it.status == "PAUSED" }
-                val queued   = rows.filter { it.status == "QUEUED" }
-                val done     = rows.count  { it.status == "DONE" }
-                val hasAny   = rows.isNotEmpty()
+                val active    = rows.filter { it.status == "DOWNLOADING" }
+                val remuxing  = rows.filter { it.status == "REMUXING" }
+                val paused    = rows.filter { it.status == "PAUSED" }
+                val queued    = rows.filter { it.status == "QUEUED" }
+                // Note: "downloads" table never has DONE rows — they move to "files" table
+                val hasAny    = rows.isNotEmpty()
 
-                val totalSeg = active.sumOf { it.totalSegments }
-                val doneSeg  = active.sumOf { it.segmentsDone }
-                val progress = if (totalSeg > 0) (doneSeg * 100 / totalSeg) else 0
+                val totalSeg  = active.sumOf { it.totalSegments }
+                val doneSeg   = active.sumOf { it.segmentsDone }
+                val progress  = if (totalSeg > 0) (doneSeg * 100 / totalSeg) else 0
 
                 val msg = when {
+                    remuxing.isNotEmpty() -> {
+                        "Converting ${remuxing.size} file${if (remuxing.size > 1) "s" else ""} to MP4…"
+                    }
                     active.isNotEmpty() -> {
                         val pct = if (active.size == 1) " ($progress%)" else ""
                         "${active.size} downloading$pct"
                     }
                     queued.isNotEmpty() -> "${queued.size} queued"
                     paused.isNotEmpty() -> "${paused.size} paused"
-                    done > 0            -> "$done download(s) complete"
                     else                -> "Downloads ready"
                 }
 
-                val isActive = active.isNotEmpty() || queued.isNotEmpty()
+                val isActive = active.isNotEmpty() || queued.isNotEmpty() || remuxing.isNotEmpty()
 
                 if (!hasAny) {
                     // No rows at all (all cancelled/cleared) → dismiss notification and stop.

@@ -6,10 +6,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ReelzDatabase v5 — Schema v3 edition
+//  ReelzDatabase v8 — two-table download architecture
 //
-//  Changes in v5:
-//   • UserSessionRow: added refreshToken, premiumExpiresAtMs columns
+//  Changes in v8:
+//   • Added "files" table  — permanent library of completed .mp4 files
+//   • "downloads" table stays as the temporary working table
+//     (QUEUED → DOWNLOADING → PAUSED → REMUXING → DONE then deleted)
+//   • Both MP4 direct downloads and HLS→mp4 remuxed content land in "files"
+//   • File transfer received files also land directly in "files"
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Feed cache ────────────────────────────────────────────────────────────────
@@ -214,10 +218,6 @@ interface WatchlistDao {
     @Query("DELETE FROM watchlist")
     suspend fun clear()
 
-    /**
-     * Keep only the most recent [keepCount] watchlist entries (by addedAt).
-     * Hard limit: 500 items — more than enough even for a decade of use.
-     */
     @Query("""
         DELETE FROM watchlist WHERE mediaId NOT IN (
             SELECT mediaId FROM watchlist ORDER BY addedAt DESC LIMIT :keepCount
@@ -258,7 +258,7 @@ interface RecentSearchDao {
     suspend fun trimToLimit()
 }
 
-// ── User session — schema v3: adds refreshToken, premiumExpiresAtMs ───────────
+// ── User session ──────────────────────────────────────────────────────────────
 @Entity(tableName = "user_session")
 data class UserSessionRow(
     @PrimaryKey val uid: String,
@@ -305,7 +305,13 @@ interface AppConfigCacheDao {
     suspend fun upsert(row: AppConfigCacheRow)
 }
 
-// ── Downloads ─────────────────────────────────────────────────────────────────
+// ── Downloads (TEMPORARY working table) ──────────────────────────────────────
+//
+//  This table is the WORKER. It tracks active/paused/queued downloads.
+//  When a download completes (and for HLS: after remux to .mp4), the row is
+//  DELETED from this table and a row is INSERTED into the "files" table.
+//  This table never contains DONE rows — DONE is transient (deleted immediately).
+//
 @Entity(tableName = "downloads")
 data class DownloadRow(
     @PrimaryKey val id: String,
@@ -320,17 +326,13 @@ data class DownloadRow(
     val filePath: String = "",
     val sizeBytes: Long = 0,
     val downloadedBytes: Long = 0,
-    val status: String = "QUEUED",
+    val status: String = "QUEUED",   // QUEUED | DOWNLOADING | PAUSED | REMUXING | ERROR
     val streamUrl: String = "",
     val headersJson: String = "{}",
     val createdAt: Long = System.currentTimeMillis(),
-    val completedAt: Long = 0,
     val segmentsDone: Int = 0,
     val totalSegments: Int = 0,
-    val watchProgressMs: Long = 0,
-    val durationMs: Long = 0,
-    val lastPlayedAt: Long = 0,
-    val localPlaylistPath: String = "",
+    val localPlaylistPath: String = "",  // HLS segments dir / index.m3u8 while in-progress
 )
 
 @Dao
@@ -344,6 +346,7 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE status = :status")
     suspend fun getByStatus(status: String): List<DownloadRow>
 
+    /** Check for in-progress download of same content+quality (for duplicate guard). */
     @Query("""
         SELECT * FROM downloads
         WHERE mediaId = :id AND season = :s AND episode = :ep AND status != 'ERROR'
@@ -354,11 +357,6 @@ interface DownloadDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(row: DownloadRow)
 
-    /**
-     * Update in-progress download state.
-     * [sizeBytes] is only written when > 0 to avoid clobbering a previously
-     * stored value with zero (e.g. HLS doesn't know total size mid-download).
-     */
     @Query("""
         UPDATE downloads
         SET
@@ -380,67 +378,97 @@ interface DownloadDao {
         sizeBytes: Long = 0L,
     )
 
-    /** Mark an MP4 download complete — sets real file size, path, timestamps. */
-    @Query("""
-        UPDATE downloads
-        SET
-            status          = :status,
-            filePath        = :path,
-            completedAt     = :at,
-            sizeBytes       = :sizeBytes,
-            downloadedBytes = :sizeBytes
-        WHERE id = :id
-    """)
-    suspend fun markDoneMp4(
-        id: String,
-        status: String,
-        path: String,
-        at: Long,
-        sizeBytes: Long,
-    )
-
-    /**
-     * Mark an HLS download complete.
-     * Stores the local m3u8 in both filePath and localPlaylistPath, writes
-     * real sizeBytes (sum of all .ts files), and syncs segmentsDone = totalSegments.
-     */
-    @Query("""
-        UPDATE downloads
-        SET
-            status            = :status,
-            filePath          = :path,
-            localPlaylistPath = :path,
-            completedAt       = :at,
-            sizeBytes         = :sizeBytes,
-            downloadedBytes   = :sizeBytes,
-            segmentsDone      = :done,
-            totalSegments     = :total
-        WHERE id = :id
-    """)
-    suspend fun markDoneHls(
-        id: String,
-        status: String,
-        path: String,
-        at: Long,
-        sizeBytes: Long,
-        done: Int,
-        total: Int,
-    )
-
     @Query("UPDATE downloads SET status = 'PAUSED' WHERE id = :id")
     suspend fun markPaused(id: String)
+
+    @Query("UPDATE downloads SET status = :status WHERE id = :id")
+    suspend fun setStatus(id: String, status: String)
 
     @Query("UPDATE downloads SET streamUrl = :url, headersJson = :h WHERE id = :id")
     suspend fun updateStreamUrl(id: String, url: String, h: String)
 
-    @Query("""
-        UPDATE downloads SET watchProgressMs = :pos, durationMs = :dur,
-        lastPlayedAt = :at WHERE mediaId = :id AND season = :s AND episode = :ep
-    """)
-    suspend fun updateWatchProgress(id: String, s: Int, ep: Int, pos: Long, dur: Long, at: Long)
-
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: String)
+}
+
+// ── Files (PERMANENT library — only clean .mp4 files) ─────────────────────────
+//
+//  This table is the USER'S LIBRARY. It contains only successfully completed,
+//  clean .mp4 files — whether from:
+//    1. Direct MP4 download (no remux needed)
+//    2. HLS download + Media3 Transformer remux → clean .mp4
+//    3. File transfer received from another device
+//
+//  There is NO status column — every row IS a valid, playable .mp4 file.
+//  The "downloads" table handles all the messy intermediate states.
+//
+@Entity(
+    tableName = "files",
+    indices = [
+        Index("mediaId"),
+        Index(value = ["mediaId", "season", "episode", "quality"], unique = true),
+    ]
+)
+data class FileRow(
+    @PrimaryKey val id: String,
+    val mediaId: String,
+    val title: String,
+    val posterUrl: String?,
+    val mediaType: String,          // "MOVIE" | "TV"
+    val season: Int = 0,
+    val episode: Int = 0,
+    val episodeName: String = "",
+    val quality: String = "720p",
+    val filePath: String,           // absolute path to the .mp4 file
+    val sizeBytes: Long = 0,
+    val durationMs: Long = 0,
+    val watchProgressMs: Long = 0,
+    val lastPlayedAt: Long = 0,
+    val addedAt: Long = System.currentTimeMillis(),
+)
+
+@Dao
+interface FileDao {
+    @Query("SELECT * FROM files ORDER BY addedAt DESC")
+    fun observeAll(): Flow<List<FileRow>>
+
+    @Query("SELECT * FROM files WHERE id = :id LIMIT 1")
+    suspend fun get(id: String): FileRow?
+
+    @Query("""
+        SELECT * FROM files
+        WHERE mediaId = :mediaId AND season = :season AND episode = :episode
+        ORDER BY quality DESC
+    """)
+    suspend fun getForContent(mediaId: String, season: Int, episode: Int): List<FileRow>
+
+    @Query("""
+        SELECT * FROM files
+        WHERE mediaId = :mediaId AND season = :season AND episode = :episode AND quality = :quality
+        LIMIT 1
+    """)
+    suspend fun getExact(mediaId: String, season: Int, episode: Int, quality: String): FileRow?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfNew(row: FileRow): Long   // returns -1 if already exists
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(row: FileRow)
+
+    @Query("""
+        UPDATE files SET watchProgressMs = :pos, durationMs = :dur, lastPlayedAt = :at
+        WHERE mediaId = :mediaId AND season = :season AND episode = :episode
+    """)
+    suspend fun updateWatchProgress(mediaId: String, season: Int, episode: Int, pos: Long, dur: Long, at: Long)
+
+    @Query("DELETE FROM files WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM files WHERE mediaId = :mediaId AND season = :season AND episode = :episode AND quality = :quality")
+    suspend fun deleteExact(mediaId: String, season: Int, episode: Int, quality: String)
+
+    @Query("SELECT COUNT(*) FROM files")
+    suspend fun count(): Int
 }
 
 // ── Download subtitles ────────────────────────────────────────────────────────
@@ -457,7 +485,6 @@ data class DownloadSubtitleRow(
     val localFilePath: String,
     val isEnabled: Boolean = true,
     val addedAt: Long = System.currentTimeMillis(),
-    /** File format: "srt" | "vtt" | "ass" | etc. */
     @androidx.room.ColumnInfo(defaultValue = "srt") val format: String = "srt",
 )
 
@@ -478,12 +505,11 @@ interface DownloadSubtitleDao {
     @Query("DELETE FROM download_subtitles WHERE downloadId = :id")
     suspend fun deleteForDownload(id: String)
 
-    /** Cascade: delete all subtitles for a media item (called when movie/episode deleted). */
     @Query("DELETE FROM download_subtitles WHERE mediaId = :mediaId AND season = :season AND episode = :episode")
     suspend fun deleteForContent(mediaId: String, season: Int, episode: Int)
 }
 
-// ── Transfer types ─────────────────────────────────────────────────────────────
+// ── Transfer history ───────────────────────────────────────────────────────────
 @Entity(tableName = "transfer_history")
 data class TransferRecord(
     @PrimaryKey val id: String,
@@ -600,32 +626,25 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-// Migration 4→5: add refreshToken and premiumExpiresAtMs to user_session
 val MIGRATION_4_5 = object : Migration(4, 5) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE user_session ADD COLUMN refreshToken TEXT NOT NULL DEFAULT ''")
         db.execSQL("ALTER TABLE user_session ADD COLUMN premiumExpiresAtMs INTEGER NOT NULL DEFAULT 0")
-        // plan column no longer needed — status is computed; remove would need table rebuild
-        // Just leave it; it will be ignored by the new UserSessionRow mapping
     }
 }
 
-// Migration 5→6: no schema change — watchlist trimToLimit is pure query logic
 val MIGRATION_5_6 = object : Migration(5, 6) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        // Trim watchlist to 500 most recent entries if it has grown large
         db.execSQL("""
             DELETE FROM watchlist WHERE mediaId NOT IN (
                 SELECT mediaId FROM watchlist ORDER BY addedAt DESC LIMIT 500
             )
         """)
-        // Trim watch_progress to 500 most recent entries
         db.execSQL("""
             DELETE FROM watch_progress WHERE rowid NOT IN (
                 SELECT rowid FROM watch_progress ORDER BY watchedAt DESC LIMIT 500
             )
         """)
-        // Trim recent_searches to 15
         db.execSQL("""
             DELETE FROM recent_searches WHERE query NOT IN (
                 SELECT query FROM recent_searches ORDER BY searchedAt DESC LIMIT 15
@@ -634,10 +653,92 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
-// Migration 6→7: add format column to download_subtitles
 val MIGRATION_6_7 = object : Migration(6, 7) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE download_subtitles ADD COLUMN format TEXT NOT NULL DEFAULT 'srt'")
+    }
+}
+
+// Migration 7→8: Add "files" permanent library table + slim down "downloads"
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // 1. Create the new permanent files table
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS files (
+                id TEXT NOT NULL PRIMARY KEY,
+                mediaId TEXT NOT NULL,
+                title TEXT NOT NULL,
+                posterUrl TEXT,
+                mediaType TEXT NOT NULL,
+                season INTEGER NOT NULL DEFAULT 0,
+                episode INTEGER NOT NULL DEFAULT 0,
+                episodeName TEXT NOT NULL DEFAULT '',
+                quality TEXT NOT NULL DEFAULT '720p',
+                filePath TEXT NOT NULL,
+                sizeBytes INTEGER NOT NULL DEFAULT 0,
+                durationMs INTEGER NOT NULL DEFAULT 0,
+                watchProgressMs INTEGER NOT NULL DEFAULT 0,
+                lastPlayedAt INTEGER NOT NULL DEFAULT 0,
+                addedAt INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_files_mediaId ON files(mediaId)")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_files_unique ON files(mediaId, season, episode, quality)")
+
+        // 2. Migrate completed downloads (DONE status) into files table
+        //    Only migrate .mp4 files (filePath not ending in .m3u8)
+        db.execSQL("""
+            INSERT OR IGNORE INTO files
+                (id, mediaId, title, posterUrl, mediaType, season, episode, episodeName,
+                 quality, filePath, sizeBytes, durationMs, watchProgressMs, lastPlayedAt, addedAt)
+            SELECT id, mediaId, title, posterUrl, mediaType, season, episode, episodeName,
+                   quality, filePath, sizeBytes, durationMs, watchProgressMs, lastPlayedAt, completedAt
+            FROM downloads
+            WHERE status = 'DONE'
+              AND filePath != ''
+              AND filePath NOT LIKE '%.m3u8'
+              AND filePath NOT LIKE '%.ts'
+        """)
+
+        // 3. Rebuild downloads table without old columns not needed anymore
+        //    (completedAt, watchProgressMs, durationMs, lastPlayedAt are now in files)
+        db.execSQL("""
+            CREATE TABLE downloads_new (
+                id TEXT NOT NULL PRIMARY KEY,
+                mediaId TEXT NOT NULL,
+                title TEXT NOT NULL,
+                posterUrl TEXT,
+                mediaType TEXT NOT NULL,
+                season INTEGER NOT NULL DEFAULT 0,
+                episode INTEGER NOT NULL DEFAULT 0,
+                episodeName TEXT NOT NULL DEFAULT '',
+                quality TEXT NOT NULL DEFAULT '720p',
+                filePath TEXT NOT NULL DEFAULT '',
+                sizeBytes INTEGER NOT NULL DEFAULT 0,
+                downloadedBytes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'QUEUED',
+                streamUrl TEXT NOT NULL DEFAULT '',
+                headersJson TEXT NOT NULL DEFAULT '{}',
+                createdAt INTEGER NOT NULL DEFAULT 0,
+                segmentsDone INTEGER NOT NULL DEFAULT 0,
+                totalSegments INTEGER NOT NULL DEFAULT 0,
+                localPlaylistPath TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        // Keep only active/paused/queued/error rows (not DONE — they moved to files)
+        db.execSQL("""
+            INSERT INTO downloads_new
+                (id, mediaId, title, posterUrl, mediaType, season, episode, episodeName,
+                 quality, filePath, sizeBytes, downloadedBytes, status, streamUrl, headersJson,
+                 createdAt, segmentsDone, totalSegments, localPlaylistPath)
+            SELECT id, mediaId, title, posterUrl, mediaType, season, episode, episodeName,
+                   quality, filePath, sizeBytes, downloadedBytes, status, streamUrl, headersJson,
+                   createdAt, segmentsDone, totalSegments, localPlaylistPath
+            FROM downloads
+            WHERE status != 'DONE'
+        """)
+        db.execSQL("DROP TABLE downloads")
+        db.execSQL("ALTER TABLE downloads_new RENAME TO downloads")
     }
 }
 
@@ -654,8 +755,9 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         DownloadRow::class,
         DownloadSubtitleRow::class,
         TransferRecord::class,
+        FileRow::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {
@@ -672,4 +774,5 @@ abstract class ReelzDatabase : RoomDatabase() {
     abstract fun watchHistoryDao(): WatchHistoryDao
     abstract fun savedVideoDao(): SavedVideoDao
     abstract fun transferDao(): TransferDao
+    abstract fun fileDao(): FileDao
 }
