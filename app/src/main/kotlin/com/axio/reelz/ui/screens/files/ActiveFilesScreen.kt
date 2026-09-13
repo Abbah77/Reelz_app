@@ -242,218 +242,157 @@ private fun ActiveDownloadCard(
 
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    // Use the unified downloadProgress helper
     val pct    = downloadProgress(item)
     val animPct by animateFloatAsState(pct.coerceIn(0f, 1f), label = "active-pct-${item.id}")
     val pctInt = (pct * 100).toInt()
 
-    // Human-readable size text
-    val sizeText = when {
-        isQueued   -> "Queued"
-        isRemuxing -> "Finalizing…"
-        isError    -> "Download failed"
-        item.sizeBytes > 0 ->
-            "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
-        item.downloadedBytes > 0 ->
-            "${formatSize(item.downloadedBytes)} downloaded"
-        else -> if (isPaused) "Paused" else ""
-    }
-
-    Box(
+    Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
+            .clip(RoundedCornerShape(d.radiusMd))
             .background(BgCard)
             .border(
                 1.dp,
-                when {
-                    isDownloading -> Brand.copy(.2f)
-                    isError       -> Error.copy(.2f)
-                    else          -> GlassBorderMd
-                },
-                RoundedCornerShape(d.radiusLg - d.spaceXxs),
+                if (isDownloading || isRemuxing) Brand.copy(.22f) else GlassBorderMd,
+                RoundedCornerShape(d.radiusMd),
             )
+            .padding(d.spaceSm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(d.spaceSm),
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(d.spaceMd),
-            verticalAlignment = Alignment.CenterVertically,
+        // Poster with percentage badge overlay — exactly as original
+        Box(
+            Modifier
+                .size(width = d.avatarSm + d.spaceXxs, height = d.avatarSm + d.spaceMd)
+                .clip(RoundedCornerShape(d.radiusSm))
+                .background(BgRaised),
         ) {
-            // Poster
-            Box(
-                Modifier
-                    .size(width = d.avatarMd + d.spaceXxs + 2.dp, height = d.avatarLg + d.spaceXxs)
-                    .clip(RoundedCornerShape(d.radiusSm + 2.dp))
-                    .background(BgRaised),
-            ) {
-                AsyncImage(
-                    model = item.posterUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                if (!isError && pctInt > 0) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(d.spaceXxs)
-                            .clip(RoundedCornerShape(d.radiusSm))
-                            .background(Color.Black.copy(.7f))
-                            .padding(horizontal = d.spaceXxs + 1.dp, vertical = 1.dp),
-                    ) {
-                        Text("$pctInt%", color = White, fontSize = (d.textXxs.value + 0.5f).sp, fontWeight = FontWeight.Bold)
-                    }
+            AsyncImage(
+                model = item.posterUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            // Percentage badge on poster — shown whenever progress is known
+            if (!isQueued && !isError && pctInt > 0) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(2.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Color.Black.copy(.72f))
+                        .padding(horizontal = 3.dp, vertical = 1.dp),
+                ) {
+                    Text(
+                        "$pctInt%",
+                        color      = Color.White,
+                        fontSize   = (d.textXxs.value + 0.5f).sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
             }
+        }
 
-            Spacer(Modifier.width(d.spaceMd))
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.title,
+                color      = White,
+                fontSize   = d.textXs,
+                fontWeight = FontWeight.SemiBold,
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
+            )
+            if (item.mediaType == "TV" && item.season > 0) {
+                Text("S${item.season}E${item.episode}", color = White40, fontSize = (d.textXxs.value + 0.5f).sp)
+            }
+            if (item.quality.isNotBlank()) {
+                Text(item.quality, color = Brand.copy(.8f), fontSize = (d.textXxs.value + 0.5f).sp, fontWeight = FontWeight.Bold)
+            }
 
-            Column(Modifier.weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            item.title,
-                            color = White,
-                            fontSize = d.textMd,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+            Spacer(Modifier.height(d.spaceXxs + 2.dp))
+
+            // Progress bar
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(GlassMd)
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(animPct)
+                        .fillMaxHeight()
+                        .background(
+                            brush = when {
+                                isError    -> SolidColor(Error)
+                                isPaused   -> SolidColor(White40)
+                                isQueued   -> SolidColor(White20)
+                                isRemuxing -> Brush.horizontalGradient(listOf(Brand2, Brand))
+                                else       -> Brush.horizontalGradient(listOf(Brand, Brand2))
+                            }
                         )
-                        if (item.mediaType == "TV" && item.season > 0) {
-                            Text(
-                                "S${item.season}E${item.episode}",
-                                color = White40,
-                                fontSize = d.textXs,
-                            )
-                        }
-                        if (item.quality.isNotBlank()) {
-                            Text(
-                                item.quality,
-                                color = Brand.copy(.85f),
-                                fontSize = (d.textXxs.value + 1f).sp,
-                                fontWeight = FontWeight.SemiBold,
+                )
+            }
+
+            Spacer(Modifier.height(d.spaceXxs))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Status text — percentage + state label
+                Text(
+                    when {
+                        isQueued   -> "Waiting…"
+                        isError    -> "Failed"
+                        isRemuxing -> "Finalizing…"
+                        isPaused   -> "$pctInt% · Paused"
+                        else       -> "$pctInt%"
+                    },
+                    color    = when {
+                        isDownloading -> Success.copy(.85f)
+                        isRemuxing    -> Brand.copy(.85f)
+                        isError       -> Error
+                        else          -> White40
+                    },
+                    fontSize = (d.textXxs.value + 0.5f).sp,
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(d.spaceXs)) {
+                    // Pause / Resume / Retry — hidden during remux
+                    if (!isRemuxing) {
+                        Box(
+                            Modifier
+                                .size(d.iconMd + d.spaceXxs)
+                                .clip(CircleShape)
+                                .background(GlassMd)
+                                .clickable(onClick = if (isDownloading) {
+                                    { vm.pause(ctx, item) }
+                                } else {
+                                    { vm.resume(ctx, item) }
+                                }),
+                            Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector      = if (isDownloading) IconPause else IconPlay,
+                                contentDescription = null,
+                                tint             = if (isPaused || isError) Brand else White60,
+                                modifier         = Modifier.size(d.iconSm - 4.dp),
                             )
                         }
                     }
+                    // Cancel / remove
                     Box(
                         Modifier
-                            .size(d.iconLg)
+                            .size(d.iconMd + d.spaceXxs)
                             .clip(CircleShape)
                             .background(GlassMd)
                             .clickable { showDeleteDialog = true },
                         Alignment.Center,
-                    ) { Text("✕", color = White40, fontSize = (d.textSm.value - 1f).sp) }
-                }
-
-                Spacer(Modifier.height(d.spaceSm))
-
-                // Progress bar
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(GlassMd)
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(animPct)
-                            .fillMaxHeight()
-                            .background(
-                                brush = when {
-                                    isError    -> SolidColor(Error)
-                                    isPaused   -> SolidColor(White40)
-                                    isQueued   -> SolidColor(White20)
-                                    isRemuxing -> Brush.horizontalGradient(listOf(Brand2, Brand))
-                                    else       -> Brush.horizontalGradient(listOf(Brand, Brand2))
-                                }
-                            )
-                    )
-                }
-
-                Spacer(Modifier.height(d.spaceSm - 1.dp))
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column {
-                        if (isDownloading) {
-                            Text(
-                                "Downloading…",
-                                color = Success.copy(.85f),
-                                fontSize = (d.textXxs.value + 1f).sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        } else if (isRemuxing) {
-                            Text(
-                                "Finalizing…",
-                                color = Brand.copy(.85f),
-                                fontSize = (d.textXxs.value + 1f).sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        } else if (isPaused) {
-                            Text(
-                                "$pctInt% · Paused",
-                                color = White40,
-                                fontSize = (d.textXxs.value + 1f).sp,
-                            )
-                        }
-                        if (sizeText.isNotBlank()) {
-                            Text(
-                                sizeText,
-                                color = White40,
-                                fontSize = (d.textXxs.value + 1f).sp,
-                            )
-                        }
-                    }
-
-                    // Pause / Resume / Retry action pill — hidden during remux (can't cancel remux)
-                    if (!isRemuxing) {
-                        Row(
-                            Modifier
-                                .clip(RoundedCornerShape(d.radiusPill))
-                                .background(
-                                    if (isPaused || isError) Brand.copy(.15f) else GlassMd
-                                )
-                                .border(
-                                    1.dp,
-                                    if (isPaused || isError) Brand.copy(.35f) else GlassBorderMd,
-                                    RoundedCornerShape(d.radiusPill),
-                                )
-                                .clickable(
-                                    onClick = when {
-                                        isDownloading -> { { vm.pause(ctx, item) } }
-                                        else          -> { { vm.resume(ctx, item) } }
-                                    }
-                                )
-                                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceXxs + 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                        ) {
-                            Icon(
-                                imageVector = if (isDownloading) IconPause else IconPlay,
-                                contentDescription = null,
-                                tint = if (isPaused || isError) Brand else White60,
-                                modifier = Modifier.size(d.iconSm - 2.dp),
-                            )
-                            Text(
-                                when {
-                                    isDownloading -> "Pause"
-                                    isPaused      -> "Resume"
-                                    isError       -> "Retry"
-                                    isQueued      -> "Queued"
-                                    else          -> "Resume"
-                                },
-                                color = if (isPaused || isError) Brand else White60,
-                                fontSize = d.textXs,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
+                    ) {
+                        Text("✕", color = White40, fontSize = (d.textXxs.value + 1f).sp)
                     }
                 }
             }
