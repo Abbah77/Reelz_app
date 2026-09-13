@@ -134,18 +134,12 @@ class ReelzDownloadService : Service() {
 
     private fun resumeAllPaused() {
         scope.launch {
-            // R4 fix: include REMUXING rows — if the process was killed during remux the
-            // row stays in REMUXING state forever because it is never picked up here.
-            // The engine's downloadHls() will detect that outFile doesn't exist yet and
-            // re-attempt the full remux from the existing .ts segments, which is correct.
-            val paused = downloadDao.getByStatus("PAUSED") +
-                         downloadDao.getByStatus("QUEUED") +
-                         downloadDao.getByStatus("REMUXING")
+            val paused = downloadDao.getByStatus("PAUSED") + downloadDao.getByStatus("QUEUED")
             paused.forEach { row ->
-                val type = when {
-                    row.streamUrl.contains(".m3u8", ignoreCase = true) -> "hls"
-                    else -> "mp4"
-                }
+                // All downloads are MP4 output now; HLS streams are internally
+                // handled by the engine (downloads .ts segments then remuxes → movie.mp4).
+                // The "type" field is only used to decide download strategy internally.
+                val type = if (row.streamUrl.contains(".m3u8", ignoreCase = true)) "hls" else "mp4"
                 @Suppress("UNCHECKED_CAST")
                 val headers = runCatching {
                     com.google.gson.Gson().fromJson(row.headersJson, Map::class.java) as Map<String, String>
@@ -164,27 +158,34 @@ class ReelzDownloadService : Service() {
         observing = true
         scope.launch {
             downloadDao.observeAll().collect { rows ->
-                val active    = rows.filter { it.status == "DOWNLOADING" }
-                val remuxing  = rows.filter { it.status == "REMUXING" }
-                val paused    = rows.filter { it.status == "PAUSED" }
-                val queued    = rows.filter { it.status == "QUEUED" }
-                // Note: "downloads" table never has DONE rows — they move to "files" table
-                val hasAny    = rows.isNotEmpty()
+                val active   = rows.filter { it.status == "DOWNLOADING" }
+                val paused   = rows.filter { it.status == "PAUSED" }
+                val queued   = rows.filter { it.status == "QUEUED" }
+                val done     = rows.count  { it.status == "DONE" }
+                val hasAny   = rows.isNotEmpty()
 
-                val totalSeg  = active.sumOf { it.totalSegments }
-                val doneSeg   = active.sumOf { it.segmentsDone }
-                val progress  = if (totalSeg > 0) (doneSeg * 100 / totalSeg) else 0
+                val remuxing = rows.filter { it.status == "REMUXING" }
+
+                // Byte-based progress for downloading; percent-based for remuxing
+                val progress = when {
+                    active.isNotEmpty() -> {
+                        val totalBytes = active.sumOf { it.sizeBytes }
+                        val doneBytes  = active.sumOf { it.downloadedBytes }
+                        if (totalBytes > 0) (doneBytes * 100 / totalBytes).toInt() else 0
+                    }
+                    remuxing.isNotEmpty() -> remuxing.first().progressPercent
+                    else -> 0
+                }
 
                 val msg = when {
-                    remuxing.isNotEmpty() -> {
-                        "Converting ${remuxing.size} file${if (remuxing.size > 1) "s" else ""} to MP4…"
-                    }
+                    remuxing.isNotEmpty() -> "Finalizing…"
                     active.isNotEmpty() -> {
-                        val pct = if (active.size == 1) " ($progress%)" else ""
+                        val pct = if (active.size == 1 && progress > 0) " ($progress%)" else ""
                         "${active.size} downloading$pct"
                     }
                     queued.isNotEmpty() -> "${queued.size} queued"
                     paused.isNotEmpty() -> "${paused.size} paused"
+                    done > 0            -> "$done download(s) complete"
                     else                -> "Downloads ready"
                 }
 

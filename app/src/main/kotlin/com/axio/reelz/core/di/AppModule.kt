@@ -111,5 +111,4 @@ object AppModule {
     @Provides fun provideWatchHistoryDao(db: ReelzDatabase)       = db.watchHistoryDao()
     @Provides fun provideSavedVideoDao(db: ReelzDatabase)         = db.savedVideoDao()
     @Provides fun provideTransferDao(db: ReelzDatabase)           = db.transferDao()
-    @Provides fun provideFileDao(db: ReelzDatabase)               = db.fileDao()
 }

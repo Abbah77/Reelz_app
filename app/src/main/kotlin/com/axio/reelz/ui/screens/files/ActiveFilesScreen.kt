@@ -39,6 +39,7 @@ fun ActiveFilesScreen(
     val activeDownloads by vm.activeDownloads.collectAsState()
 
     val downloading = activeDownloads.filter { it.status == DownloadStatus.DOWNLOADING }
+    val remuxing    = activeDownloads.filter { it.status == DownloadStatus.REMUXING }
     val paused      = activeDownloads.filter { it.status == DownloadStatus.PAUSED }
     val failed      = activeDownloads.filter { it.status == DownloadStatus.ERROR }
     val queued      = activeDownloads.filter { it.status == DownloadStatus.QUEUED }
@@ -123,6 +124,22 @@ fun ActiveFilesScreen(
                     )
                 }
                 items(downloading + queued, key = { "dl-${it.id}" }) { item ->
+                    ActiveDownloadCard(item = item, ctx = ctx, vm = vm)
+                }
+            }
+
+            // ── Remuxing (finalizing) ─────────────────────────────────────────
+            if (remuxing.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(d.spaceXs))
+                    ActiveSectionHeader(
+                        label    = "Finalizing",
+                        count    = remuxing.size,
+                        dotColor = Brand,
+                        pulsing  = true,
+                    )
+                }
+                items(remuxing, key = { "rx-${it.id}" }) { item ->
                     ActiveDownloadCard(item = item, ctx = ctx, vm = vm)
                 }
             }
@@ -218,26 +235,26 @@ private fun ActiveDownloadCard(
 ) {
     val d = LocalDimensions.current
     val isDownloading = item.status == DownloadStatus.DOWNLOADING
+    val isRemuxing    = item.status == DownloadStatus.REMUXING
     val isPaused      = item.status == DownloadStatus.PAUSED
     val isQueued      = item.status == DownloadStatus.QUEUED
     val isError       = item.status == DownloadStatus.ERROR
 
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    // Use the unified downloadProgress helper — works for both HLS and MP4
+    // Use the unified downloadProgress helper
     val pct    = downloadProgress(item)
     val animPct by animateFloatAsState(pct.coerceIn(0f, 1f), label = "active-pct-${item.id}")
     val pctInt = (pct * 100).toInt()
 
-    // Human-readable size text — always show bytes (never segment counts)
+    // Human-readable size text
     val sizeText = when {
-        isQueued -> "Queued"
-        isError  -> "Download failed"
+        isQueued   -> "Queued"
+        isRemuxing -> "Finalizing…"
+        isError    -> "Download failed"
         item.sizeBytes > 0 ->
-            // Both HLS and MP4: show downloaded/total in MB or GB
             "${formatSize(item.downloadedBytes)} / ${formatSize(item.sizeBytes)}"
         item.downloadedBytes > 0 ->
-            // Total unknown (HLS with no size info yet) — show only downloaded
             "${formatSize(item.downloadedBytes)} downloaded"
         else -> if (isPaused) "Paused" else ""
     }
@@ -347,10 +364,11 @@ private fun ActiveDownloadCard(
                             .fillMaxHeight()
                             .background(
                                 brush = when {
-                                    isError  -> SolidColor(Error)
-                                    isPaused -> SolidColor(White40)
-                                    isQueued -> SolidColor(White20)
-                                    else     -> Brush.horizontalGradient(listOf(Brand, Brand2))
+                                    isError    -> SolidColor(Error)
+                                    isPaused   -> SolidColor(White40)
+                                    isQueued   -> SolidColor(White20)
+                                    isRemuxing -> Brush.horizontalGradient(listOf(Brand2, Brand))
+                                    else       -> Brush.horizontalGradient(listOf(Brand, Brand2))
                                 }
                             )
                     )
@@ -371,6 +389,13 @@ private fun ActiveDownloadCard(
                                 fontSize = (d.textXxs.value + 1f).sp,
                                 fontWeight = FontWeight.SemiBold,
                             )
+                        } else if (isRemuxing) {
+                            Text(
+                                "Finalizing…",
+                                color = Brand.copy(.85f),
+                                fontSize = (d.textXxs.value + 1f).sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         } else if (isPaused) {
                             Text(
                                 "$pctInt% · Paused",
@@ -387,46 +412,48 @@ private fun ActiveDownloadCard(
                         }
                     }
 
-                    // Pause / Resume / Retry action pill
-                    Row(
-                        Modifier
-                            .clip(RoundedCornerShape(d.radiusPill))
-                            .background(
-                                if (isPaused || isError) Brand.copy(.15f) else GlassMd
+                    // Pause / Resume / Retry action pill — hidden during remux (can't cancel remux)
+                    if (!isRemuxing) {
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(d.radiusPill))
+                                .background(
+                                    if (isPaused || isError) Brand.copy(.15f) else GlassMd
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isPaused || isError) Brand.copy(.35f) else GlassBorderMd,
+                                    RoundedCornerShape(d.radiusPill),
+                                )
+                                .clickable(
+                                    onClick = when {
+                                        isDownloading -> { { vm.pause(ctx, item) } }
+                                        else          -> { { vm.resume(ctx, item) } }
+                                    }
+                                )
+                                .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceXxs + 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (isDownloading) IconPause else IconPlay,
+                                contentDescription = null,
+                                tint = if (isPaused || isError) Brand else White60,
+                                modifier = Modifier.size(d.iconSm - 2.dp),
                             )
-                            .border(
-                                1.dp,
-                                if (isPaused || isError) Brand.copy(.35f) else GlassBorderMd,
-                                RoundedCornerShape(d.radiusPill),
+                            Text(
+                                when {
+                                    isDownloading -> "Pause"
+                                    isPaused      -> "Resume"
+                                    isError       -> "Retry"
+                                    isQueued      -> "Queued"
+                                    else          -> "Resume"
+                                },
+                                color = if (isPaused || isError) Brand else White60,
+                                fontSize = d.textXs,
+                                fontWeight = FontWeight.SemiBold,
                             )
-                            .clickable(
-                                onClick = when {
-                                    isDownloading -> { { vm.pause(ctx, item) } }
-                                    else          -> { { vm.resume(ctx, item) } }
-                                }
-                            )
-                            .padding(horizontal = d.spaceMd - d.spaceXxs, vertical = d.spaceXxs + 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (isDownloading) IconPause else IconPlay,
-                            contentDescription = null,
-                            tint = if (isPaused || isError) Brand else White60,
-                            modifier = Modifier.size(d.iconSm - 2.dp),
-                        )
-                        Text(
-                            when {
-                                isDownloading -> "Pause"
-                                isPaused      -> "Resume"
-                                isError       -> "Retry"
-                                isQueued      -> "Queued"
-                                else          -> "Resume"
-                            },
-                            color = if (isPaused || isError) Brand else White60,
-                            fontSize = d.textXs,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+                        }
                     }
                 }
             }
@@ -439,7 +466,7 @@ private fun ActiveDownloadCard(
             message  = "Remove \"${item.title}\"${
                 if (item.quality.isNotBlank()) " (${item.quality})" else ""
             } from downloads?",
-            onDelete  = { vm.cancelDownload(item, ctx); showDeleteDialog = false },
+            onDelete  = { vm.delete(item, ctx); showDeleteDialog = false },
             onDismiss = { showDeleteDialog = false },
         )
     }
