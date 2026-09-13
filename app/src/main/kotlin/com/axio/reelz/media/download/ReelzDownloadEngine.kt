@@ -55,6 +55,7 @@ import javax.inject.Singleton
 class ReelzDownloadEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val downloadDao: DownloadDao,
+    private val okHttpClient: OkHttpClient,   // app-shared client — includes Auth interceptor
 ) {
     companion object {
         private const val TAG = "ReelzDownloadEngine"
@@ -75,15 +76,18 @@ class ReelzDownloadEngine @Inject constructor(
     }
 
     // ── OkHttp client ─────────────────────────────────────────────────────────
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+    // Derived from the app's shared client (so Auth + DynamicBaseUrl interceptors
+    // are inherited), but with longer timeouts suited to large file downloads.
+    private val client: OkHttpClient by lazy {
+        okHttpClient.newBuilder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
 
     // ── State ─────────────────────────────────────────────────────────────────
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
