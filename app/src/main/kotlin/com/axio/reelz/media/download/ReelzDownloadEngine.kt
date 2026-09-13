@@ -225,6 +225,13 @@ class ReelzDownloadEngine @Inject constructor(
         val request = Request.Builder().url(url)
             .apply {
                 headers.forEach { (k, v) -> addHeader(k, v) }
+                if (!headers.containsKey("User-Agent")) {
+                    addHeader(
+                        "User-Agent",
+                        "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
+                        "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                    )
+                }
                 if (resumeFrom > 0) addHeader("Range", "bytes=$resumeFrom-")
             }
             .build()
@@ -532,7 +539,16 @@ class ReelzDownloadEngine @Inject constructor(
         for (attempt in 0 until SEGMENT_RETRY_MAX) {
             try {
                 val request = Request.Builder().url(seg.url)
-                    .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+                    .apply {
+                        headers.forEach { (k, v) -> addHeader(k, v) }
+                        if (!headers.containsKey("User-Agent")) {
+                            addHeader(
+                                "User-Agent",
+                                "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
+                                "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                            )
+                        }
+                    }
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code} for segment ${seg.index}")
@@ -584,10 +600,24 @@ class ReelzDownloadEngine @Inject constructor(
             for (attempt in 0..4) {
                 try {
                     val req = Request.Builder().url(url)
-                        .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+                        .apply {
+                            headers.forEach { (k, v) -> addHeader(k, v) }
+                            // Add a browser-like User-Agent if not already set — some CDNs
+                            // reject bare OkHttp requests that lack one
+                            if (!headers.containsKey("User-Agent")) {
+                                addHeader(
+                                    "User-Agent",
+                                    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
+                                    "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                )
+                            }
+                        }
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (!resp.isSuccessful) {
+                            // Log the real status so we can diagnose CDN blocks vs network errors
+                            val errBody = resp.body?.string()?.take(300) ?: ""
+                            Log.w(TAG, "fetchText attempt $attempt: HTTP ${resp.code} for $url — $errBody")
                             lastError = IOException("HTTP ${resp.code}")
                         } else {
                             return@withContext resp.body?.string()
@@ -600,6 +630,7 @@ class ReelzDownloadEngine @Inject constructor(
                 }
                 if (attempt < 4) delay(400L * (1L shl attempt))
             }
+            Log.e(TAG, "fetchText gave up after 5 attempts for $url — last error: ${lastError?.message}")
             null
         }
 
