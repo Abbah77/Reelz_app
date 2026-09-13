@@ -336,9 +336,6 @@ class TransferManager @Inject constructor(
             saveDir     = saveDir,   // default landing; per-file routing done below via overrideSaveDir
             onFileStart = { fileName, total, meta ->
                 // ── Early duplicate guard ─────────────────────────────────────
-                // Check BEFORE accepting any file bytes. If the receiver already
-                // has this exact (mediaId, season, episode, quality) in a non-ERROR
-                // state, reject immediately so the sender knows on the first packet.
                 val isRawTs = fileName.endsWith(".ts", ignoreCase = true)
                 if (!isRawTs) {
                     val earlyMediaId = meta.mediaId.ifBlank {
@@ -354,7 +351,6 @@ class TransferManager @Inject constructor(
                     }
                     if (earlyDupe) {
                         // Already have this exact quality — cancel before any bytes land.
-                        // cancelCurrentReceive() sets the skip flag and sends CANCEL to sender.
                         engine.cancelCurrentReceive()
                         // Show a DONE chip in receiver UI so the user knows it was skipped
                         _receiveQueue.value = _receiveQueue.value + TransferItem(
@@ -369,22 +365,20 @@ class TransferManager @Inject constructor(
                             quality   = meta.quality,
                             mediaId   = meta.mediaId,
                         )
-                        return@onFileStart
+                    } else {
+                        _receiveQueue.value = _receiveQueue.value + TransferItem(
+                            fileName  = fileName,
+                            sizeBytes = total,
+                            status    = TransferItemStatus.ACTIVE,
+                            title     = meta.title.ifBlank { fileName },
+                            posterUrl = meta.posterUrl,
+                            mediaType = meta.mediaType,
+                            season    = meta.season,
+                            episode   = meta.episode,
+                            quality   = meta.quality,
+                            mediaId   = meta.mediaId,
+                        )
                     }
-
-                    val item = TransferItem(
-                        fileName  = fileName,
-                        sizeBytes = total,
-                        status    = TransferItemStatus.ACTIVE,
-                        title     = meta.title.ifBlank { fileName },
-                        posterUrl = meta.posterUrl,
-                        mediaType = meta.mediaType,
-                        season    = meta.season,
-                        episode   = meta.episode,
-                        quality   = meta.quality,
-                        mediaId   = meta.mediaId,
-                    )
-                    _receiveQueue.value = _receiveQueue.value + item
                 }
             },
             onProgress = { received, total, bps, fileName ->

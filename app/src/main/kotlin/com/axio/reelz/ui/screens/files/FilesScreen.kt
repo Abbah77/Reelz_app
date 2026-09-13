@@ -1976,6 +1976,7 @@ fun StatusPill(status: DownloadStatus) {
     val (color, label) = when (status) {
         DownloadStatus.DONE        -> Success to "Ready"
         DownloadStatus.DOWNLOADING -> Brand to "Downloading"
+        DownloadStatus.REMUXING    -> Brand to "Finalizing"
         DownloadStatus.QUEUED      -> White60 to "Queued"
         DownloadStatus.PAUSED      -> White40 to "Paused"
         DownloadStatus.ERROR       -> Error to "Failed"
