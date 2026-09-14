@@ -10,7 +10,7 @@ package com.axio.reelz.data.model
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class MediaType   { MOVIE, TV }
-enum class DownloadStatus { QUEUED, DOWNLOADING, REMUXING, PAUSED, DONE, ERROR }
+enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
 enum class TransferStatus { IDLE, CONNECTING, TRANSFERRING, DONE, ERROR }
 enum class TransferDirection { SEND, RECEIVE }
 
@@ -144,16 +144,17 @@ data class DownloadItem(
     val filePath: String = "",
     val sizeBytes: Long = 0,
     val downloadedBytes: Long = 0,
-    val progressPercent: Int = 0,       // 0-100, used for REMUXING phase progress
     val status: DownloadStatus = DownloadStatus.QUEUED,
     val streamUrl: String = "",
     val headers: Map<String, String> = emptyMap(),
-    val source: String = "download",    // "download" | "transfer"
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
+    val segmentsDone: Int = 0,
+    val totalSegments: Int = 0,
     val watchProgressMs: Long = 0,
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
+    val localPlaylistPath: String = "",  // HLS: path to local index.m3u8; MP4: same as filePath
 )
 
 // ── User session ──────────────────────────────────────────────────────────────

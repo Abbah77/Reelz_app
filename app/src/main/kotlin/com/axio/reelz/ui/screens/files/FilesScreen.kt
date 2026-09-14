@@ -154,12 +154,11 @@ class DownloadsViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // ── Active: any non-DONE state (includes REMUXING = finalizing phase) ────
+    // ── Active: any non-DONE, non-cancelled state ─────────────────────────────
     val activeDownloads: StateFlow<List<DownloadItem>> = allDownloads
         .map { list ->
             list.filter {
                 it.status == DownloadStatus.DOWNLOADING
-                    || it.status == DownloadStatus.REMUXING
                     || it.status == DownloadStatus.QUEUED
                     || it.status == DownloadStatus.PAUSED
                     || it.status == DownloadStatus.ERROR
@@ -397,32 +396,23 @@ fun FilesScreen(nav: NavController, adEngine: com.axio.reelz.ads.AdEngine? = nul
                 else if (isEmpty) { item { LibraryPendingState() } }
 
                 if (showMovies && movieGroups.isNotEmpty()) {
-                    // Count total cards (one per downloaded quality, not per movie title)
-                    val totalMovieCards = movieGroups.sumOf { it.doneDownloads.size }
                     item {
                         SectionLabel(
                             "Movies",
-                            "$totalMovieCards download${if (totalMovieCards > 1) "s" else ""}",
+                            "${movieGroups.size} title${if (movieGroups.size > 1) "s" else ""}",
                             modifier = Modifier.padding(horizontal = d.screenHorizPad, vertical = d.spaceSm),
                         )
                     }
-                    // Flatten: one card per quality — user sees 720p and 480p as two separate cards
-                    movieGroups.forEach { group ->
-                        items(
-                            group.doneDownloads.sortedByDescending { it.sizeBytes },
-                            key = { "mq-${it.id}" },
-                        ) { item ->
-                            MovieQualityCard(
-                                item       = item,
-                                group      = group,
-                                onPlay     = { playDownload(ctx, item) },
-                                onDelete   = { vm.delete(item, ctx) },
-                                onDeleteAll = { vm.deleteMovieGroup(group, ctx) },
-                                modifier   = Modifier
-                                    .padding(horizontal = d.screenHorizPad)
-                                    .padding(bottom = d.spaceSm + d.spaceXxs),
-                            )
-                        }
+                    items(movieGroups, key = { "mg-${it.mediaId}" }) { group ->
+                        MovieGroupCard(
+                            group           = group,
+                            onPlay          = { item -> playDownload(ctx, item) },
+                            onDelete        = { vm.deleteMovieGroup(group, ctx) },
+                            onDeleteQuality = { item -> vm.delete(item, ctx) },
+                            modifier        = Modifier
+                                .padding(horizontal = d.screenHorizPad)
+                                .padding(bottom = d.spaceSm + d.spaceXxs),
+                        )
                     }
                 }
 
@@ -564,21 +554,13 @@ private fun SeriesDetailPage(
             verticalArrangement = Arrangement.spacedBy(d.spaceSm),
         ) {
             if (currentSeason != null) {
-                // Flat list: for each episode, show one card per downloaded quality,
-                // all before moving to the next episode (E1-720p, E1-480p, E2-720p …)
-                currentSeason.episodeGroups.forEach { eg ->
-                    items(
-                        eg.doneDownloads.sortedByDescending { it.sizeBytes },
-                        key = { "epq-${it.id}" },
-                    ) { item ->
-                        EpisodeQualityCard(
-                            item     = item,
-                            eg       = eg,
-                            onPlay   = { playDownload(ctx, item) },
-                            onDelete = { vm.delete(item, ctx) },
-                            onDeleteEpisode = { vm.deleteEpisodeGroup(eg, ctx) },
-                        )
-                    }
+                items(currentSeason.episodeGroups, key = { "eg-${it.mediaId}-${it.season}-${it.episode}" }) { eg ->
+                    EpisodeGroupCard(
+                        eg              = eg,
+                        onPlay          = { item -> playDownload(ctx, item) },
+                        onDelete        = { vm.deleteEpisodeGroup(eg, ctx) },
+                        onDeleteQuality = { item -> vm.delete(item, ctx) },
+                    )
                 }
             }
         }
@@ -1122,204 +1104,6 @@ fun MovieGroupCard(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MovieQualityCard — one card per downloaded quality
-// Each quality shows its own size, source badge (if received), and delete action.
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun MovieQualityCard(
-    item: DownloadItem,
-    group: MovieGroup,
-    onPlay: () -> Unit,
-    onDelete: () -> Unit,
-    onDeleteAll: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val d = LocalDimensions.current
-    var showMenu by remember { mutableStateOf(false) }
-    var showDeleteDialog by remember { mutableStateOf(false) }
-
-    val isTransfer   = item.source == "transfer"
-    val accentColor  = if (isTransfer) Color(0xFF0A84FF) else Success
-    val watchFraction = if (item.durationMs > 0)
-        (item.watchProgressMs.toFloat() / item.durationMs).coerceIn(0f, 1f) else 0f
-    val hasProgress = item.watchProgressMs > 0 && item.durationMs > 0
-
-    Box(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .background(BgCard)
-            .border(1.dp, accentColor.copy(.2f), RoundedCornerShape(d.radiusLg - d.spaceXxs))
-    ) {
-        // Left accent bar
-        Box(
-            Modifier
-                .width(3.dp).fillMaxHeight()
-                .background(Brush.verticalGradient(listOf(accentColor.copy(.8f), accentColor.copy(.3f))))
-                .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
-        )
-
-        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.CenterVertically) {
-            // Poster
-            Box(
-                Modifier
-                    .width(d.avatarMd + d.spaceXxs + 2.dp)
-                    .height(d.avatarLg + d.spaceXxs)
-                    .clip(RoundedCornerShape(d.radiusSm + 2.dp))
-                    .background(BgRaised)
-                    .clickable { onPlay() }
-            ) {
-                AsyncImage(
-                    model = item.posterUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(.35f)), Alignment.Center) {
-                    Box(
-                        Modifier.size(d.iconLg).clip(CircleShape)
-                            .background(Color.Black.copy(.55f))
-                            .border(1.5.dp, White60, CircleShape),
-                        Alignment.Center,
-                    ) {
-                        Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp))
-                    }
-                }
-                if (hasProgress) {
-                    Box(
-                        Modifier.fillMaxWidth().height(3.dp)
-                            .background(Color.Black.copy(.5f))
-                            .align(Alignment.BottomCenter)
-                    ) {
-                        Box(Modifier.fillMaxWidth(watchFraction).fillMaxHeight().background(Brand))
-                    }
-                }
-            }
-
-            Spacer(Modifier.width(d.spaceMd))
-
-            Column(Modifier.weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        item.title,
-                        color = White,
-                        fontSize = d.textMd,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(d.spaceXs))
-                    Box(
-                        Modifier
-                            .size(d.iconLg)
-                            .clip(CircleShape)
-                            .background(GlassMd)
-                            .clickable { showMenu = true },
-                        Alignment.Center,
-                    ) { Text("⋮", color = White60, fontSize = d.textMd) }
-                }
-
-                Spacer(Modifier.height(d.spaceXxs))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                        ) {
-                            QualityChip(item.quality)
-                            if (isTransfer) {
-                                // Blue "Received" badge for P2P transfers
-                                Box(
-                                    Modifier
-                                        .clip(RoundedCornerShape(d.radiusSm))
-                                        .background(Color(0xFF0A84FF).copy(.15f))
-                                        .border(1.dp, Color(0xFF0A84FF).copy(.4f), RoundedCornerShape(d.radiusSm))
-                                        .padding(horizontal = d.spaceXs, vertical = 1.dp)
-                                ) {
-                                    Text("Received", color = Color(0xFF0A84FF), fontSize = (d.textXxs.value).sp, fontWeight = FontWeight.SemiBold)
-                                }
-                            }
-                        }
-                        if (item.sizeBytes > 0) {
-                            Text(formatSize(item.sizeBytes), color = White40, fontSize = d.textXs)
-                        }
-                        Spacer(Modifier.height(d.spaceXxs))
-                        Text(
-                            when {
-                                hasProgress -> {
-                                    val pct = (watchFraction * 100).toInt()
-                                    if (pct >= 95) "Watched" else "$pct% watched"
-                                }
-                                item.lastPlayedAt > 0 -> "Played recently"
-                                else -> "Not opened"
-                            },
-                            color = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
-                            fontSize = (d.textXxs.value + 1f).sp,
-                            fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    }
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(d.radiusPill))
-                            .background(Brand.copy(.15f))
-                            .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
-                            .clickable { onPlay() }
-                            .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 2.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                        ) {
-                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm - 1.dp))
-                            Text("Play", color = Brand, fontSize = d.textXs, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showMenu) {
-        val hasOtherQualities = group.doneDownloads.size > 1
-        DownloadOptionsSheet(
-            title    = "${item.title} · ${item.quality}",
-            subtitle = formatSize(item.sizeBytes),
-            options  = buildList {
-                add(MenuOption("▶", "Play") { onPlay(); showMenu = false })
-                add(MenuOption("🗑", "Delete ${item.quality} (${formatSize(item.sizeBytes)})", isDestructive = true) {
-                    onDelete(); showMenu = false
-                })
-                if (hasOtherQualities) {
-                    add(MenuOption("🗑", "Delete All Versions", isDestructive = true) {
-                        showDeleteDialog = true; showMenu = false
-                    })
-                }
-            },
-            onDismiss = { showMenu = false },
-        )
-    }
-
-    if (showDeleteDialog) {
-        ReelzDeleteDialog(
-            title     = "Delete \"${item.title}\"?",
-            message   = "This will remove all ${group.doneDownloads.size} downloaded version${if (group.doneDownloads.size > 1) "s" else ""} (${formatSize(group.totalSize)}) from your device.",
-            onDelete  = { onDeleteAll(); showDeleteDialog = false },
-            onDismiss = { showDeleteDialog = false },
-        )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Series root card
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1650,203 +1434,6 @@ fun EpisodeGroupCard(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EpisodeQualityCard — one card per downloaded quality for a single episode.
-// Shown in the season episode list: E1-720p, E1-480p, E2-720p …
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-fun EpisodeQualityCard(
-    item: DownloadItem,
-    eg: EpisodeGroup,
-    onPlay: () -> Unit,
-    onDelete: () -> Unit,
-    onDeleteEpisode: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val d = LocalDimensions.current
-    var showMenu by remember { mutableStateOf(false) }
-    var showDeleteDialog by remember { mutableStateOf(false) }
-
-    val isTransfer  = item.source == "transfer"
-    val accentColor = if (isTransfer) Color(0xFF0A84FF) else Success
-    val epLabel     = if (eg.episodeName.isNotBlank()) eg.episodeName else "Episode ${eg.episode}"
-
-    val watchFraction = if (item.durationMs > 0)
-        (item.watchProgressMs.toFloat() / item.durationMs).coerceIn(0f, 1f) else 0f
-    val hasProgress = item.watchProgressMs > 0 && item.durationMs > 0
-
-    Box(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(d.radiusLg - d.spaceXxs))
-            .background(BgCard)
-            .border(1.dp, accentColor.copy(.15f), RoundedCornerShape(d.radiusLg - d.spaceXxs))
-    ) {
-        // Left accent bar
-        Box(
-            Modifier
-                .width(3.dp).fillMaxHeight()
-                .background(Brush.verticalGradient(listOf(accentColor.copy(.7f), accentColor.copy(.2f))))
-                .clip(RoundedCornerShape(topStart = d.radiusLg, bottomStart = d.radiusLg))
-        )
-
-        Row(Modifier.fillMaxWidth().padding(d.spaceMd), verticalAlignment = Alignment.CenterVertically) {
-            // Thumbnail
-            Box(
-                Modifier
-                    .width(d.avatarMd + d.spaceXxs + 2.dp)
-                    .height(d.avatarLg + d.spaceXxs)
-                    .clip(RoundedCornerShape(d.radiusSm + 2.dp))
-                    .background(BgRaised)
-                    .clickable { onPlay() }
-            ) {
-                AsyncImage(
-                    model = item.posterUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(.35f)), Alignment.Center) {
-                    Box(
-                        Modifier.size(d.iconLg).clip(CircleShape)
-                            .background(Color.Black.copy(.55f))
-                            .border(1.5.dp, White60, CircleShape),
-                        Alignment.Center,
-                    ) { Icon(IconPlay, null, tint = Color.White, modifier = Modifier.size(d.iconSm + 2.dp).offset(x = 1.dp)) }
-                }
-                if (hasProgress) {
-                    Box(
-                        Modifier.fillMaxWidth().height(3.dp)
-                            .background(Color.Black.copy(.5f))
-                            .align(Alignment.BottomCenter)
-                    ) {
-                        Box(Modifier.fillMaxWidth(watchFraction).fillMaxHeight().background(Brand))
-                    }
-                }
-            }
-
-            Spacer(Modifier.width(d.spaceMd))
-
-            Column(Modifier.weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "E${eg.episode} · $epLabel",
-                        color      = White,
-                        fontSize   = d.textSm,
-                        fontWeight = FontWeight.Bold,
-                        maxLines   = 1,
-                        overflow   = TextOverflow.Ellipsis,
-                        modifier   = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(d.spaceXs))
-                    Box(
-                        Modifier
-                            .size(d.iconLg)
-                            .clip(CircleShape)
-                            .background(GlassMd)
-                            .clickable { showMenu = true },
-                        Alignment.Center,
-                    ) { Text("⋮", color = White60, fontSize = d.textMd) }
-                }
-
-                Spacer(Modifier.height(d.spaceXxs))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                        ) {
-                            QualityChip(item.quality)
-                            if (isTransfer) {
-                                Box(
-                                    Modifier
-                                        .clip(RoundedCornerShape(d.radiusSm))
-                                        .background(Color(0xFF0A84FF).copy(.15f))
-                                        .border(1.dp, Color(0xFF0A84FF).copy(.4f), RoundedCornerShape(d.radiusSm))
-                                        .padding(horizontal = d.spaceXs, vertical = 1.dp)
-                                ) {
-                                    Text("Received", color = Color(0xFF0A84FF), fontSize = (d.textXxs.value).sp, fontWeight = FontWeight.SemiBold)
-                                }
-                            }
-                        }
-                        if (item.sizeBytes > 0) {
-                            Text(formatSize(item.sizeBytes), color = White40, fontSize = d.textXs)
-                        }
-                        Spacer(Modifier.height(d.spaceXxs))
-                        Text(
-                            when {
-                                hasProgress -> {
-                                    val pct = (watchFraction * 100).toInt()
-                                    if (pct >= 95) "Watched" else "$pct% watched"
-                                }
-                                item.lastPlayedAt > 0 -> "Played recently"
-                                else -> "Not opened"
-                            },
-                            color      = if (hasProgress && watchFraction < 0.95f) Brand.copy(.8f) else White40,
-                            fontSize   = (d.textXxs.value + 1f).sp,
-                            fontWeight = if (hasProgress) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    }
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(d.radiusPill))
-                            .background(Brand.copy(.15f))
-                            .border(1.dp, Brand.copy(.35f), RoundedCornerShape(d.radiusPill))
-                            .clickable { onPlay() }
-                            .padding(horizontal = d.spaceMd, vertical = d.spaceXxs + 2.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(d.spaceXxs + 1.dp),
-                        ) {
-                            Icon(IconPlay, null, tint = Brand, modifier = Modifier.size(d.iconSm - 1.dp))
-                            Text("Play", color = Brand, fontSize = d.textXs, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showMenu) {
-        val hasOtherQualities = eg.doneDownloads.size > 1
-        DownloadOptionsSheet(
-            title    = "E${eg.episode} · $epLabel",
-            subtitle = "S${eg.season.toString().padStart(2,'0')}E${eg.episode.toString().padStart(2,'0')} · ${item.quality}${if (item.sizeBytes > 0) " · ${formatSize(item.sizeBytes)}" else ""}",
-            options  = buildList {
-                add(MenuOption("▶", "Play") { onPlay(); showMenu = false })
-                add(MenuOption("🗑", "Delete ${item.quality} (${formatSize(item.sizeBytes)})", isDestructive = true) {
-                    onDelete(); showMenu = false
-                })
-                if (hasOtherQualities) {
-                    add(MenuOption("🗑", "Delete Episode (All Qualities)", isDestructive = true) {
-                        showDeleteDialog = true; showMenu = false
-                    })
-                }
-            },
-            onDismiss = { showMenu = false },
-        )
-    }
-
-    if (showDeleteDialog) {
-        ReelzDeleteDialog(
-            title     = "Delete Episode?",
-            message   = "Remove all ${eg.doneDownloads.size} version${if (eg.doneDownloads.size > 1) "s" else ""} of \"$epLabel\" (${formatSize(eg.totalSize)}) from your device?",
-            onDelete  = { onDeleteEpisode(); showDeleteDialog = false },
-            onDismiss = { showDeleteDialog = false },
-        )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Multi-quality badge row
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1976,7 +1563,6 @@ fun StatusPill(status: DownloadStatus) {
     val (color, label) = when (status) {
         DownloadStatus.DONE        -> Success to "Ready"
         DownloadStatus.DOWNLOADING -> Brand to "Downloading"
-        DownloadStatus.REMUXING    -> Brand to "Finalizing"
         DownloadStatus.QUEUED      -> White60 to "Queued"
         DownloadStatus.PAUSED      -> White40 to "Paused"
         DownloadStatus.ERROR       -> Error to "Failed"
@@ -2052,12 +1638,12 @@ private fun ReelzDeleteDialog(
 
 /**
  * Unified progress fraction [0..1] for a DownloadItem.
- * REMUXING phase uses progressPercent (0-100).
- * DOWNLOADING phase uses byte-based progress.
+ * Prefers segment-based progress for HLS (most accurate), falls back to
+ * byte-based for MP4, then 0.
  */
 fun downloadProgress(item: DownloadItem): Float = when {
-    item.status == DownloadStatus.REMUXING ->
-        (item.progressPercent / 100f).coerceIn(0f, 1f)
+    item.totalSegments > 0 ->
+        item.segmentsDone.toFloat() / item.totalSegments
     item.sizeBytes > 0 ->
         (item.downloadedBytes.toFloat() / item.sizeBytes).coerceIn(0f, 1f)
     else -> 0f
@@ -2077,8 +1663,9 @@ private fun playDownload(ctx: Context, dl: DownloadItem) {
     }
     when {
         dl.status == DownloadStatus.DONE && dl.filePath.isNotBlank() -> {
+            val isHls = dl.filePath.endsWith(".m3u8", ignoreCase = true)
             base.putExtra("streamUrl",   "file://${dl.filePath}")
-            base.putExtra("streamIsHls", false) // always MP4 — HLS streams are remuxed to movie.mp4
+            base.putExtra("streamIsHls", isHls)
             ctx.startActivity(base)
         }
     }

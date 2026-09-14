@@ -306,53 +306,31 @@ interface AppConfigCacheDao {
 }
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
-//
-// Schema v8 changes:
-//   • Unique index on (mediaId, season, episode, quality) — prevents duplicate rows
-//   • Removed: segmentsDone, totalSegments, localPlaylistPath (HLS-only fields)
-//   • Added:   source ("download" | "transfer"), progressPercent (remux phase 0-100)
-//   • REMUXING added as a valid status string (see DownloadStatus in Models.kt)
-//
-@Entity(
-    tableName = "downloads",
-    indices = [Index(value = ["mediaId", "season", "episode", "quality"], unique = true)],
-)
+@Entity(tableName = "downloads")
 data class DownloadRow(
     @PrimaryKey val id: String,
-
-    // Content identity (also enforces dedup at DB level)
     val mediaId: String,
-    val season: Int = 0,      // 0 for movies
-    val episode: Int = 0,     // 0 for movies
-    val quality: String = "720p",
-
     val title: String,
-    val episodeName: String = "",
     val posterUrl: String?,
     val mediaType: String,
-
-    // Source
-    val streamUrl: String = "",
-    val headersJson: String = "{}",
-    val source: String = "download",   // "download" | "transfer"
-
-    // File
+    val season: Int = 0,
+    val episode: Int = 0,
+    val episodeName: String = "",
+    val quality: String = "720p",
     val filePath: String = "",
     val sizeBytes: Long = 0,
     val downloadedBytes: Long = 0,
-    val progressPercent: Int = 0,      // 0-100 used for REMUXING phase progress
-
-    // Status: QUEUED | DOWNLOADING | REMUXING | PAUSED | DONE | ERROR
     val status: String = "QUEUED",
-
-    // Timestamps
+    val streamUrl: String = "",
+    val headersJson: String = "{}",
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
-
-    // Watch state
+    val segmentsDone: Int = 0,
+    val totalSegments: Int = 0,
     val watchProgressMs: Long = 0,
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
+    val localPlaylistPath: String = "",
 )
 
 @Dao
@@ -377,50 +355,76 @@ interface DownloadDao {
     suspend fun insert(row: DownloadRow)
 
     /**
-     * Update in-progress download state (DOWNLOADING phase).
+     * Update in-progress download state.
      * [sizeBytes] is only written when > 0 to avoid clobbering a previously
-     * stored value with zero (size may be unknown early in the download).
+     * stored value with zero (e.g. HLS doesn't know total size mid-download).
      */
     @Query("""
         UPDATE downloads
         SET
-            status          = :status,
-            downloadedBytes = :bytes,
-            sizeBytes       = CASE WHEN :sizeBytes > 0 THEN :sizeBytes ELSE sizeBytes END
+            status            = :status,
+            downloadedBytes   = :bytes,
+            segmentsDone      = :done,
+            totalSegments     = :total,
+            localPlaylistPath = :playlist,
+            sizeBytes         = CASE WHEN :sizeBytes > 0 THEN :sizeBytes ELSE sizeBytes END
         WHERE id = :id
     """)
     suspend fun updateProgress(
         id: String,
         status: String,
         bytes: Long,
+        done: Int = 0,
+        total: Int = 0,
+        playlist: String = "",
         sizeBytes: Long = 0L,
     )
 
-    /** Update remux phase progress (0-100). Status is set to REMUXING. */
-    @Query("""
-        UPDATE downloads
-        SET status = 'REMUXING', progressPercent = :percent
-        WHERE id = :id
-    """)
-    suspend fun updateRemuxProgress(id: String, percent: Int)
-
-    /** Mark a download complete — sets real file size, path, timestamps. */
+    /** Mark an MP4 download complete — sets real file size, path, timestamps. */
     @Query("""
         UPDATE downloads
         SET
-            status          = 'DONE',
+            status          = :status,
             filePath        = :path,
             completedAt     = :at,
             sizeBytes       = :sizeBytes,
-            downloadedBytes = :sizeBytes,
-            progressPercent = 100
+            downloadedBytes = :sizeBytes
         WHERE id = :id
     """)
-    suspend fun markDone(
+    suspend fun markDoneMp4(
         id: String,
+        status: String,
         path: String,
         at: Long,
         sizeBytes: Long,
+    )
+
+    /**
+     * Mark an HLS download complete.
+     * Stores the local m3u8 in both filePath and localPlaylistPath, writes
+     * real sizeBytes (sum of all .ts files), and syncs segmentsDone = totalSegments.
+     */
+    @Query("""
+        UPDATE downloads
+        SET
+            status            = :status,
+            filePath          = :path,
+            localPlaylistPath = :path,
+            completedAt       = :at,
+            sizeBytes         = :sizeBytes,
+            downloadedBytes   = :sizeBytes,
+            segmentsDone      = :done,
+            totalSegments     = :total
+        WHERE id = :id
+    """)
+    suspend fun markDoneHls(
+        id: String,
+        status: String,
+        path: String,
+        at: Long,
+        sizeBytes: Long,
+        done: Int,
+        total: Int,
     )
 
     @Query("UPDATE downloads SET status = 'PAUSED' WHERE id = :id")
@@ -637,87 +641,6 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
-// Migration 7→8: HLS removal + unique index + new columns (source, progressPercent)
-//
-// SQLite does not support DROP COLUMN, so we rebuild the downloads table:
-//   1. Create a new table with the correct schema (unique index, new cols, no HLS cols).
-//   2. Copy existing rows, defaulting source="download" and progressPercent=0.
-//   3. Drop old table, rename new → downloads.
-val MIGRATION_7_8 = object : Migration(7, 8) {
-    override fun migrate(db: SupportSQLiteDatabase) {
-        // Step 1 — create new table
-        db.execSQL("""
-            CREATE TABLE IF NOT EXISTS `downloads_new` (
-                `id`              TEXT    NOT NULL,
-                `mediaId`         TEXT    NOT NULL,
-                `season`          INTEGER NOT NULL DEFAULT 0,
-                `episode`         INTEGER NOT NULL DEFAULT 0,
-                `quality`         TEXT    NOT NULL DEFAULT '720p',
-                `title`           TEXT    NOT NULL,
-                `episodeName`     TEXT    NOT NULL DEFAULT '',
-                `posterUrl`       TEXT,
-                `mediaType`       TEXT    NOT NULL,
-                `streamUrl`       TEXT    NOT NULL DEFAULT '',
-                `headersJson`     TEXT    NOT NULL DEFAULT '{}',
-                `source`          TEXT    NOT NULL DEFAULT 'download',
-                `filePath`        TEXT    NOT NULL DEFAULT '',
-                `sizeBytes`       INTEGER NOT NULL DEFAULT 0,
-                `downloadedBytes` INTEGER NOT NULL DEFAULT 0,
-                `progressPercent` INTEGER NOT NULL DEFAULT 0,
-                `status`          TEXT    NOT NULL DEFAULT 'QUEUED',
-                `createdAt`       INTEGER NOT NULL DEFAULT 0,
-                `completedAt`     INTEGER NOT NULL DEFAULT 0,
-                `watchProgressMs` INTEGER NOT NULL DEFAULT 0,
-                `durationMs`      INTEGER NOT NULL DEFAULT 0,
-                `lastPlayedAt`    INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(`id`)
-            )
-        """.trimIndent())
-
-        // Step 2 — unique index
-        db.execSQL("""
-            CREATE UNIQUE INDEX IF NOT EXISTS
-            `index_downloads_new_mediaId_season_episode_quality`
-            ON `downloads_new` (`mediaId`, `season`, `episode`, `quality`)
-        """.trimIndent())
-
-        // Step 3 — copy data (skip rows that would violate the new unique constraint)
-        db.execSQL("""
-            INSERT OR IGNORE INTO downloads_new
-                (id, mediaId, season, episode, quality, title, episodeName, posterUrl,
-                 mediaType, streamUrl, headersJson, source, filePath, sizeBytes,
-                 downloadedBytes, progressPercent, status, createdAt, completedAt,
-                 watchProgressMs, durationMs, lastPlayedAt)
-            SELECT
-                id, mediaId,
-                COALESCE(season, 0),
-                COALESCE(episode, 0),
-                COALESCE(quality, '720p'),
-                title,
-                COALESCE(episodeName, ''),
-                posterUrl, mediaType,
-                COALESCE(streamUrl, ''),
-                COALESCE(headersJson, '{}'),
-                'download',
-                COALESCE(filePath, ''),
-                COALESCE(sizeBytes, 0),
-                COALESCE(downloadedBytes, 0),
-                0,
-                COALESCE(status, 'QUEUED'),
-                COALESCE(createdAt, 0),
-                COALESCE(completedAt, 0),
-                COALESCE(watchProgressMs, 0),
-                COALESCE(durationMs, 0),
-                COALESCE(lastPlayedAt, 0)
-            FROM downloads
-        """.trimIndent())
-
-        // Step 4 — swap tables
-        db.execSQL("DROP TABLE downloads")
-        db.execSQL("ALTER TABLE downloads_new RENAME TO downloads")
-    }
-}
-
 @Database(
     entities = [
         CachedFeedRow::class,
@@ -732,7 +655,7 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         DownloadSubtitleRow::class,
         TransferRecord::class,
     ],
-    version = 8,
+    version = 7,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {

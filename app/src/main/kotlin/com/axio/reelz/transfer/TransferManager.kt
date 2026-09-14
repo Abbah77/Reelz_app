@@ -335,50 +335,23 @@ class TransferManager @Inject constructor(
         engine.receiveFiles(
             saveDir     = saveDir,   // default landing; per-file routing done below via overrideSaveDir
             onFileStart = { fileName, total, meta ->
-                // ── Early duplicate guard ─────────────────────────────────────
+                // Show only meaningful items — hide raw .ts segments from UI;
+                // show one entry per media item (the m3u8 or the mp4)
                 val isRawTs = fileName.endsWith(".ts", ignoreCase = true)
                 if (!isRawTs) {
-                    val earlyMediaId = meta.mediaId.ifBlank {
-                        meta.title.ifBlank { fileName.substringBeforeLast('.') }
-                    }
-                    val earlyQuality = meta.quality.ifBlank { "720p" }
-                    val earlyDupe = runBlocking(Dispatchers.IO) {
-                        downloadDao.getForContent(earlyMediaId, meta.season, meta.episode)
-                            .any {
-                                it.quality.equals(earlyQuality, ignoreCase = true) &&
-                                it.status != DownloadStatus.ERROR.name
-                            }
-                    }
-                    if (earlyDupe) {
-                        // Already have this exact quality — cancel before any bytes land.
-                        engine.cancelCurrentReceive()
-                        // Show a DONE chip in receiver UI so the user knows it was skipped
-                        _receiveQueue.value = _receiveQueue.value + TransferItem(
-                            fileName  = fileName,
-                            sizeBytes = total,
-                            status    = TransferItemStatus.DONE,
-                            title     = meta.title.ifBlank { fileName },
-                            posterUrl = meta.posterUrl,
-                            mediaType = meta.mediaType,
-                            season    = meta.season,
-                            episode   = meta.episode,
-                            quality   = meta.quality,
-                            mediaId   = meta.mediaId,
-                        )
-                    } else {
-                        _receiveQueue.value = _receiveQueue.value + TransferItem(
-                            fileName  = fileName,
-                            sizeBytes = total,
-                            status    = TransferItemStatus.ACTIVE,
-                            title     = meta.title.ifBlank { fileName },
-                            posterUrl = meta.posterUrl,
-                            mediaType = meta.mediaType,
-                            season    = meta.season,
-                            episode   = meta.episode,
-                            quality   = meta.quality,
-                            mediaId   = meta.mediaId,
-                        )
-                    }
+                    val item = TransferItem(
+                        fileName  = fileName,
+                        sizeBytes = total,
+                        status    = TransferItemStatus.ACTIVE,
+                        title     = meta.title.ifBlank { fileName },
+                        posterUrl = meta.posterUrl,
+                        mediaType = meta.mediaType,
+                        season    = meta.season,
+                        episode   = meta.episode,
+                        quality   = meta.quality,
+                        mediaId   = meta.mediaId,
+                    )
+                    _receiveQueue.value = _receiveQueue.value + item
                 }
             },
             onProgress = { received, total, bps, fileName ->
@@ -511,10 +484,8 @@ class TransferManager @Inject constructor(
                 filePath        = file.absolutePath,
                 sizeBytes       = file.length(),
                 downloadedBytes = file.length(),
-                progressPercent = 100,
                 status          = DownloadStatus.DONE.name,
-                source          = "transfer",   // distinguishes from user-downloaded files
-                streamUrl       = "",           // no URL — file came from peer
+                streamUrl       = "",
                 headersJson     = "{}",
                 createdAt       = System.currentTimeMillis(),
                 completedAt     = System.currentTimeMillis(),

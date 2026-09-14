@@ -175,8 +175,6 @@ class DetailViewModel @Inject constructor(
          * instead of IconDownloadCloud on the episode/movie download button.
          */
         val downloadedKeys: Set<String> = emptySet(),
-        /** Keys (mediaId_season_episode) for items received via P2P transfer (source="transfer"). */
-        val transferKeys: Set<String> = emptySet(),
         /**
          * Non-null when a network/internal error occurred fetching download links.
          * Null when backend explicitly returned an empty list (true "no streams").
@@ -220,13 +218,11 @@ class DetailViewModel @Inject constructor(
     fun observeDownloads() {
         viewModelScope.launch {
             downloadRepo.observeAll().collect { items ->
-                val nonError = items.filter { it.status != DownloadStatus.ERROR }
-                val keys = nonError.map { "${it.mediaId}_${it.season}_${it.episode}" }.toSet()
-                val tKeys = nonError
-                    .filter { it.source == "transfer" }
+                val keys = items
+                    .filter { it.status != DownloadStatus.ERROR }
                     .map { "${it.mediaId}_${it.season}_${it.episode}" }
                     .toSet()
-                _ui.update { it.copy(downloadedKeys = keys, transferKeys = tKeys) }
+                _ui.update { it.copy(downloadedKeys = keys) }
             }
         }
     }
@@ -533,7 +529,6 @@ fun DetailScreen(
                     vm.openDownloadSheet(id, mediaType, s, e, name)
                 },
                 downloadedKeys = ui.downloadedKeys,
-                transferKeys   = ui.transferKeys,
             )
         }
 
@@ -965,7 +960,6 @@ private fun DetailContent(
     onDownloadMovie: () -> Unit,
     onDownloadEpisode: (Int, Int, String) -> Unit,
     downloadedKeys: Set<String> = emptySet(),
-    transferKeys: Set<String> = emptySet(),
 ) {
     val d = LocalDimensions.current
     val detail  = ui.detail!!
@@ -1043,32 +1037,16 @@ private fun DetailContent(
                     // Always tappable — sheet handles "already downloaded" per quality.
                     // No lock badge on the button itself; that lives inside the sheet.
                     val movieDownloaded = "${detail.id}_0_0" in downloadedKeys
-                    val movieIsTransfer = "${detail.id}_0_0" in transferKeys
                     OutlinedButton(
                         onClick  = onDownloadMovie,
                         shape    = RoundedCornerShape(d.radiusPill),
-                        border   = BorderStroke(
-                            d.borderThin,
-                            when {
-                                movieIsTransfer -> Color(0xFF0A84FF).copy(.5f) // blue for received
-                                movieDownloaded -> Color(0xFF30D158).copy(.5f) // green for downloaded
-                                else            -> GlassBorderMd
-                            }
-                        ),
+                        border   = BorderStroke(d.borderThin, if (movieDownloaded) Color(0xFF30D158).copy(.5f) else GlassBorderMd),
                         modifier = Modifier.height(d.buttonHeightMd),
                     ) {
                         Icon(
                             if (movieDownloaded) IconDownloaded else IconDownloadCloud,
-                            contentDescription = when {
-                                movieIsTransfer -> "Received"
-                                movieDownloaded -> "Offline"
-                                else            -> "Download"
-                            },
-                            tint = when {
-                                movieIsTransfer -> Color(0xFF0A84FF)
-                                movieDownloaded -> Color(0xFF30D158)
-                                else            -> White80
-                            },
+                            contentDescription = if (movieDownloaded) "Offline" else "Download",
+                            tint = if (movieDownloaded) Color(0xFF30D158) else White80,
                             modifier = Modifier.size(d.iconMd - 2.dp),
                         )
                     }
@@ -1170,7 +1148,6 @@ private fun DetailContent(
                         onClick      = { onPlayEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
                         onDownload   = { onDownloadEpisode(ep.seasonNumber, ep.episodeNumber, ep.name) },
                         isDownloaded = epKey in downloadedKeys,
-                        isTransfer   = epKey in transferKeys,
                     )
                 }
             }
@@ -1221,7 +1198,6 @@ fun EpisodeRow(
     onClick: () -> Unit,
     onDownload: () -> Unit = {},
     isDownloaded: Boolean = false,
-    isTransfer: Boolean = false,
 ) {
     val d = LocalDimensions.current
     Row(
@@ -1262,19 +1238,17 @@ fun EpisodeRow(
             Box(Modifier.fillMaxSize().background(Color.Black.copy(.28f)), Alignment.Center) {
                 Icon(IconPlayCircle, null, tint = White.copy(.85f), modifier = Modifier.size(d.iconLg))
             }
-            // "Offline" / "Received" badge when downloaded or transferred
+            // "Offline" badge when already downloaded
             if (isDownloaded) {
-                val badgeColor = if (isTransfer) Color(0xFF0A84FF) else Color(0xFF30D158)
-                val badgeLabel = if (isTransfer) "Received" else "Offline"
                 Box(
                     Modifier
                         .align(Alignment.TopStart)
                         .padding(d.spaceXxs + 1.dp)
                         .clip(RoundedCornerShape(d.radiusSm))
-                        .background(badgeColor.copy(.9f))
+                        .background(Color(0xFF30D158).copy(.9f))
                         .padding(horizontal = d.spaceXs, vertical = d.spaceXxs),
                 ) {
-                    Text(badgeLabel, color = Color.White, fontSize = (d.textXxs.value - 0.5f).sp, fontWeight = FontWeight.Bold)
+                    Text("Offline", color = Color.White, fontSize = (d.textXxs.value - 0.5f).sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1287,25 +1261,16 @@ fun EpisodeRow(
                 Text("${it}m", color = White40, fontSize = d.textXxs)
             }
         }
-        // Download icon: green = downloaded, blue = received via transfer
-        val iconColor = when {
-            isTransfer   -> Color(0xFF0A84FF)
-            isDownloaded -> Color(0xFF30D158)
-            else         -> White60
-        }
-        val iconDesc = when {
-            isTransfer   -> "Received"
-            isDownloaded -> "Offline"
-            else         -> "Download"
-        }
+        // Download icon: always tappable. Shows green when at least one quality is downloaded.
+        // Per-quality duplicate prevention is inside the download sheet, not on this button.
         IconButton(
             onClick  = onDownload,
             modifier = Modifier.size(d.buttonHeightSm),
         ) {
             Icon(
                 if (isDownloaded) IconDownloaded else IconDownloadCloud,
-                contentDescription = iconDesc,
-                tint = iconColor,
+                contentDescription = if (isDownloaded) "Offline" else "Download",
+                tint = if (isDownloaded) Color(0xFF30D158) else White60,
                 modifier = Modifier.size(d.iconMd - 2.dp),
             )
         }

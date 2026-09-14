@@ -320,8 +320,11 @@ class PlayerViewModel @Inject constructor(
                     .filter { it.status == DownloadStatus.DONE }
                     .sortedByDescending { it.sizeBytes }
                     .map { item ->
-                        // All offline downloads are movie.mp4 — HLS was remuxed during download
-                        QualityTrack(item.quality, item.filePath)
+                        // For HLS: use localPlaylistPath (local index.m3u8)
+                        // For MP4: use filePath
+                        val playPath = if (item.streamUrl.contains(".m3u8") && item.localPlaylistPath.isNotBlank())
+                            item.localPlaylistPath else item.filePath
+                        QualityTrack(item.quality, playPath)
                     }
                 val startQuality = preferredOfflineQuality.takeIf { q ->
                     q.isNotBlank() && offlineQualities.any { it.label == q }
@@ -335,8 +338,12 @@ class PlayerViewModel @Inject constructor(
                     val preferred = _ui.value.selectedQuality
                     val match = offlineDownloads.firstOrNull { it.quality == preferred && it.status == DownloadStatus.DONE }
                         ?: offlineDownloads.firstOrNull { it.status == DownloadStatus.DONE }
-                    // All offline files are movie.mp4 — use filePath directly
-                    match?.filePath?.takeIf { it.isNotBlank() } ?: streamUrl
+                    // Prefer localPlaylistPath for HLS, fallback to filePath for MP4
+                    val localPath = match?.let { item ->
+                        if (item.streamUrl.contains(".m3u8") && item.localPlaylistPath.isNotBlank())
+                            item.localPlaylistPath else item.filePath
+                    }
+                    localPath?.takeIf { it.isNotBlank() } ?: streamUrl
                 } else streamUrl
 
                 val track = StreamTrack(name = "Offline", url = resolvedUrl,

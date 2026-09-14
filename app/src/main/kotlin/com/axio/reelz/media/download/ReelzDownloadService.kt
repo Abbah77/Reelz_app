@@ -136,10 +136,10 @@ class ReelzDownloadService : Service() {
         scope.launch {
             val paused = downloadDao.getByStatus("PAUSED") + downloadDao.getByStatus("QUEUED")
             paused.forEach { row ->
-                // All downloads are MP4 output now; HLS streams are internally
-                // handled by the engine (downloads .ts segments then remuxes → movie.mp4).
-                // The "type" field is only used to decide download strategy internally.
-                val type = if (row.streamUrl.contains(".m3u8", ignoreCase = true)) "hls" else "mp4"
+                val type = when {
+                    row.streamUrl.contains(".m3u8", ignoreCase = true) -> "hls"
+                    else -> "mp4"
+                }
                 @Suppress("UNCHECKED_CAST")
                 val headers = runCatching {
                     com.google.gson.Gson().fromJson(row.headersJson, Map::class.java) as Map<String, String>
@@ -164,23 +164,13 @@ class ReelzDownloadService : Service() {
                 val done     = rows.count  { it.status == "DONE" }
                 val hasAny   = rows.isNotEmpty()
 
-                val remuxing = rows.filter { it.status == "REMUXING" }
-
-                // Byte-based progress for downloading; percent-based for remuxing
-                val progress = when {
-                    active.isNotEmpty() -> {
-                        val totalBytes = active.sumOf { it.sizeBytes }
-                        val doneBytes  = active.sumOf { it.downloadedBytes }
-                        if (totalBytes > 0) (doneBytes * 100 / totalBytes).toInt() else 0
-                    }
-                    remuxing.isNotEmpty() -> remuxing.first().progressPercent
-                    else -> 0
-                }
+                val totalSeg = active.sumOf { it.totalSegments }
+                val doneSeg  = active.sumOf { it.segmentsDone }
+                val progress = if (totalSeg > 0) (doneSeg * 100 / totalSeg) else 0
 
                 val msg = when {
-                    remuxing.isNotEmpty() -> "Finalizing…"
                     active.isNotEmpty() -> {
-                        val pct = if (active.size == 1 && progress > 0) " ($progress%)" else ""
+                        val pct = if (active.size == 1) " ($progress%)" else ""
                         "${active.size} downloading$pct"
                     }
                     queued.isNotEmpty() -> "${queued.size} queued"
@@ -189,7 +179,7 @@ class ReelzDownloadService : Service() {
                     else                -> "Downloads ready"
                 }
 
-                val isActive = active.isNotEmpty() || queued.isNotEmpty() || remuxing.isNotEmpty()
+                val isActive = active.isNotEmpty() || queued.isNotEmpty()
 
                 if (!hasAny) {
                     // No rows at all (all cancelled/cleared) → dismiss notification and stop.

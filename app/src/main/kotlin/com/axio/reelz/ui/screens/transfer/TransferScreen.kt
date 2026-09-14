@@ -432,16 +432,11 @@ private fun DownloadRow.toDownloadItem() = DownloadItem(
     id = id, mediaId = mediaId, title = title, posterUrl = posterUrl,
     mediaType = mediaType, season = season, episode = episode, episodeName = episodeName,
     quality = quality,
-    // All offline files are movie.mp4 — HLS was remuxed to MP4 during download
-    filePath        = filePath,
-    sizeBytes       = sizeBytes,
-    downloadedBytes = downloadedBytes,
-    progressPercent = progressPercent,
-    status          = DownloadStatus.DONE,
-    streamUrl       = streamUrl,
-    source          = source,
-    createdAt       = createdAt,
-    completedAt     = completedAt,
+    // For HLS downloads filePath == localPlaylistPath == segments/index.m3u8
+    filePath          = if (localPlaylistPath.isNotBlank()) localPlaylistPath else filePath,
+    localPlaylistPath = localPlaylistPath,
+    sizeBytes = sizeBytes, downloadedBytes = downloadedBytes,
+    status = DownloadStatus.DONE, streamUrl = streamUrl, createdAt = createdAt, completedAt = completedAt,
 )
 
 // ─── Transfer intent ──────────────────────────────────────────────────────────

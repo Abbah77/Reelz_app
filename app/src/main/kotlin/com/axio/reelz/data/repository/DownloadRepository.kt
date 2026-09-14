@@ -63,10 +63,8 @@ class DownloadRepository @Inject constructor(
 
     // ── Enqueue a new download ────────────────────────────────────────────────
     /**
-     * @param linkType  "mp4" | "hls" — from DownloadLink.type (backend tells us).
-     *                  Used internally by the engine to choose download strategy;
-     *                  the output is always movie.mp4 regardless of type.
-     * @param streamUrl The exact URL to download (mp4 direct URL or HLS playlist URL)
+     * @param linkType  "mp4" | "hls" — from DownloadLink.type (backend tells us)
+     * @param streamUrl The exact URL to download (mp4 direct URL or quality-specific index.m3u8)
      */
     suspend fun enqueue(
         ctx:         Context,
@@ -78,7 +76,7 @@ class DownloadRepository @Inject constructor(
         episode:     Int    = 0,
         episodeName: String = "",
         quality:     String = "720p",
-        linkType:    String = "mp4",     // "mp4" | "hls" — engine routing only
+        linkType:    String = "mp4",     // "mp4" | "hls"
         streamUrl:   String,
         headers:     Map<String, String> = emptyMap(),
     ): String = withContext(Dispatchers.IO) {
@@ -131,9 +129,8 @@ class DownloadRepository @Inject constructor(
             gson.fromJson(row.headersJson, Map::class.java) as Map<String, String>
         }.getOrDefault(emptyMap())
 
-        // Infer original stream type from URL so the engine uses the right download strategy.
-        // The output is always movie.mp4 regardless of type.
-        val type = if (row.streamUrl.contains(".m3u8", ignoreCase = true)) "hls" else "mp4"
+        // Infer type from URL or stored metadata
+        val type = if (row.streamUrl.contains(".m3u8")) "hls" else "mp4"
 
         ReelzDownloadService.startDownload(
             ctx        = ctx,
@@ -279,17 +276,18 @@ class DownloadRepository @Inject constructor(
         filePath        = filePath,
         sizeBytes       = sizeBytes,
         downloadedBytes = downloadedBytes,
-        progressPercent = progressPercent,
         status          = runCatching { DownloadStatus.valueOf(status) }.getOrDefault(DownloadStatus.ERROR),
         streamUrl       = streamUrl,
         headers         = runCatching {
             gson.fromJson(headersJson, Map::class.java) as Map<String, String>
         }.getOrDefault(emptyMap()),
-        source          = source,
-        createdAt       = createdAt,
-        completedAt     = completedAt,
-        watchProgressMs = watchProgressMs,
-        durationMs      = durationMs,
-        lastPlayedAt    = lastPlayedAt,
+        createdAt          = createdAt,
+        completedAt        = completedAt,
+        segmentsDone       = segmentsDone,
+        totalSegments      = totalSegments,
+        watchProgressMs    = watchProgressMs,
+        durationMs         = durationMs,
+        lastPlayedAt       = lastPlayedAt,
+        localPlaylistPath  = localPlaylistPath,
     )
 }
