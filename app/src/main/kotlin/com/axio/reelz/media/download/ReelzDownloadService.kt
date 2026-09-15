@@ -112,7 +112,7 @@ class ReelzDownloadService : Service() {
                 val title   = intent.getStringExtra(EXTRA_TITLE)       ?: ""
                 val headers = parseHeaders(intent.getStringExtra(EXTRA_HEADERS))
                 val resumeBytes = intent.getLongExtra(EXTRA_RESUME_BYTES, 0L)
-                engine.start(id, url, type, headers, title, resumeBytes)
+                engine.start(id, url, type, headers, title, resumeBytes = resumeBytes)
                 ensureObserving()
             }
             ACTION_PAUSE -> {

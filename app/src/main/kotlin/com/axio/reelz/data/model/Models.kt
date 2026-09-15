@@ -163,6 +163,9 @@ data class DownloadItem(
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
     val localPlaylistPath: String = "",  // HLS: path to local index.m3u8; MP4: same as filePath
+    // Unix timestamp in ms when streamUrl expires (0 = unknown / doesn't expire).
+    // Used by DownloadRepository.resume() to decide if a fresh URL is needed before resuming.
+    val expiresAtMs: Long = 0L,
 )
 
 // ── User session ──────────────────────────────────────────────────────────────
