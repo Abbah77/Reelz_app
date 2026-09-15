@@ -331,6 +331,9 @@ data class DownloadRow(
     val durationMs: Long = 0,
     val lastPlayedAt: Long = 0,
     val localPlaylistPath: String = "",
+    // Unix timestamp in ms when streamUrl expires (0 = unknown / doesn't expire).
+    // Used by DownloadRepository.resume() to decide if a fresh URL is needed.
+    val expiresAtMs: Long = 0L,
 )
 
 @Dao
@@ -430,8 +433,8 @@ interface DownloadDao {
     @Query("UPDATE downloads SET status = 'PAUSED' WHERE id = :id")
     suspend fun markPaused(id: String)
 
-    @Query("UPDATE downloads SET streamUrl = :url, headersJson = :h WHERE id = :id")
-    suspend fun updateStreamUrl(id: String, url: String, h: String)
+    @Query("UPDATE downloads SET streamUrl = :url, headersJson = :h, expiresAtMs = :expiresAtMs WHERE id = :id")
+    suspend fun updateStreamUrl(id: String, url: String, h: String = "{}", expiresAtMs: Long = 0L)
 
     @Query("""
         UPDATE downloads SET watchProgressMs = :pos, durationMs = :dur,

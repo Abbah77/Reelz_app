@@ -163,6 +163,10 @@ class ReelzDownloadEngine @Inject constructor(
         headers: Map<String, String> = emptyMap(),
         title: String = "",
         autoResume: Boolean = false,
+        // Explicit byte offset for MP4 resume (from DownloadRepository.resume when URL refreshed).
+        // When > 0, takes priority over the tmp file length check so we always resume correctly
+        // even when the tmp file size and DB downloadedBytes differ due to a previous error.
+        resumeBytes: Long = 0L,
     ) {
         if (activeJobs[downloadId]?.isActive == true) return
 
@@ -174,7 +178,7 @@ class ReelzDownloadEngine @Inject constructor(
                 updateStatus(downloadId, DownloadStatus.DOWNLOADING)
                 when (type.lowercase()) {
                     "hls" -> downloadHls(downloadId, url, headers)
-                    else  -> downloadMp4(downloadId, url, headers)
+                    else  -> downloadMp4(downloadId, url, headers, resumeBytes)
                 }
             } catch (e: CancellationException) {
                 Log.d(TAG, "[$downloadId] cancelled/paused")
@@ -221,6 +225,11 @@ class ReelzDownloadEngine @Inject constructor(
         downloadId: String,
         url: String,
         headers: Map<String, String>,
+        // Explicit byte offset passed from DownloadRepository.resume() when a URL was
+        // refreshed mid-download. When > 0 we skip the tmp-file probe and use this
+        // directly, ensuring we always resume from the correct offset even if the tmp
+        // file was partially written or the sizes diverge after a URL swap.
+        explicitResumeBytes: Long = 0L,
     ) = withContext(Dispatchers.IO) {
         val outFile = File(downloadDir(downloadId), "movie.mp4")
         val tmpFile = File(downloadDir(downloadId), "movie.mp4.tmp")
@@ -231,11 +240,15 @@ class ReelzDownloadEngine @Inject constructor(
             return@withContext
         }
 
-        // Probe for resume support
-        val existingBytes = if (tmpFile.exists()) tmpFile.length() else 0L
+        // Determine resume offset — explicit override wins over tmp-file probe.
+        val existingBytes = when {
+            explicitResumeBytes > 0 -> explicitResumeBytes   // URL was refreshed; trust DB value
+            tmpFile.exists()        -> tmpFile.length()
+            else                    -> 0L
+        }
         val acceptsRanges = probeRangeSupport(url, headers)
         val resumeFrom = if (acceptsRanges && existingBytes > 0) existingBytes
-                         else { tmpFile.delete(); 0L }
+                         else { if (explicitResumeBytes == 0L) tmpFile.delete(); 0L }
 
         val downloadedBytes = AtomicLong(resumeFrom)
         var lastFlush = downloadedBytes.get()

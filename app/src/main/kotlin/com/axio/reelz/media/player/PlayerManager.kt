@@ -240,14 +240,10 @@ class PlayerManager(
         val mediaDsf = if (isLocalFile) {
             DefaultDataSource.Factory(appContext)
         } else {
-            val effectiveHeaders = buildMap<String, String> {
-                putAll(primary.headers)
-                primary.referer?.let { put("Referer", it) }
-                primary.origin?.let { put("Origin", it) }
-                primary.userAgent?.let { put("User-Agent", it) }
-            }
+            // primary.headers already has referer/origin/user_agent merged in by the DTO layer.
+            // Empty map = no special headers = plain request. Works for both cases.
             val upstreamDsf = DefaultHttpDataSource.Factory()
-                .setDefaultRequestProperties(effectiveHeaders)
+                .apply { if (primary.headers.isNotEmpty()) setDefaultRequestProperties(primary.headers) }
                 .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
                 .setAllowCrossProtocolRedirects(true)
             CacheDataSource.Factory()
@@ -266,6 +262,45 @@ class PlayerManager(
             if (resumeMs > 5_000) p.seekTo(resumeMs)
             p.playWhenReady = true
         }
+    }
+
+    /**
+     * Silently swaps the media source to a fresh URL without interrupting the user.
+     *
+     * Called by PlayerViewModel when the stream URL expires mid-playback.
+     * Saves the current position, builds a new media source with the new URL
+     * and its headers, then resumes from exactly the same position.
+     * The player keeps rendering during this — the user sees nothing.
+     */
+    fun swapStream(result: StreamResult) {
+        val p = _player.value ?: return
+        val primary = result.primaryStream ?: return
+        val savedPos = p.currentPosition.coerceAtLeast(0L)
+        val wasPlaying = p.isPlaying
+
+        val url = primary.url
+        val item = MediaItem.Builder().setUri(url)
+            .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build()).build()
+
+        val upstreamDsf = DefaultHttpDataSource.Factory()
+            .apply { if (primary.headers.isNotEmpty()) setDefaultRequestProperties(primary.headers) }
+            .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
+            .setAllowCrossProtocolRedirects(true)
+        val mediaDsf = CacheDataSource.Factory()
+            .setCache(getVideoCache(appContext)).setUpstreamDataSourceFactory(upstreamDsf)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
+        val source = if (result.isHls)
+            HlsMediaSource.Factory(mediaDsf).setAllowChunklessPreparation(true).createMediaSource(item)
+        else
+            ProgressiveMediaSource.Factory(mediaDsf).createMediaSource(item)
+
+        // setMediaSource with resetPosition=false keeps the timeline at savedPos.
+        p.setMediaSource(source, /* resetPosition = */ false)
+        p.prepare()
+        p.seekTo(savedPos)
+        p.playWhenReady = wasPlaying
+        Log.d(TAG, "swapStream: resumed at ${savedPos}ms with fresh URL")
     }
 
     // ── Controls ──────────────────────────────────────────────────────────────

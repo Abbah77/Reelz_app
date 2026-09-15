@@ -7,6 +7,7 @@ import com.axio.reelz.core.database.DownloadSubtitleDao
 import com.axio.reelz.core.database.DownloadSubtitleRow
 import com.axio.reelz.data.model.Subtitle
 import java.io.File
+import java.net.URL
 import com.axio.reelz.core.database.DownloadRow
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
@@ -33,6 +34,7 @@ class DownloadRepository @Inject constructor(
     private val subtitleDao:     DownloadSubtitleDao,
     private val engine:          ReelzDownloadEngine,
     private val gson:            Gson,
+    private val streamRepo:      StreamRepository,
 ) {
     private val tag = "DownloadRepository"
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -62,24 +64,26 @@ class DownloadRepository @Inject constructor(
 
     // ── Enqueue a new download ────────────────────────────────────────────────
     /**
-     * @param linkType  "mp4" | "hls" — from DownloadLink.type (backend tells us)
-     * @param streamUrl The exact URL to download (mp4 direct URL or quality-specific index.m3u8)
+     * @param linkType      "mp4" | "hls" — from DownloadLink.type (backend tells us)
+     * @param streamUrl     The exact URL to download
+     * @param headers       Effective headers (referer/origin/ua already merged by DTO layer)
+     * @param expiresAtMs   Unix timestamp in ms when the URL expires (0 = unknown)
      */
     suspend fun enqueue(
-        ctx:         Context,
-        id:          String,
-        title:       String,
-        posterUrl:   String?,
-        mediaType:   MediaType,
-        season:      Int    = 0,
-        episode:     Int    = 0,
-        episodeName: String = "",
-        quality:     String = "720p",
-        linkType:    String = "mp4",     // "mp4" | "hls"
-        streamUrl:   String,
-        headers:     Map<String, String> = emptyMap(),
+        ctx:          Context,
+        id:           String,
+        title:        String,
+        posterUrl:    String?,
+        mediaType:    MediaType,
+        season:       Int    = 0,
+        episode:      Int    = 0,
+        episodeName:  String = "",
+        quality:      String = "720p",
+        linkType:     String = "mp4",
+        streamUrl:    String,
+        headers:      Map<String, String> = emptyMap(),
+        expiresAtMs:  Long   = 0L,
     ): String = withContext(Dispatchers.IO) {
-        // Duplicate guard — same quality of same content must not be enqueued twice
         val existing = dao.getForContent(id, season, episode)
             .firstOrNull { it.quality == quality && it.status != DownloadStatus.ERROR.name }
         if (existing != null) return@withContext existing.id
@@ -87,22 +91,22 @@ class DownloadRepository @Inject constructor(
         val downloadId = UUID.randomUUID().toString()
         dao.insert(
             DownloadRow(
-                id          = downloadId,
-                mediaId     = id,
-                title       = title,
-                posterUrl   = posterUrl,
-                mediaType   = mediaType.name,
-                season      = season,
-                episode     = episode,
-                episodeName = episodeName,
-                quality     = quality,
-                streamUrl   = streamUrl,
-                headersJson = gson.toJson(headers),
-                status      = DownloadStatus.QUEUED.name,
+                id           = downloadId,
+                mediaId      = id,
+                title        = title,
+                posterUrl    = posterUrl,
+                mediaType    = mediaType.name,
+                season       = season,
+                episode      = episode,
+                episodeName  = episodeName,
+                quality      = quality,
+                streamUrl    = streamUrl,
+                headersJson  = gson.toJson(headers),
+                status       = DownloadStatus.QUEUED.name,
+                expiresAtMs  = expiresAtMs,
             )
         )
 
-        // Kick off the download via service (keeps alive in background)
         ReelzDownloadService.startDownload(
             ctx        = ctx,
             downloadId = downloadId,
@@ -121,23 +125,75 @@ class DownloadRepository @Inject constructor(
     }
 
     // ── Resume ────────────────────────────────────────────────────────────────
+    /**
+     * Resume a paused download.
+     *
+     * If the stored URL has expired (expiresAtMs > 0 and in the past), we call
+     * freshGetDownloadLinks to get a new URL, update the DB row with the fresh
+     * URL and its new expiresAtMs, then resume from downloadedBytes — no
+     * progress is lost because we pass the saved byte offset to the engine.
+     *
+     * For HLS the engine resumes from segmentsDone, not bytes, so we just pass
+     * the refreshed URL and the engine picks up where it left off.
+     */
     suspend fun resume(ctx: Context, item: DownloadItem) = withContext(Dispatchers.IO) {
         val row = dao.get(item.id) ?: return@withContext
+
         @Suppress("UNCHECKED_CAST")
         val headers = runCatching {
             gson.fromJson(row.headersJson, Map::class.java) as Map<String, String>
         }.getOrDefault(emptyMap())
 
-        // Infer type from URL or stored metadata
         val type = if (row.streamUrl.contains(".m3u8")) "hls" else "mp4"
 
+        // Check if URL has expired
+        val now = System.currentTimeMillis()
+        val isExpired = row.expiresAtMs > 0 && now >= row.expiresAtMs
+
+        val (resolvedUrl, resolvedHeaders) = if (isExpired) {
+            Log.d(tag, "resume: URL expired for ${item.id}, fetching fresh URL")
+            val freshResult = streamRepo.freshGetDownloadLinks(
+                id        = row.mediaId,
+                mediaType = runCatching { MediaType.valueOf(row.mediaType) }.getOrDefault(MediaType.MOVIE),
+                season    = row.season,
+                episode   = row.episode,
+            )
+            if (freshResult is com.axio.reelz.core.network.NetworkResult.Success) {
+                val freshLinks = freshResult.data.first
+                // Match the same quality label the user originally chose
+                val match = freshLinks.firstOrNull { it.label == row.quality }
+                    ?: freshLinks.firstOrNull()
+                if (match != null) {
+                    // Persist fresh URL + new expiry + updated headers into DB
+                    dao.updateStreamUrl(
+                        id          = row.id,
+                        url         = match.url,
+                        h           = gson.toJson(match.headers),
+                        expiresAtMs = match.expiresAtMs,
+                    )
+                    Log.d(tag, "resume: fresh URL acquired for ${item.id}")
+                    Pair(match.url, match.headers)
+                } else {
+                    Log.w(tag, "resume: no matching quality in fresh links, falling back to stored URL")
+                    Pair(row.streamUrl, headers)
+                }
+            } else {
+                Log.w(tag, "resume: fresh URL fetch failed, trying stored URL anyway")
+                Pair(row.streamUrl, headers)
+            }
+        } else {
+            Pair(row.streamUrl, headers)
+        }
+
         ReelzDownloadService.startDownload(
-            ctx        = ctx,
-            downloadId = item.id,
-            url        = row.streamUrl,
-            type       = type,
-            headers    = headers,
-            title      = row.title,
+            ctx           = ctx,
+            downloadId    = item.id,
+            url           = resolvedUrl,
+            type          = type,
+            headers       = resolvedHeaders,
+            title         = row.title,
+            // Byte offset for MP4 resume — engine sends Range: bytes=<resumeBytes>-
+            resumeBytes   = if (type == "mp4") row.downloadedBytes else 0L,
         )
     }
 
@@ -211,16 +267,9 @@ class DownloadRepository @Inject constructor(
             val ext = subtitle.format.ifBlank { "srt" }
             val file = File(subtitlesDir, "${subtitle.language}.$ext")
 
-            // Download subtitle file — pass optional request headers from the backend.
-            val httpClient = okhttp3.OkHttpClient()
-            val reqBuilder = okhttp3.Request.Builder().url(subtitle.url)
-            subtitle.referer?.let { reqBuilder.addHeader("Referer", it) }
-            subtitle.origin?.let { reqBuilder.addHeader("Origin", it) }
-            subtitle.userAgent?.let { reqBuilder.addHeader("User-Agent", it) }
-            httpClient.newCall(reqBuilder.build()).execute().use { response ->
-                if (!response.isSuccessful) error("HTTP ${response.code} fetching subtitle")
-                val body = response.body ?: error("Empty subtitle body")
-                file.outputStream().use { output -> body.byteStream().copyTo(output) }
+            // Download subtitle file
+            URL(subtitle.url).openStream().use { input ->
+                file.outputStream().use { output -> input.copyTo(output) }
             }
 
             subtitleDao.insert(
@@ -295,5 +344,6 @@ class DownloadRepository @Inject constructor(
         durationMs         = durationMs,
         lastPlayedAt       = lastPlayedAt,
         localPlaylistPath  = localPlaylistPath,
+        expiresAtMs        = expiresAtMs,
     )
 }

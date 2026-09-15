@@ -164,6 +164,9 @@ class PlayerViewModel @Inject constructor(
     private var silentRetryCount = 0
     private val MAX_SILENT_RETRIES = 3
     private var errorHandlerJob: Job? = null
+    // Watches expiresAtMs on the current stream and fires a silent ?fresh=1 refresh
+    // ~60 s before expiry so the swap happens while the old URL is still valid.
+    private var urlExpiryJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -585,34 +588,6 @@ class PlayerViewModel @Inject constructor(
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun applyExternalSubtitleToPlayer(sub: Subtitle) {
         val p = exoPlayer ?: return
-
-        // If the subtitle URL needs HTTP headers (referer/origin/user-agent), pre-fetch it
-        // to a local temp file so ExoPlayer can load it without needing custom headers.
-        val needsHeaders = sub.referer != null || sub.origin != null || sub.userAgent != null
-        val isRemote = sub.url.startsWith("http://") || sub.url.startsWith("https://")
-
-        if (needsHeaders && isRemote) {
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    val ext = sub.format.ifBlank { "srt" }
-                    val tmpFile = java.io.File(appContext.cacheDir, "subtitle_${sub.language}_${System.currentTimeMillis()}.$ext")
-                    val client = okhttp3.OkHttpClient()
-                    val reqBuilder = okhttp3.Request.Builder().url(sub.url)
-                    sub.referer?.let { reqBuilder.addHeader("Referer", it) }
-                    sub.origin?.let { reqBuilder.addHeader("Origin", it) }
-                    sub.userAgent?.let { reqBuilder.addHeader("User-Agent", it) }
-                    client.newCall(reqBuilder.build()).execute().use { response ->
-                        if (!response.isSuccessful) return@launch
-                        val body = response.body ?: return@launch
-                        tmpFile.outputStream().use { out -> body.byteStream().copyTo(out) }
-                    }
-                    val localSub = sub.copy(url = "file://${tmpFile.absolutePath}")
-                    withContext(Dispatchers.Main) { applyExternalSubtitleToPlayer(localSub) }
-                } catch (_: Exception) {}
-            }
-            return
-        }
-
         val currentPos = p.currentPosition.coerceAtLeast(0L)
         val wasPlaying = p.isPlaying
 
@@ -931,8 +906,10 @@ class PlayerViewModel @Inject constructor(
         val mediaDsf = if (isLocalFile) {
             DefaultDataSource.Factory(appContext)
         } else {
+            // primary.headers already has referer/origin/user_agent merged in by the DTO layer.
+            // If empty, no setDefaultRequestProperties call — plain OkHttp request. Works for both.
             val upstreamDsf = DefaultHttpDataSource.Factory()
-                .setDefaultRequestProperties(primary.headers)
+                .apply { if (primary.headers.isNotEmpty()) setDefaultRequestProperties(primary.headers) }
                 .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
                 .setAllowCrossProtocolRedirects(true)
             CacheDataSource.Factory()
@@ -950,6 +927,119 @@ class PlayerViewModel @Inject constructor(
             p.setMediaSource(source); p.prepare()
             if (resumeMs > 5_000) p.seekTo(resumeMs)
             p.playWhenReady = true
+        }
+
+        // Start the expiry watcher so we can silently refresh before the URL dies.
+        startExpiryWatcher(result)
+    }
+
+    /**
+     * Silently swaps the media source to a fresh URL without the user noticing.
+     *
+     * Called by the expiry watcher ~60 s before expiresAtMs, while the old URL
+     * is still valid. Saves current position, builds a new source with the new
+     * URL + headers, sets it on the player WITHOUT resetting position, then
+     * seeks to exactly the saved position and resumes. The user sees nothing.
+     */
+    @OptIn(UnstableApi::class)
+    private fun swapStream(result: StreamResult) {
+        val p = exoPlayer ?: return
+        val primary = result.primaryStream ?: return
+        val savedPos = p.currentPosition.coerceAtLeast(0L)
+        val wasPlaying = p.isPlaying
+
+        val url = primary.url
+        val itemBuilder = MediaItem.Builder().setUri(url)
+            .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).build())
+
+        // Re-attach active subtitle if any
+        val activeLang = _ui.value.activeSubtitleLanguage
+        val activeSub  = if (_ui.value.subtitlesEnabled && activeLang != "off")
+            _ui.value.subtitles.firstOrNull { it.language == activeLang } else null
+        if (activeSub != null) {
+            val subUrl = if (!activeSub.url.startsWith("http") && !activeSub.url.startsWith("file://"))
+                "file://${activeSub.url}" else activeSub.url
+            itemBuilder.setSubtitleConfigurations(listOf(
+                MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(subUrl))
+                    .setMimeType(subtitleMimeType(activeSub.format))
+                    .setLanguage(activeSub.language)
+                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                    .build()
+            ))
+        }
+
+        val upstreamDsf = DefaultHttpDataSource.Factory()
+            .apply { if (primary.headers.isNotEmpty()) setDefaultRequestProperties(primary.headers) }
+            .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
+            .setAllowCrossProtocolRedirects(true)
+        val mediaDsf = CacheDataSource.Factory()
+            .setCache(getVideoCache(appContext)).setUpstreamDataSourceFactory(upstreamDsf)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
+        val source = if (result.isHls)
+            HlsMediaSource.Factory(mediaDsf).setAllowChunklessPreparation(true).createMediaSource(itemBuilder.build())
+        else
+            ProgressiveMediaSource.Factory(mediaDsf).createMediaSource(itemBuilder.build())
+
+        // setMediaSource(source, resetPosition=false) keeps the timeline at savedPos.
+        p.setMediaSource(source, /* resetPosition= */ false)
+        p.prepare()
+        p.seekTo(savedPos)
+        p.playWhenReady = wasPlaying
+        Log.d("PlayerVM", "swapStream: resumed at ${savedPos}ms with fresh URL")
+
+        // Arm a new expiry watcher for the fresh result.
+        startExpiryWatcher(result)
+    }
+
+    /**
+     * Arms a coroutine that waits until ~60 s before the stream URL expires,
+     * then fires a silent freshResolveStream and swaps the source in-place.
+     *
+     * If expiresAtMs is 0 or very far in the future (>24 h) we skip it —
+     * stable CDN URLs don't need proactive refresh.
+     */
+    private fun startExpiryWatcher(result: StreamResult) {
+        urlExpiryJob?.cancel()
+        if (_ui.value.isOfflinePlayback) return   // local files never expire
+
+        val expiresAtMs = result.expiresAtMs
+        if (expiresAtMs <= 0) return               // unknown expiry — rely on error handler
+
+        val now     = System.currentTimeMillis()
+        val msUntil = expiresAtMs - now
+        if (msUntil > 24 * 60 * 60 * 1000L) return  // stable URL (>24 h) — skip watcher
+        if (msUntil <= 0) {
+            // Already expired — refresh immediately (error path, shouldn't normally happen)
+            viewModelScope.launch { silentRefreshStream() }
+            return
+        }
+
+        // Fire the refresh 60 s before expiry (or immediately if < 70 s left)
+        val delayMs = (msUntil - 60_000L).coerceAtLeast(0L)
+        Log.d("PlayerVM", "URL expiry watcher: refresh in ${delayMs / 1000}s")
+
+        urlExpiryJob = viewModelScope.launch {
+            delay(delayMs)
+            if (_ui.value.state is PlayerState.Playing || _ui.value.state is PlayerState.Paused
+                || _ui.value.isNetworkStalling) {
+                silentRefreshStream()
+            }
+        }
+    }
+
+    /** Fetches a fresh stream and swaps it in. Fully silent — no UI state change. */
+    private suspend fun silentRefreshStream() {
+        Log.d("PlayerVM", "silentRefreshStream: fetching fresh URL for $currentId")
+        val freshResult = streamRepo.freshResolveStream(currentId, currentType, currentSeason, currentEpisode)
+        if (freshResult is NetworkResult.Success) {
+            val newStream = freshResult.data
+            lastResult = newStream
+            withContext(Dispatchers.Main) { swapStream(newStream) }
+            Log.d("PlayerVM", "silentRefreshStream: swap done")
+        } else {
+            Log.w("PlayerVM", "silentRefreshStream: fresh resolve failed — leaving current URL in place")
+            // Don't show an error; let the existing error handler deal with it if the URL truly dies.
         }
     }
 
@@ -1064,6 +1154,7 @@ class PlayerViewModel @Inject constructor(
 
     fun retry() {
         silentRetryCount = 0; fallbackIndex = 0
+        urlExpiryJob?.cancel()
         streamRepo.invalidate(currentId, currentType, currentSeason, currentEpisode)
         _ui.update { it.copy(state = PlayerState.Resolving) }
         viewModelScope.launch {
@@ -1075,6 +1166,7 @@ class PlayerViewModel @Inject constructor(
 
     fun release(context: Context? = null) {
         errorHandlerJob?.cancel()
+        urlExpiryJob?.cancel()
         stopNetworkMonitor(context)
         val p = exoPlayer
         if (p != null && _ui.value.isOfflinePlayback && currentId.isNotBlank()) {

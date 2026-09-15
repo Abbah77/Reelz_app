@@ -79,15 +79,23 @@ interface ReelzApi {
     ): Response<ApiResponse<SeasonData>>
 
     // ── Stream (auth optional — send token when available) ────────────────────
+    // ?fresh=1 forces the backend to bypass its cache and re-resolve URLs.
+    // The app calls this silently when a URL expires mid-playback so the user
+    // never sees an interruption.
     @POST("api/v1/stream")
     suspend fun resolveStream(
         @Body request: StreamRequestBody,
+        @Query("fresh") fresh: Int = 0,
     ): Response<ApiResponse<StreamData>>
 
     // ── Download (auth optional — send token when available) ──────────────────
+    // ?fresh=1 forces the backend to bypass its cache and return fresh URLs.
+    // The app calls this when a download URL expires mid-download so the user
+    // never loses their progress.
     @POST("api/v1/download")
     suspend fun getDownloadLinks(
         @Body request: StreamRequestBody,
+        @Query("fresh") fresh: Int = 0,
     ): Response<ApiResponse<DownloadData>>
 
     // ── Subtitles (auth optional) ─────────────────────────────────────────────

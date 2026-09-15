@@ -83,10 +83,59 @@ class StreamRepository @Inject constructor(
                         isNotFound = true,
                     )
                 }
-                // expires_at_ms is inside data — it is content metadata (link expiry)
                 val model = payload.toModel()
                 streamCache[key] = StreamEntry(result = model)
                 Log.d(tag, "Stream resolved: ${model.streams.size} track(s) for $key")
+                NetworkResult.Success(model)
+            }
+            is NetworkResult.Error -> NetworkResult.Error(
+                message        = result.message,
+                code           = result.code,
+                isNetworkError = result.isNetworkError,
+                isNotFound     = result.isNotFound,
+            )
+            NetworkResult.Loading -> NetworkResult.Loading
+        }
+    }
+
+    /**
+     * Fresh stream resolution — always bypasses the in-memory cache and sends
+     * ?fresh=1 to the backend so it re-resolves provider URLs.
+     *
+     * Called silently by PlayerViewModel when a URL expires mid-playback.
+     * The player stays running at the current position while this call happens
+     * in the background; the new URL is swapped in transparently.
+     */
+    suspend fun freshResolveStream(
+        id: String,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+    ): NetworkResult<StreamResult> = withContext(Dispatchers.IO) {
+        val key = cacheKey(id, mediaType, season, episode)
+        streamCache.remove(key)   // evict stale entry
+
+        val body = StreamRequestBody(
+            id      = id,
+            type    = if (mediaType == MediaType.MOVIE) "movie" else "tv",
+            season  = season,
+            episode = episode,
+        )
+        val result = safeApiCall(tag) { api.resolveStream(body, fresh = 1) }
+
+        return@withContext when (result) {
+            is NetworkResult.Success -> {
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null || payload.streams.isEmpty()) {
+                    return@withContext NetworkResult.Error(
+                        message    = envelope.error ?: "No streams available",
+                        isNotFound = true,
+                    )
+                }
+                val model = payload.toModel()
+                streamCache[key] = StreamEntry(result = model)
+                Log.d(tag, "Fresh stream resolved: ${model.streams.size} track(s) for $key")
                 NetworkResult.Success(model)
             }
             is NetworkResult.Error -> NetworkResult.Error(
@@ -155,14 +204,60 @@ class StreamRepository @Inject constructor(
                 if (!envelope.ok || payload == null) {
                     return@withContext NetworkResult.Error(envelope.error ?: "No download links available")
                 }
-                // Render exactly what the backend sends — no filtering, no inference.
                 val links = payload.links.map { it.toModel() }
                 val subtitles = payload.subtitles?.map { it.toModel() } ?: emptyList()
-                // Cache using expires_at_ms from backend (same pattern as stream cache).
                 if (payload.expiresAtMs > 0) {
                     downloadLinksCache[key] = DownloadLinksEntry(links, payload.expiresAtMs)
                 }
                 Log.d(tag, "Download links: ${links.size} link(s), ${subtitles.size} subtitle(s) for $key")
+                NetworkResult.Success(Pair(links, subtitles))
+            }
+            is NetworkResult.Error -> NetworkResult.Error(
+                message        = result.message,
+                code           = result.code,
+                isNetworkError = result.isNetworkError,
+                isNotFound     = result.isNotFound,
+            )
+            NetworkResult.Loading -> NetworkResult.Loading
+        }
+    }
+
+    /**
+     * Fresh download link resolution — bypasses in-memory cache and sends ?fresh=1.
+     *
+     * Called by DownloadRepository when a download URL expires mid-download.
+     * The download engine pauses at the current byte offset, this call fetches
+     * a new URL, and the engine resumes with a Range request — zero progress lost.
+     */
+    suspend fun freshGetDownloadLinks(
+        id: String,
+        mediaType: MediaType,
+        season: Int = 0,
+        episode: Int = 0,
+    ): NetworkResult<Pair<List<DownloadLink>, List<com.axio.reelz.data.model.Subtitle>>> = withContext(Dispatchers.IO) {
+        val key = cacheKey(id, mediaType, season, episode)
+        downloadLinksCache.remove(key)   // evict stale entry
+
+        val body = StreamRequestBody(
+            id      = id,
+            type    = if (mediaType == MediaType.MOVIE) "movie" else "tv",
+            season  = season,
+            episode = episode,
+        )
+        val result = safeApiCall(tag) { api.getDownloadLinks(body, fresh = 1) }
+        return@withContext when (result) {
+            is NetworkResult.Success -> {
+                val envelope = result.data
+                val payload  = envelope.data
+                if (!envelope.ok || payload == null) {
+                    return@withContext NetworkResult.Error(envelope.error ?: "No download links available")
+                }
+                val links = payload.links.map { it.toModel() }
+                val subtitles = payload.subtitles?.map { it.toModel() } ?: emptyList()
+                if (payload.expiresAtMs > 0) {
+                    downloadLinksCache[key] = DownloadLinksEntry(links, payload.expiresAtMs)
+                }
+                Log.d(tag, "Fresh download links: ${links.size} link(s) for $key")
                 NetworkResult.Success(Pair(links, subtitles))
             }
             is NetworkResult.Error -> NetworkResult.Error(

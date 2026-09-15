@@ -93,10 +93,6 @@ data class Subtitle(
     val label: String = language,
     /** File format: "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc" */
     val format: String = "srt",
-    /** Optional HTTP headers required to fetch this subtitle URL. Null = not needed. */
-    val referer: String? = null,
-    val origin: String? = null,
-    val userAgent: String? = null,
 )
 
 data class StreamTrack(
@@ -105,10 +101,6 @@ data class StreamTrack(
     val type: String,     // "hls" | "mp4"
     val headers: Map<String, String> = emptyMap(),
     val subtitles: List<Subtitle> = emptyList(),
-    /** Optional HTTP headers required to play this URL. Null = not needed. */
-    val referer: String? = null,
-    val origin: String? = null,
-    val userAgent: String? = null,
 )
 
 data class StreamResult(
@@ -127,10 +119,12 @@ data class DownloadLink(
     val language: String,
     val sizeBytes: Long,
     val premium: Boolean,  // shows lock badge; backend enforces server-side
-    /** Optional HTTP headers required to download this URL. Null = not needed. */
-    val referer: String? = null,
-    val origin: String? = null,
-    val userAgent: String? = null,
+    // Effective headers for this download URL. Already merged from referer/origin/user_agent.
+    // Empty map means no special headers required — standard OkHttp request works fine.
+    val headers: Map<String, String> = emptyMap(),
+    // Unix timestamp in ms when url expires (0 = unknown). Used by DownloadRepository.resume()
+    // to decide if a fresh URL fetch is required before resuming a paused download.
+    val expiresAtMs: Long = 0L,
 )
 
 // ── Shorts — schema v3: id, title, source, url, thumbnail ────────────────────
@@ -140,10 +134,8 @@ data class ShortVideo(
     val source: String?,
     val url: String,
     val thumbnail: String?,
-    /** Optional HTTP headers required to play this URL. Null = not needed. */
-    val referer: String? = null,
-    val origin: String? = null,
-    val userAgent: String? = null,
+    // Effective playback headers — empty map means no special headers required.
+    val headers: Map<String, String> = emptyMap(),
 )
 
 // ── Download item (local tracking) ───────────────────────────────────────────

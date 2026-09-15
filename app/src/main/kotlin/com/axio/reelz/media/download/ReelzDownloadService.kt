@@ -44,11 +44,12 @@ class ReelzDownloadService : Service() {
         const val ACTION_CANCEL     = "com.axio.reelz.download.CANCEL"
         const val ACTION_RESUME_ALL = "com.axio.reelz.download.RESUME_ALL"
 
-        const val EXTRA_DOWNLOAD_ID = "downloadId"
-        const val EXTRA_URL         = "url"
-        const val EXTRA_TYPE        = "type"
-        const val EXTRA_HEADERS     = "headers"
-        const val EXTRA_TITLE       = "title"
+        const val EXTRA_DOWNLOAD_ID  = "downloadId"
+        const val EXTRA_URL          = "url"
+        const val EXTRA_TYPE         = "type"
+        const val EXTRA_HEADERS      = "headers"
+        const val EXTRA_TITLE        = "title"
+        const val EXTRA_RESUME_BYTES = "resumeBytes"
 
         fun startDownload(
             ctx: Context,
@@ -57,6 +58,10 @@ class ReelzDownloadService : Service() {
             type: String,
             headers: Map<String, String> = emptyMap(),
             title: String = "",
+            // Byte offset to resume an MP4 download from. 0 = start from beginning.
+            // The engine uses this to set Range: bytes=<resumeBytes>- on the request.
+            // For HLS downloads pass 0 — the engine resumes from segmentsDone instead.
+            resumeBytes: Long = 0L,
         ) {
             val intent = Intent(ctx, ReelzDownloadService::class.java).apply {
                 action = ACTION_START
@@ -64,6 +69,7 @@ class ReelzDownloadService : Service() {
                 putExtra(EXTRA_URL, url)
                 putExtra(EXTRA_TYPE, type)
                 putExtra(EXTRA_TITLE, title)
+                putExtra(EXTRA_RESUME_BYTES, resumeBytes)
                 putExtra(EXTRA_HEADERS, headers.entries.joinToString("\n") { "${it.key}=${it.value}" })
             }
             ctx.startForegroundService(intent)
@@ -105,7 +111,8 @@ class ReelzDownloadService : Service() {
                 val type    = intent.getStringExtra(EXTRA_TYPE)        ?: "mp4"
                 val title   = intent.getStringExtra(EXTRA_TITLE)       ?: ""
                 val headers = parseHeaders(intent.getStringExtra(EXTRA_HEADERS))
-                engine.start(id, url, type, headers, title)
+                val resumeBytes = intent.getLongExtra(EXTRA_RESUME_BYTES, 0L)
+                engine.start(id, url, type, headers, title, resumeBytes)
                 ensureObserving()
             }
             ACTION_PAUSE -> {

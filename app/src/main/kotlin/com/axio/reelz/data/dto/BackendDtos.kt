@@ -13,6 +13,11 @@ import com.google.gson.annotations.SerializedName
 //  cache_ttl_ms is read from the envelope root — NOT from inside data objects.
 //  expires_at_ms (stream/download link expiry) lives inside data — it is
 //  content metadata, not response metadata.
+//
+//  Headers: each item (stream/download link/subtitle/short) carries its own
+//  `headers` map. The backend merges Referer/Origin/User-Agent into that map
+//  before sending — the app just reads headers as-is and applies them to the
+//  HTTP request. Empty map = no special headers required.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Standard envelope ─────────────────────────────────────────────────────────
@@ -171,19 +176,13 @@ data class StreamSubtitleDto(
     val label: String = "",          // human-readable name e.g. "English", "Arabic" from backend
     val enabled: Boolean = false,
     val format: String = "srt",      // "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc"
-    val referer: String? = null,
-    val origin: String? = null,
-    @SerializedName("user_agent") val userAgent: String? = null,
 ) {
     fun toModel() = Subtitle(
-        url       = url,
-        language  = language,
-        enabled   = enabled,
-        label     = label.takeIf { it.isNotBlank() } ?: language,
-        format    = format.ifBlank { "srt" },
-        referer   = referer,
-        origin    = origin,
-        userAgent = userAgent,
+        url      = url,
+        language = language,
+        enabled  = enabled,
+        label    = label.takeIf { it.isNotBlank() } ?: language,
+        format   = format.ifBlank { "srt" },
     )
 }
 
@@ -191,11 +190,10 @@ data class StreamItemDto(
     val name: String = "",
     val url: String = "",
     val type: String = "hls",
+    // Backend merges Referer/Origin/User-Agent into this map before sending.
+    // Empty map = no special headers required for this URL.
     val headers: Map<String, String> = emptyMap(),
     val subtitles: List<StreamSubtitleDto> = emptyList(),
-    val referer: String? = null,
-    val origin: String? = null,
-    @SerializedName("user_agent") val userAgent: String? = null,
 ) {
     fun toModel() = StreamTrack(
         name      = name,
@@ -203,9 +201,6 @@ data class StreamItemDto(
         type      = type,
         headers   = headers,
         subtitles = subtitles.map { it.toModel() },
-        referer   = referer,
-        origin    = origin,
-        userAgent = userAgent,
     )
 }
 
@@ -229,20 +224,21 @@ data class DownloadLinkDto(
     val language: String = "",
     @SerializedName("size_bytes") val sizeBytes: Long = 0,
     val premium: Boolean = false,
-    val referer: String? = null,
-    val origin: String? = null,
-    @SerializedName("user_agent") val userAgent: String? = null,
+    // Backend merges Referer/Origin/User-Agent into this map before sending.
+    // Each link carries its own headers — links may come from different providers.
+    // Empty map = no special headers required for this URL.
+    val headers: Map<String, String> = emptyMap(),
+    @SerializedName("expires_at_ms") val expiresAtMs: Long = 0L,
 ) {
     fun toModel() = DownloadLink(
-        label     = label,
-        type      = type,
-        url       = url,
-        language  = language,
-        sizeBytes = sizeBytes,
-        premium   = premium,
-        referer   = referer,
-        origin    = origin,
-        userAgent = userAgent,
+        label       = label,
+        type        = type,
+        url         = url,
+        language    = language,
+        sizeBytes   = sizeBytes,
+        premium     = premium,
+        headers     = headers,
+        expiresAtMs = expiresAtMs,
     )
 }
 
@@ -259,22 +255,19 @@ data class DownloadData(
 data class SubtitleDto(
     val url: String = "",
     val language: String = "en",
-    val label: String = "",          // human-readable name from backend
+    val label: String = "",
     val enabled: Boolean = false,
     val format: String = "srt",      // "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc"
-    val referer: String? = null,
-    val origin: String? = null,
-    @SerializedName("user_agent") val userAgent: String? = null,
+    // Backend merges Referer/Origin/User-Agent into this map before sending.
+    // Empty map = no special headers required to fetch this subtitle.
+    val headers: Map<String, String> = emptyMap(),
 ) {
     fun toModel() = Subtitle(
-        url       = url,
-        language  = language,
-        enabled   = enabled,
-        label     = label.takeIf { it.isNotBlank() } ?: language,
-        format    = format.ifBlank { "srt" },
-        referer   = referer,
-        origin    = origin,
-        userAgent = userAgent,
+        url      = url,
+        language = language,
+        enabled  = enabled,
+        label    = label.takeIf { it.isNotBlank() } ?: language,
+        format   = format.ifBlank { "srt" },
     )
 }
 
@@ -290,9 +283,9 @@ data class ShortVideoDto(
     val source: String? = null,
     val url: String = "",
     val thumbnail: String? = null,
-    val referer: String? = null,
-    val origin: String? = null,
-    @SerializedName("user_agent") val userAgent: String? = null,
+    // Backend merges Referer/Origin/User-Agent into this map before sending.
+    // Empty map = no special headers required for this short.
+    val headers: Map<String, String> = emptyMap(),
 ) {
     fun toModel() = ShortVideo(
         id        = id,
@@ -300,9 +293,7 @@ data class ShortVideoDto(
         source    = source,
         url       = url,
         thumbnail = thumbnail,
-        referer   = referer,
-        origin    = origin,
-        userAgent = userAgent,
+        headers   = headers,
     )
 }
 
