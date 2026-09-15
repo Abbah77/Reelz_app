@@ -585,6 +585,34 @@ class PlayerViewModel @Inject constructor(
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun applyExternalSubtitleToPlayer(sub: Subtitle) {
         val p = exoPlayer ?: return
+
+        // If the subtitle URL needs HTTP headers (referer/origin/user-agent), pre-fetch it
+        // to a local temp file so ExoPlayer can load it without needing custom headers.
+        val needsHeaders = sub.referer != null || sub.origin != null || sub.userAgent != null
+        val isRemote = sub.url.startsWith("http://") || sub.url.startsWith("https://")
+
+        if (needsHeaders && isRemote) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val ext = sub.format.ifBlank { "srt" }
+                    val tmpFile = java.io.File(appContext.cacheDir, "subtitle_${sub.language}_${System.currentTimeMillis()}.$ext")
+                    val client = okhttp3.OkHttpClient()
+                    val reqBuilder = okhttp3.Request.Builder().url(sub.url)
+                    sub.referer?.let { reqBuilder.addHeader("Referer", it) }
+                    sub.origin?.let { reqBuilder.addHeader("Origin", it) }
+                    sub.userAgent?.let { reqBuilder.addHeader("User-Agent", it) }
+                    client.newCall(reqBuilder.build()).execute().use { response ->
+                        if (!response.isSuccessful) return@launch
+                        val body = response.body ?: return@launch
+                        tmpFile.outputStream().use { out -> body.byteStream().copyTo(out) }
+                    }
+                    val localSub = sub.copy(url = "file://${tmpFile.absolutePath}")
+                    withContext(Dispatchers.Main) { applyExternalSubtitleToPlayer(localSub) }
+                } catch (_: Exception) {}
+            }
+            return
+        }
+
         val currentPos = p.currentPosition.coerceAtLeast(0L)
         val wasPlaying = p.isPlaying
 

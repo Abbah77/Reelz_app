@@ -93,6 +93,10 @@ data class Subtitle(
     val label: String = language,
     /** File format: "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc" */
     val format: String = "srt",
+    /** Optional HTTP headers required to fetch this subtitle URL. Null = not needed. */
+    val referer: String? = null,
+    val origin: String? = null,
+    val userAgent: String? = null,
 )
 
 data class StreamTrack(
@@ -101,6 +105,10 @@ data class StreamTrack(
     val type: String,     // "hls" | "mp4"
     val headers: Map<String, String> = emptyMap(),
     val subtitles: List<Subtitle> = emptyList(),
+    /** Optional HTTP headers required to play this URL. Null = not needed. */
+    val referer: String? = null,
+    val origin: String? = null,
+    val userAgent: String? = null,
 )
 
 data class StreamResult(
@@ -119,6 +127,10 @@ data class DownloadLink(
     val language: String,
     val sizeBytes: Long,
     val premium: Boolean,  // shows lock badge; backend enforces server-side
+    /** Optional HTTP headers required to download this URL. Null = not needed. */
+    val referer: String? = null,
+    val origin: String? = null,
+    val userAgent: String? = null,
 )
 
 // ── Shorts — schema v3: id, title, source, url, thumbnail ────────────────────
@@ -128,6 +140,10 @@ data class ShortVideo(
     val source: String?,
     val url: String,
     val thumbnail: String?,
+    /** Optional HTTP headers required to play this URL. Null = not needed. */
+    val referer: String? = null,
+    val origin: String? = null,
+    val userAgent: String? = null,
 )
 
 // ── Download item (local tracking) ───────────────────────────────────────────

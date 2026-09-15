@@ -443,10 +443,36 @@ private fun rememberShortsPlayerPool(
 
     fun buildMediaSource(video: ShortVideo): MediaSource {
         val isHls = video.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+        // Build per-video factory only when the video needs specific headers.
+        // Non-null values are added; null means that header is not required.
+        val needsCustomHeaders = video.referer != null || video.origin != null || video.userAgent != null
+        val videoFactory = if (needsCustomHeaders) {
+            // Only add headers that are non-null — null means not required by this provider.
+            val headers = buildMap<String, String> {
+                video.referer?.let { put("Referer", it) }
+                video.origin?.let { put("Origin", it) }
+                video.userAgent?.let { put("User-Agent", it) }
+            }
+            DefaultHttpDataSource.Factory()
+                .setDefaultRequestProperties(headers)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(10_000)
+                .setReadTimeoutMs(12_000)
+        } else {
+            httpFactory
+        }
+        val cacheDsf = if (needsCustomHeaders) {
+            CacheDataSource.Factory()
+                .setCache(ShortsDiskCache.get(ctx))
+                .setUpstreamDataSourceFactory(videoFactory)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        } else {
+            cacheDataSourceFactory
+        }
         return if (isHls)
-            HlsMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(video.url))
+            HlsMediaSource.Factory(videoFactory).createMediaSource(MediaItem.fromUri(video.url))
         else
-            ProgressiveMediaSource.Factory(cacheDataSourceFactory).createMediaSource(MediaItem.fromUri(video.url))
+            ProgressiveMediaSource.Factory(cacheDsf).createMediaSource(MediaItem.fromUri(video.url))
     }
 
     return remember(players) { ShortsPlayerPool(players, ::buildMediaSource, onError) }

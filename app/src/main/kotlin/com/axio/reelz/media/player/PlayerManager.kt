@@ -240,8 +240,14 @@ class PlayerManager(
         val mediaDsf = if (isLocalFile) {
             DefaultDataSource.Factory(appContext)
         } else {
+            val effectiveHeaders = buildMap<String, String> {
+                putAll(primary.headers)
+                primary.referer?.let { put("Referer", it) }
+                primary.origin?.let { put("Origin", it) }
+                primary.userAgent?.let { put("User-Agent", it) }
+            }
             val upstreamDsf = DefaultHttpDataSource.Factory()
-                .setDefaultRequestProperties(primary.headers)
+                .setDefaultRequestProperties(effectiveHeaders)
                 .setConnectTimeoutMs(4_000).setReadTimeoutMs(20_000)
                 .setAllowCrossProtocolRedirects(true)
             CacheDataSource.Factory()

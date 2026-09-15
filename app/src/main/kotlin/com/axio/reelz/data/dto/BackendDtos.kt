@@ -171,13 +171,19 @@ data class StreamSubtitleDto(
     val label: String = "",          // human-readable name e.g. "English", "Arabic" from backend
     val enabled: Boolean = false,
     val format: String = "srt",      // "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc"
+    val referer: String? = null,
+    val origin: String? = null,
+    @SerializedName("user_agent") val userAgent: String? = null,
 ) {
     fun toModel() = Subtitle(
-        url      = url,
-        language = language,
-        enabled  = enabled,
-        label    = label.takeIf { it.isNotBlank() } ?: language,
-        format   = format.ifBlank { "srt" },
+        url       = url,
+        language  = language,
+        enabled   = enabled,
+        label     = label.takeIf { it.isNotBlank() } ?: language,
+        format    = format.ifBlank { "srt" },
+        referer   = referer,
+        origin    = origin,
+        userAgent = userAgent,
     )
 }
 
@@ -187,6 +193,9 @@ data class StreamItemDto(
     val type: String = "hls",
     val headers: Map<String, String> = emptyMap(),
     val subtitles: List<StreamSubtitleDto> = emptyList(),
+    val referer: String? = null,
+    val origin: String? = null,
+    @SerializedName("user_agent") val userAgent: String? = null,
 ) {
     fun toModel() = StreamTrack(
         name      = name,
@@ -194,6 +203,9 @@ data class StreamItemDto(
         type      = type,
         headers   = headers,
         subtitles = subtitles.map { it.toModel() },
+        referer   = referer,
+        origin    = origin,
+        userAgent = userAgent,
     )
 }
 
@@ -217,6 +229,9 @@ data class DownloadLinkDto(
     val language: String = "",
     @SerializedName("size_bytes") val sizeBytes: Long = 0,
     val premium: Boolean = false,
+    val referer: String? = null,
+    val origin: String? = null,
+    @SerializedName("user_agent") val userAgent: String? = null,
 ) {
     fun toModel() = DownloadLink(
         label     = label,
@@ -225,6 +240,9 @@ data class DownloadLinkDto(
         language  = language,
         sizeBytes = sizeBytes,
         premium   = premium,
+        referer   = referer,
+        origin    = origin,
+        userAgent = userAgent,
     )
 }
 
@@ -244,13 +262,19 @@ data class SubtitleDto(
     val label: String = "",          // human-readable name from backend
     val enabled: Boolean = false,
     val format: String = "srt",      // "srt" | "vtt" | "ass" | "ssa" | "sub" | "sbv" | "lrc"
+    val referer: String? = null,
+    val origin: String? = null,
+    @SerializedName("user_agent") val userAgent: String? = null,
 ) {
     fun toModel() = Subtitle(
-        url      = url,
-        language = language,
-        enabled  = enabled,
-        label    = label.takeIf { it.isNotBlank() } ?: language,
-        format   = format.ifBlank { "srt" },
+        url       = url,
+        language  = language,
+        enabled   = enabled,
+        label     = label.takeIf { it.isNotBlank() } ?: language,
+        format    = format.ifBlank { "srt" },
+        referer   = referer,
+        origin    = origin,
+        userAgent = userAgent,
     )
 }
 
@@ -266,6 +290,9 @@ data class ShortVideoDto(
     val source: String? = null,
     val url: String = "",
     val thumbnail: String? = null,
+    val referer: String? = null,
+    val origin: String? = null,
+    @SerializedName("user_agent") val userAgent: String? = null,
 ) {
     fun toModel() = ShortVideo(
         id        = id,
@@ -273,6 +300,9 @@ data class ShortVideoDto(
         source    = source,
         url       = url,
         thumbnail = thumbnail,
+        referer   = referer,
+        origin    = origin,
+        userAgent = userAgent,
     )
 }
 

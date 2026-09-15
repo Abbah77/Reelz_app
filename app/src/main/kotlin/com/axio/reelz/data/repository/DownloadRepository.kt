@@ -7,7 +7,6 @@ import com.axio.reelz.core.database.DownloadSubtitleDao
 import com.axio.reelz.core.database.DownloadSubtitleRow
 import com.axio.reelz.data.model.Subtitle
 import java.io.File
-import java.net.URL
 import com.axio.reelz.core.database.DownloadRow
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
@@ -212,9 +211,16 @@ class DownloadRepository @Inject constructor(
             val ext = subtitle.format.ifBlank { "srt" }
             val file = File(subtitlesDir, "${subtitle.language}.$ext")
 
-            // Download subtitle file
-            URL(subtitle.url).openStream().use { input ->
-                file.outputStream().use { output -> input.copyTo(output) }
+            // Download subtitle file — pass optional request headers from the backend.
+            val httpClient = okhttp3.OkHttpClient()
+            val reqBuilder = okhttp3.Request.Builder().url(subtitle.url)
+            subtitle.referer?.let { reqBuilder.addHeader("Referer", it) }
+            subtitle.origin?.let { reqBuilder.addHeader("Origin", it) }
+            subtitle.userAgent?.let { reqBuilder.addHeader("User-Agent", it) }
+            httpClient.newCall(reqBuilder.build()).execute().use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code} fetching subtitle")
+                val body = response.body ?: error("Empty subtitle body")
+                file.outputStream().use { output -> body.byteStream().copyTo(output) }
             }
 
             subtitleDao.insert(

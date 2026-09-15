@@ -423,7 +423,14 @@ class DetailViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            val headers = preResolvedStream?.primaryStream?.headers ?: emptyMap()
+            // Build request headers from the matching DownloadLink.
+            // Only include headers that are non-null — null means that header is not required.
+            val matchedLink = _ui.value.downloadLinks.firstOrNull { it.url == track.url }
+            val headers = buildMap<String, String> {
+                matchedLink?.referer?.let { put("Referer", it) }
+                matchedLink?.origin?.let { put("Origin", it) }
+                matchedLink?.userAgent?.let { put("User-Agent", it) }
+            }
             val linkType = preResolvedLinkTypes[track.url]
                 ?: if (track.url.contains(".m3u8")) "hls" else "mp4"
             val downloadId = downloadRepo.enqueue(
