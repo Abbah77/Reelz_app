@@ -443,10 +443,38 @@ private fun rememberShortsPlayerPool(
 
     fun buildMediaSource(video: ShortVideo): MediaSource {
         val isHls = video.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+
+        // Build a per-video HTTP factory that injects any headers the backend
+        // sent for this URL (Referer, Origin, etc.).  For videos with no
+        // special headers this is a no-op — the factory is identical to the
+        // shared one.  We deliberately create a lightweight copy rather than
+        // mutating the shared factory, which would affect concurrent players.
+        val videoFactory = if (video.headers.isNotEmpty()) {
+            DefaultHttpDataSource.Factory()
+                .setUserAgent("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(10_000)
+                .setReadTimeoutMs(12_000)
+                .setDefaultRequestProperties(video.headers)
+        } else {
+            httpFactory
+        }
+
+        val videoCacheFactory = if (video.headers.isNotEmpty()) {
+            // For videos with custom headers use a separate cache factory so
+            // the request properties are forwarded on cache-miss fetches too.
+            CacheDataSource.Factory()
+                .setCache(ShortsDiskCache.get(ctx))
+                .setUpstreamDataSourceFactory(videoFactory)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        } else {
+            cacheDataSourceFactory
+        }
+
         return if (isHls)
-            HlsMediaSource.Factory(httpFactory).createMediaSource(MediaItem.fromUri(video.url))
+            HlsMediaSource.Factory(videoFactory).createMediaSource(MediaItem.fromUri(video.url))
         else
-            ProgressiveMediaSource.Factory(cacheDataSourceFactory).createMediaSource(MediaItem.fromUri(video.url))
+            ProgressiveMediaSource.Factory(videoCacheFactory).createMediaSource(MediaItem.fromUri(video.url))
     }
 
     return remember(players) { ShortsPlayerPool(players, ::buildMediaSource, onError) }
