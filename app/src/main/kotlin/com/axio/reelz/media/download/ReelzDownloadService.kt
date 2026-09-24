@@ -7,6 +7,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.axio.reelz.R
 import com.axio.reelz.core.database.DownloadDao
+import com.axio.reelz.data.repository.DownloadRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import javax.inject.Inject
@@ -29,6 +30,7 @@ class ReelzDownloadService : Service() {
 
     @Inject lateinit var engine: ReelzDownloadEngine
     @Inject lateinit var downloadDao: DownloadDao
+    @Inject lateinit var downloadRepository: DownloadRepository
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -101,6 +103,8 @@ class ReelzDownloadService : Service() {
         createNotificationChannel()
         // Must call startForeground immediately on creation.
         startForeground(NOTIFICATION_ID, buildNotification("Starting downloads…", 0, false))
+        // Auto-retry any HLS downloads that were mid-remux when the process last died.
+        scope.launch { downloadRepository.retryPendingRemux() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -166,6 +170,7 @@ class ReelzDownloadService : Service() {
         scope.launch {
             downloadDao.observeAll().collect { rows ->
                 val active   = rows.filter { it.status == "DOWNLOADING" }
+                val remuxing = rows.filter { it.status == "REMUXING" }
                 val paused   = rows.filter { it.status == "PAUSED" }
                 val queued   = rows.filter { it.status == "QUEUED" }
                 val done     = rows.count  { it.status == "DONE" }
@@ -176,17 +181,18 @@ class ReelzDownloadService : Service() {
                 val progress = if (totalSeg > 0) (doneSeg * 100 / totalSeg) else 0
 
                 val msg = when {
-                    active.isNotEmpty() -> {
+                    active.isNotEmpty()   -> {
                         val pct = if (active.size == 1) " ($progress%)" else ""
                         "${active.size} downloading$pct"
                     }
-                    queued.isNotEmpty() -> "${queued.size} queued"
-                    paused.isNotEmpty() -> "${paused.size} paused"
-                    done > 0            -> "$done download(s) complete"
-                    else                -> "Downloads ready"
+                    remuxing.isNotEmpty() -> "Remuxing to MP4…"
+                    queued.isNotEmpty()   -> "${queued.size} queued"
+                    paused.isNotEmpty()   -> "${paused.size} paused"
+                    done > 0              -> "$done download(s) complete"
+                    else                  -> "Downloads ready"
                 }
 
-                val isActive = active.isNotEmpty() || queued.isNotEmpty()
+                val isActive = active.isNotEmpty() || queued.isNotEmpty() || remuxing.isNotEmpty()
 
                 if (!hasAny) {
                     // No rows at all (all cancelled/cleared) → dismiss notification and stop.

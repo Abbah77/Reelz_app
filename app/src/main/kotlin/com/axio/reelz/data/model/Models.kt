@@ -10,7 +10,7 @@ package com.axio.reelz.data.model
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class MediaType   { MOVIE, TV }
-enum class DownloadStatus { QUEUED, DOWNLOADING, PAUSED, DONE, ERROR }
+enum class DownloadStatus { QUEUED, DOWNLOADING, REMUXING, PAUSED, DONE, ERROR }
 enum class TransferStatus { IDLE, CONNECTING, TRANSFERRING, DONE, ERROR }
 enum class TransferDirection { SEND, RECEIVE }
 
@@ -125,6 +125,8 @@ data class DownloadLink(
     // Unix timestamp in ms when url expires (0 = unknown). Used by DownloadRepository.resume()
     // to decide if a fresh URL fetch is required before resuming a paused download.
     val expiresAtMs: Long = 0L,
+    val remuxAttempted: Int = 0,
+    val remuxFailReason: String = "",
 )
 
 // ── Shorts — schema v3: id, title, source, url, thumbnail ────────────────────

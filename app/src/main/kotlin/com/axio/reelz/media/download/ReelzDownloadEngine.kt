@@ -8,6 +8,8 @@ import android.net.NetworkRequest
 import android.util.Log
 import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.data.model.DownloadStatus
+import com.axio.reelz.media.download.HlsRemuxer
+import com.axio.reelz.media.download.RemuxResult
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
@@ -52,6 +54,7 @@ import javax.inject.Singleton
 class ReelzDownloadEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val downloadDao: DownloadDao,
+    val remuxer: HlsRemuxer,   // internal val — DownloadRepository calls it for retry
 ) {
     companion object {
         private const val TAG = "ReelzDownloadEngine"
@@ -403,25 +406,93 @@ class ReelzDownloadEngine @Inject constructor(
         }
         if (missing > 0) error("$missing HLS segments failed to download")
 
-        // Write local playlist
+        // Write local playlist — always kept for ExoPlayer fallback and retry
         val localM3u8 = File(segDir, "index.m3u8")
         localM3u8.writeText(buildLocalPlaylist(playlistContent, segments, segDir))
 
-        // Compute actual total size from all segment files
-        val totalSizeBytes = segDir.listFiles()
+        val totalSegBytes = segDir.listFiles()
             ?.filter { it.name.endsWith(".ts") }
             ?.sumOf { it.length() } ?: 0L
 
-        downloadDao.markDoneHls(
-            id          = downloadId,
-            status      = DownloadStatus.DONE.name,
-            path        = localM3u8.absolutePath,
-            at          = System.currentTimeMillis(),
-            sizeBytes   = totalSizeBytes,
-            done        = total,
-            total       = total,
+        // Persist fallback BEFORE FFmpeg starts.
+        // If the process dies mid-remux the next launch finds status=REMUXING +
+        // localPlaylistPath and retries FFmpeg without re-downloading any segment.
+        downloadDao.markSegmentsDone(
+            id        = downloadId,
+            status    = DownloadStatus.REMUXING.name,
+            m3u8Path  = localM3u8.absolutePath,
+            done      = segments.size,
+            total     = segments.size,
+            sizeBytes = totalSegBytes,
         )
-        Log.i(TAG, "[$downloadId] HLS done: ${localM3u8.absolutePath} ($totalSizeBytes bytes, $total segments)")
+
+        val outputMp4 = File(downloadDir(downloadId), "movie.mp4")
+        val remuxResult = remuxer.remux(localM3u8, outputMp4)
+
+        handleRemuxResult(downloadId, remuxResult, localM3u8, outputMp4)
+    }
+
+    /**
+     * Handles a [RemuxResult] and writes the appropriate DB state.
+     * Called both from the post-download flow and from [DownloadRepository.retryPendingRemux].
+     *
+     * Segments are NEVER deleted here — they are kept for ExoPlayer fallback
+     * and future retry attempts.
+     */
+    suspend fun handleRemuxResult(
+        downloadId: String,
+        result: RemuxResult,
+        localM3u8: File,
+        outputMp4: File,
+    ) {
+        val totalSegBytes = localM3u8.parentFile
+            ?.listFiles()
+            ?.filter { it.name.endsWith(".ts") }
+            ?.sumOf { it.length() } ?: 0L
+
+        when (result) {
+            is RemuxResult.Success -> {
+                downloadDao.markRemuxSuccess(
+                    id        = downloadId,
+                    mp4Path   = result.mp4File.absolutePath,
+                    at        = System.currentTimeMillis(),
+                    sizeBytes = result.mp4File.length(),
+                )
+                Log.i(TAG, "[$downloadId] HLS→MP4 remux done: ${result.mp4File.absolutePath}")
+            }
+
+            is RemuxResult.TransientFailure -> {
+                // Status stays REMUXING — markSegmentsDone already wrote it.
+                // markRemuxTransientFail only updates remuxAttempted + reason.
+                downloadDao.markRemuxTransientFail(
+                    id     = downloadId,
+                    reason = result.reason,
+                )
+                Log.w(TAG, "[$downloadId] Transient remux fail — will retry on next launch: ${result.reason}")
+            }
+
+            is RemuxResult.KeyExpired -> {
+                // Local m3u8 references a dead CDN key URI — ExoPlayer fallback
+                // is also broken. Mark ERROR so the UI tells the user to re-download.
+                downloadDao.markKeyExpired(
+                    id = downloadId,
+                    at = System.currentTimeMillis(),
+                )
+                Log.w(TAG, "[$downloadId] AES key expired — unrecoverable: ${result.reason}")
+            }
+
+            is RemuxResult.FfmpegBug -> {
+                // FFmpeg can't handle it, but ExoPlayer's HLS decoder might.
+                downloadDao.markRemuxFallback(
+                    id        = downloadId,
+                    m3u8Path  = result.fallbackM3u8.absolutePath,
+                    at        = System.currentTimeMillis(),
+                    sizeBytes = totalSegBytes,
+                    reason    = result.reason,
+                )
+                Log.w(TAG, "[$downloadId] FFmpeg bug — ExoPlayer m3u8 fallback: ${result.reason}")
+            }
+        }
     }
 
     private fun estimateSegmentSize(segDir: File): Long =
@@ -634,10 +705,25 @@ class ReelzDownloadEngine @Inject constructor(
         }
     }
 
-    /** Returns local path for offline ExoPlayer playback. */
-    fun getLocalPlaybackPath(downloadId: String, type: String): String? =
-        when (type.lowercase()) {
-            "hls" -> File(segmentsDir(downloadId), "index.m3u8").takeIf { it.exists() }?.absolutePath
-            else  -> File(downloadDir(downloadId), "movie.mp4").takeIf { it.exists() }?.absolutePath
+    /**
+     * Returns the best local path for offline ExoPlayer playback:
+     *   1. movie.mp4     — produced by a successful FFmpeg remux
+     *   2. index.m3u8    — fallback if FFmpeg had a bug (remuxAttempted = -3)
+     *   3. null          — key expired or remux still in progress
+     *
+     * The type parameter is kept for MP4-only downloads (no remux needed).
+     */
+    fun getLocalPlaybackPath(downloadId: String, type: String): String? {
+        if (type.lowercase() != "hls") {
+            return File(downloadDir(downloadId), "movie.mp4").takeIf { it.exists() }?.absolutePath
         }
+        // Prefer MP4 produced by successful remux
+        val mp4 = File(downloadDir(downloadId), "movie.mp4")
+        if (mp4.exists() && mp4.length() > 0) return mp4.absolutePath
+        // Fallback — FFmpeg bug case, ExoPlayer reads HLS locally
+        val m3u8 = File(segmentsDir(downloadId), "index.m3u8")
+        if (m3u8.exists()) return m3u8.absolutePath
+        // key_expired or remux still running
+        return null
+    }
 }

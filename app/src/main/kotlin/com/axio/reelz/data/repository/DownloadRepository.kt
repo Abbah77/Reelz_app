@@ -12,7 +12,9 @@ import com.axio.reelz.core.database.DownloadRow
 import com.axio.reelz.data.model.DownloadItem
 import com.axio.reelz.data.model.DownloadStatus
 import com.axio.reelz.data.model.MediaType
+import com.axio.reelz.media.download.HlsRemuxer
 import com.axio.reelz.media.download.ReelzDownloadEngine
+import com.axio.reelz.media.download.RemuxResult
 import com.axio.reelz.media.download.ReelzDownloadService
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
@@ -291,6 +293,33 @@ class DownloadRepository @Inject constructor(
         }
     }
 
+    // ── Retry transient remux failures on app launch ─────────────────────────
+    /**
+     * Called from [ReelzDownloadService.onCreate].
+     * Finds all downloads stuck in REMUXING status (process died mid-remux or
+     * remuxAttempted = -1 from a previous transient failure) and re-runs FFmpeg.
+     *
+     * Segments are always kept on disk so no re-download is needed.
+     */
+    suspend fun retryPendingRemux() = withContext(Dispatchers.IO) {
+        val pending = dao.getRemuxing()
+        if (pending.isEmpty()) return@withContext
+
+        Log.d(tag, "retryPendingRemux: ${pending.size} download(s) to retry")
+        pending.forEach { row ->
+            val localM3u8 = java.io.File(engine.segmentsDir(row.id), "index.m3u8")
+            if (!localM3u8.exists()) {
+                // Segments are gone — can't remux. Treat as unrecoverable.
+                Log.w(tag, "retryPendingRemux: segments missing for ${row.id} — marking error")
+                dao.markKeyExpired(row.id, System.currentTimeMillis())
+                return@forEach
+            }
+            val outputMp4 = java.io.File(engine.downloadDir(row.id), "movie.mp4")
+            val result = engine.remuxer.remux(localM3u8, outputMp4)
+            engine.handleRemuxResult(row.id, result, localM3u8, outputMp4)
+        }
+    }
+
     // ── Local playback path (for ExoPlayer offline) ───────────────────────────
     fun getLocalPlaybackPath(downloadId: String, type: String): String? =
         engine.getLocalPlaybackPath(downloadId, type)
@@ -345,5 +374,7 @@ class DownloadRepository @Inject constructor(
         lastPlayedAt       = lastPlayedAt,
         localPlaylistPath  = localPlaylistPath,
         expiresAtMs        = expiresAtMs,
+        remuxAttempted     = remuxAttempted,
+        remuxFailReason    = remuxFailReason,
     )
 }

@@ -182,4 +182,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-nearby:19.3.0")
 
     debugImplementation(libs.compose.ui.tooling)
+    // ── FFmpeg Kit (HLS→MP4 remux) ─────────────────────────────────────────
+    // ffmpeg-kit-min is sufficient for remux + AES-128 decrypt — saves ~18 MB vs -full
+    implementation("com.arthenica:ffmpeg-kit-min:6.0-2")
 }
