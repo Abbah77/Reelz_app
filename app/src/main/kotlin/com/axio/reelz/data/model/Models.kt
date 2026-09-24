@@ -125,8 +125,6 @@ data class DownloadLink(
     // Unix timestamp in ms when url expires (0 = unknown). Used by DownloadRepository.resume()
     // to decide if a fresh URL fetch is required before resuming a paused download.
     val expiresAtMs: Long = 0L,
-    val remuxAttempted: Int = 0,
-    val remuxFailReason: String = "",
 )
 
 // ── Shorts — schema v3: id, title, source, url, thumbnail ────────────────────
@@ -168,6 +166,8 @@ data class DownloadItem(
     // Unix timestamp in ms when streamUrl expires (0 = unknown / doesn't expire).
     // Used by DownloadRepository.resume() to decide if a fresh URL is needed before resuming.
     val expiresAtMs: Long = 0L,
+    val remuxAttempted: Int = 0,
+    val remuxFailReason: String = "",
 )
 
 // ── User session ──────────────────────────────────────────────────────────────
