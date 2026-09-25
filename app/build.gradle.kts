@@ -166,10 +166,9 @@ dependencies {
     // Permissions
     implementation(libs.accompanist.permissions)
 
-    // Ads — AppLovin MAX + IMA
-    implementation("com.applovin:applovin-sdk:12.5.0")
-    implementation("com.google.ads.interactivemedia.v3:interactivemedia:3.33.0")
-    implementation("androidx.media3:media3-exoplayer-ima:1.3.1")
+    // Ads — Unity Ads (banner, interstitial, rewarded)
+    // AppLovin MAX or multi-network mediation can be re-added alongside Unity later.
+    implementation("com.unity3d.ads:unity-ads:4.12.2")
 
     // QR code (transfer screen)
     implementation("com.google.zxing:core:3.5.3")
@@ -182,7 +181,5 @@ dependencies {
     implementation("com.google.android.gms:play-services-nearby:19.3.0")
 
     debugImplementation(libs.compose.ui.tooling)
-    // ── FFmpeg Kit (HLS→MP4 remux) ─────────────────────────────────────────
-    // ffmpeg-kit-min is sufficient for remux + AES-128 decrypt — saves ~18 MB vs -full
-    implementation("com.arthenica:ffmpeg-kit-min:6.0-2")
+    // FFmpeg-kit removed — Media3 Transformer (already bundled) handles HLS→MP4 remux.
 }

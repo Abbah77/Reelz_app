@@ -97,3 +97,13 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.openjsse.**
 -dontwarn java.lang.invoke.**
+
+# ── FFmpeg Kit ────────────────────────────────────────────────────────────────
+-keep class com.arthenica.ffmpegkit.** { *; }
+-dontwarn com.arthenica.ffmpegkit.**
+
+# smartexception is a transitive dep of ffmpeg-kit used only at runtime for
+# pretty-printing stack traces. R8 can't find it because it's an optional peer
+# dependency not bundled in ffmpeg-kit-min. Tell R8 to ignore it.
+-dontwarn com.arthenica.smartexception.**
+-keep class com.arthenica.smartexception.** { *; }

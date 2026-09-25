@@ -54,15 +54,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.ui.PlayerView
-import com.google.ads.interactivemedia.v3.api.AdErrorEvent
-import com.google.ads.interactivemedia.v3.api.AdEvent
-import com.google.ads.interactivemedia.v3.api.AdsLoader
-import com.google.ads.interactivemedia.v3.api.AdsManagerLoadedEvent
-import com.google.ads.interactivemedia.v3.api.AdsRequest
-import com.google.ads.interactivemedia.v3.api.ImaSdkFactory
-import com.google.ads.interactivemedia.v3.api.ImaSdkSettings
-import com.google.ads.interactivemedia.v3.api.player.VideoAdPlayer
-import com.google.ads.interactivemedia.v3.api.player.VideoProgressUpdate
+// IMA / AppLovin removed — preroll/VAST not supported with Unity Ads.
+// Re-add this block when integrating a VAST-capable network (e.g. AppLovin MAX).
 import com.axio.reelz.ads.AdEngine
 import com.axio.reelz.ads.PlayerVideoAd
 import com.axio.reelz.ads.VideoAdType

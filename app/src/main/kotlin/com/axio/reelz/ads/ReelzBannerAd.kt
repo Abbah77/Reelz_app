@@ -1,8 +1,6 @@
 package com.axio.reelz.ads
 
 import android.util.Log
-import android.view.ViewGroup
-import android.widget.LinearLayout
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -20,10 +18,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.applovin.mediation.MaxAd
-import com.applovin.mediation.MaxAdViewAdListener
-import com.applovin.mediation.MaxError
-import com.applovin.mediation.ads.MaxAdView
+import com.unity3d.mediation.banner.BannerAdLoadOptions
+import com.unity3d.mediation.banner.BannerAdPosition
+import com.unity3d.mediation.banner.BannerAdSize
+import com.unity3d.mediation.banner.BannerView
+import com.unity3d.mediation.banner.IBannerAdLoadListener
+import com.unity3d.mediation.banner.IBannerAdShowListener
 import com.axio.reelz.ui.theme.*
 
 private const val TAG = "ReelzBannerAd"
@@ -31,20 +31,12 @@ private const val TAG = "ReelzBannerAd"
 private enum class BannerAdState { LOADING, LOADED, FAILED }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ReelzBannerAd — clean adaptive banner that blends with its host screen.
+// ReelzBannerAd — adaptive banner using Unity Ads BannerView.
 //
-// Design principle: banner ads should look like a designed UI element, not
-// a foreign object dropped into the screen. This is achieved by:
-//   • Container uses the same surface colour as the host screen
-//   • Rounded corners match the app's radius system
-//   • Subtle border consistent with all glass-surface elements
-//   • "Ad" disclosure is minimal and consistent with native ad style
-//   • Silent failure: FAILED = zero height, no dead whitespace
-//   • Silent loading: LOADING shows a neutral height-matching strip
-//
-// Placements:
-//   • End of search results (horizontal strip)
-//   • Files screen when no active downloads (inline card)
+// Design principle is unchanged from the AppLovin version:
+//   • Blends with the host screen's surface colour
+//   • Silent failure (FAILED = zero height, no dead whitespace)
+//   • Silent loading strip while the ad fills in
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -54,12 +46,12 @@ fun ReelzBannerAd(
     height: Dp = 50.dp,
 ) {
     var state by remember(adUnitId) { mutableStateOf(BannerAdState.LOADING) }
-    var adViewRef: MaxAdView? = null
+    var bannerRef: BannerView? = null
 
     DisposableEffect(adUnitId) {
         onDispose {
-            adViewRef?.destroy()
-            adViewRef = null
+            bannerRef?.destroy()
+            bannerRef = null
         }
     }
 
@@ -73,7 +65,6 @@ fun ReelzBannerAd(
                 .fillMaxWidth()
                 .height(height)
                 .clip(RoundedCornerShape(10.dp))
-                // Loading state: subtle surface strip; Loaded: transparent to let ad show through
                 .background(
                     when (state) {
                         BannerAdState.LOADING -> BgSurface
@@ -87,12 +78,11 @@ fun ReelzBannerAd(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            // "Ad" label during load — disappears once real ad fills the space
             if (state == BannerAdState.LOADING) {
                 Text(
-                    text      = "Ad",
-                    color     = White40,
-                    fontSize  = 10.sp,
+                    text       = "Ad",
+                    color      = White40,
+                    fontSize   = 10.sp,
                     fontWeight = FontWeight.Medium,
                 )
             }
@@ -100,32 +90,27 @@ fun ReelzBannerAd(
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory  = { context ->
-                    MaxAdView(adUnitId, context).apply {
-                        layoutParams = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        )
-                        setListener(object : MaxAdViewAdListener {
-                            override fun onAdLoaded(ad: MaxAd) {
-                                Log.d(TAG, "Banner loaded unit=$adUnitId")
-                                state = BannerAdState.LOADED
-                            }
-                            override fun onAdLoadFailed(id: String, error: MaxError) {
-                                Log.w(TAG, "Banner failed unit=$adUnitId: ${error.message}")
-                                state = BannerAdState.FAILED
-                            }
-                            override fun onAdDisplayFailed(ad: MaxAd, e: MaxError) {
-                                state = BannerAdState.FAILED
-                            }
-                            override fun onAdDisplayed(ad: MaxAd) {}
-                            override fun onAdHidden(ad: MaxAd)    {}
-                            override fun onAdClicked(ad: MaxAd)   {}
-                            override fun onAdExpanded(ad: MaxAd)  {}
-                            override fun onAdCollapsed(ad: MaxAd) {}
-                        })
-                        adViewRef = this
-                        loadAd()
-                    }
+                    val banner = BannerView(
+                        context,
+                        adUnitId,
+                        BannerAdSize.BANNER,    // 320×50 — standard Unity banner
+                    )
+                    banner.setListener(object : IBannerAdLoadListener {
+                        override fun onBannerLoaded(bannerAdView: BannerView) {
+                            Log.d(TAG, "Banner loaded: $adUnitId")
+                            state = BannerAdState.LOADED
+                        }
+                        override fun onBannerFailedToLoad(
+                            bannerAdView: BannerView,
+                            error: com.unity3d.mediation.banner.BannerAdLoadError,
+                        ) {
+                            Log.w(TAG, "Banner failed: $adUnitId — $error")
+                            state = BannerAdState.FAILED
+                        }
+                    })
+                    banner.load()
+                    bannerRef = banner
+                    banner
                 },
             )
         }
@@ -133,8 +118,7 @@ fun ReelzBannerAd(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SearchResultsBanner — horizontal strip at the end of search results.
-// Blends with the screen bottom, styled to feel like a natural content divider.
+// SearchResultsBanner — unchanged placement logic, new ad implementation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -145,7 +129,6 @@ fun SearchResultsBanner(adEngine: AdEngine, modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
-        // Separator with label
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -160,8 +143,7 @@ fun SearchResultsBanner(adEngine: AdEngine, modifier: Modifier = Modifier) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FilesScreenBanner — shown in the files/downloads screen when no active jobs.
-// Card style matches the empty state card shape.
+// FilesScreenBanner — unchanged placement logic, new ad implementation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -183,6 +165,10 @@ fun FilesScreenBanner(adEngine: AdEngine, modifier: Modifier = Modifier) {
         ) {
             Text("Sponsored", color = White40, fontSize = 9.sp, fontWeight = FontWeight.Medium)
         }
-        ReelzBannerAd(adUnitId = unitId, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp), height = 50.dp)
+        ReelzBannerAd(
+            adUnitId = unitId,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+            height   = 50.dp,
+        )
     }
 }

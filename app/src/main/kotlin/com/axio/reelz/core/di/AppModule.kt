@@ -10,7 +10,7 @@ import com.axio.reelz.core.database.MIGRATION_5_6
 import com.axio.reelz.core.database.MIGRATION_6_7
 import com.axio.reelz.core.database.MIGRATION_7_8
 import com.axio.reelz.core.network.PLACEHOLDER_BASE
-import com.axio.reelz.media.download.HlsRemuxer
+// HlsRemuxer is @Singleton and uses @ApplicationContext — Hilt injects it automatically.
 import com.axio.reelz.core.network.buildOkHttpClient
 import com.axio.reelz.data.remote.api.ReelzApi
 import com.axio.reelz.data.repository.ConfigRepository
@@ -96,11 +96,6 @@ object AppModule {
             .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
             .fallbackToDestructiveMigration()
             .build()
-
-    // ── HlsRemuxer ────────────────────────────────────────────────────────────
-
-    @Provides @Singleton
-    fun provideHlsRemuxer(): HlsRemuxer = HlsRemuxer()
 
     // ── DAO providers ─────────────────────────────────────────────────────────
 

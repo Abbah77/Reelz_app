@@ -1,160 +1,163 @@
 package com.axio.reelz.media.download
 
+import android.content.Context
+import android.net.Uri
 import android.util.Log
-import com.arthenica.ffmpegkit.FFmpegKit
-import com.arthenica.ffmpegkit.ReturnCode
+import androidx.media3.common.MediaItem
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.TransformationRequest
+import androidx.media3.transformer.Transformer
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
 
 /**
- * HlsRemuxer — wraps ffmpeg-kit to remux a local HLS playlist into MP4.
+ * HlsRemuxer — uses Media3 Transformer to remux a local HLS playlist into MP4.
  *
- * Input:  segments/index.m3u8  (local .ts paths + remote #EXT-X-KEY URI)
+ * Replaces the old FFmpeg-kit implementation with the already-bundled
+ * androidx.media3:media3-transformer dependency (zero extra APK size).
+ *
+ * Input:  segments/index.m3u8  (local .ts paths written by ReelzDownloadEngine)
  * Output: movie.mp4            (produced in the download root dir)
  *
- * FFmpeg reads the #EXT-X-KEY URI directly from the m3u8 and fetches the
- * AES-128 key over HTTPS in one pass — no manual decryption code needed.
- * The protocol whitelist must include file, http, https, tcp, tls, crypto
- * because the m3u8 mixes file:// (local .ts segments) with https:// (key URI).
+ * Transformer runs a copy-only (no re-encode) remux pass — same quality,
+ * same speed as FFmpeg's `-c copy` mode.
  *
- * Failure classification:
- *   • Key-fetch errors (403/404/410 on key URI)  → [RemuxResult.KeyExpired]
- *   • Network/OOM/disk/process errors             → [RemuxResult.TransientFailure]
- *   • FFmpeg codec/container bugs                 → [RemuxResult.FfmpegBug]
+ * This is a suspend fun because Transformer is callback-based on the main
+ * thread; we bridge it to a coroutine with suspendCancellableCoroutine.
+ *
+ * Failure classification mirrors the old FFmpeg version:
+ *   • Key / DRM errors  → [RemuxResult.KeyExpired]
+ *   • Transient errors  → [RemuxResult.TransientFailure]
+ *   • Other codec/container bugs → [RemuxResult.FfmpegBug] (name kept for DB compat)
  */
 @Singleton
-class HlsRemuxer @Inject constructor() {
+class HlsRemuxer @Inject constructor(
+    @ApplicationContext private val context: Context,
+) {
 
     companion object {
         private const val TAG = "HlsRemuxer"
 
-        /**
-         * FFmpeg log patterns that indicate the AES-128 key fetch failed.
-         * Matched case-insensitively against the full FFmpeg log output.
-         */
+        // Error message fragments that indicate an AES-128 key fetch failure.
         private val KEY_FETCH_ERRORS = listOf(
-            "Server returned 4",   // 403, 404, 410 on key URI
-            "key_uri",             // FFmpeg HLS demuxer log for key fetch failures
-            "failed to open segment",
-            "Invalid data found when processing input",
+            "cleartext",
+            "drm",
+            "key",
+            "403",
+            "404",
+            "410",
+            "unauthorized",
         )
 
-        /**
-         * Patterns that indicate a transient infrastructure failure
-         * (network blip, OOM, disk full) rather than a codec/container bug.
-         * These are safe to retry — segments are intact on disk.
-         */
+        // Error message fragments that indicate a transient infra problem (safe to retry).
         private val TRANSIENT_ERRORS = listOf(
-            "Connection refused",
-            "Network is unreachable",
-            "No space left on device",
-            "Out of memory",
-            "Cannot allocate memory",
-            "Input/output error",
-            "Broken pipe",
-            "Connection timed out",
-            "Host is unreachable",
+            "timeout",
+            "connection",
+            "network",
+            "unreachable",
+            "no space",
+            "out of memory",
+            "i/o error",
+            "broken pipe",
         )
     }
 
     /**
-     * Run FFmpeg synchronously on the calling coroutine thread.
-     * Always call from a background dispatcher (Dispatchers.IO).
+     * Remux [localM3u8] → [outputMp4] using Media3 Transformer.
+     *
+     * Must be called from a coroutine (suspends until Transformer finishes).
+     * Transformer internally dispatches to its own threads; the calling
+     * coroutine is suspended without blocking a thread pool thread.
      *
      * @param localM3u8  The local index.m3u8 written by [ReelzDownloadEngine]
-     *                   with file:// segment paths and the original https:// key URI.
-     * @param outputMp4  Destination for the remuxed MP4 file.
-     * @return           One of the [RemuxResult] subtypes.
+     *                   with file:// absolute .ts segment paths.
+     * @param outputMp4  Destination MP4 file (deleted and re-created on each call).
      */
-    fun remux(localM3u8: File, outputMp4: File): RemuxResult {
-        // Clean up any stale partial output from a previous attempt.
+    suspend fun remux(localM3u8: File, outputMp4: File): RemuxResult {
+        // Clean up any stale partial output.
         outputMp4.delete()
 
-        val cmd = buildCommand(localM3u8, outputMp4)
-        Log.d(TAG, "FFmpeg start: $cmd")
+        Log.d(TAG, "Transformer start: ${localM3u8.absolutePath} → ${outputMp4.absolutePath}")
 
-        val session = FFmpegKit.execute(cmd)
-        val rc      = session.returnCode
-        val logs    = session.allLogsAsString ?: ""
+        return suspendCancellableCoroutine { cont ->
+            // Transformer must be created and started on the main thread.
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                val transformer = Transformer.Builder(context)
+                    .setTransformationRequest(
+                        TransformationRequest.Builder()
+                            .build()                // copy-only, no re-encode
+                    )
+                    .addListener(object : Transformer.Listener {
+                        override fun onCompleted(
+                            composition: Composition,
+                            exportResult: ExportResult,
+                        ) {
+                            if (outputMp4.exists() && outputMp4.length() > 0) {
+                                Log.i(TAG, "Transformer success → ${outputMp4.absolutePath} " +
+                                        "(${outputMp4.length()} bytes)")
+                                cont.resume(RemuxResult.Success(outputMp4))
+                            } else {
+                                Log.w(TAG, "Transformer completed but output missing/empty")
+                                cont.resume(
+                                    RemuxResult.TransientFailure("Output file missing after transform")
+                                )
+                            }
+                        }
 
-        return when {
-            ReturnCode.isSuccess(rc) && outputMp4.exists() && outputMp4.length() > 0 -> {
-                Log.i(TAG, "FFmpeg success → ${outputMp4.absolutePath} (${outputMp4.length()} bytes)")
-                RemuxResult.Success(outputMp4)
-            }
+                        override fun onError(
+                            composition: Composition,
+                            exportResult: ExportResult,
+                            exportException: ExportException,
+                        ) {
+                            outputMp4.delete()
+                            val msg = exportException.message?.lowercase() ?: ""
+                            val result = when {
+                                isKeyError(msg)      -> {
+                                    Log.w(TAG, "Transformer key error: ${exportException.message}")
+                                    RemuxResult.KeyExpired(exportException.message ?: "AES key fetch failed")
+                                }
+                                isTransientError(msg) -> {
+                                    Log.w(TAG, "Transformer transient: ${exportException.message}")
+                                    RemuxResult.TransientFailure(exportException.message ?: "Transient failure")
+                                }
+                                else -> {
+                                    // Codec/container issue — ExoPlayer HLS fallback may still work.
+                                    Log.w(TAG, "Transformer bug (ExoPlayer fallback): ${exportException.message}")
+                                    RemuxResult.FfmpegBug(
+                                        exportException.message ?: "Transformer failed",
+                                        localM3u8,
+                                    )
+                                }
+                            }
+                            cont.resume(result)
+                        }
+                    })
+                    .build()
 
-            isKeyExpired(logs) -> {
-                val reason = extractKeyError(logs)
-                Log.w(TAG, "FFmpeg key expired: $reason")
-                outputMp4.delete()
-                RemuxResult.KeyExpired(reason)
-            }
+                val mediaItem = MediaItem.fromUri(Uri.fromFile(localM3u8))
+                transformer.start(mediaItem, outputMp4.absolutePath)
 
-            isTransient(logs, rc) -> {
-                val reason = extractTransientReason(logs, rc)
-                Log.w(TAG, "FFmpeg transient failure: $reason")
-                outputMp4.delete()
-                RemuxResult.TransientFailure(reason)
-            }
-
-            else -> {
-                // FFmpeg bug — corrupt segment, unsupported codec, bad container, etc.
-                val reason = extractFfmpegBugReason(logs, rc)
-                Log.w(TAG, "FFmpeg bug (ExoPlayer fallback): $reason")
-                outputMp4.delete()
-                RemuxResult.FfmpegBug(reason, localM3u8)
+                // Cancel Transformer if the coroutine is cancelled (e.g. download paused).
+                cont.invokeOnCancellation {
+                    transformer.cancel()
+                    outputMp4.delete()
+                    Log.d(TAG, "Transformer cancelled")
+                }
             }
         }
     }
 
-    // ── Command builder ───────────────────────────────────────────────────────
+    // ── Error classifiers ─────────────────────────────────────────────────────
 
-    private fun buildCommand(localM3u8: File, outputMp4: File): String =
-        // -protocol_whitelist: required because m3u8 mixes file:// and https://
-        // -allowed_extensions: allow .ts segment extensions via the HLS demuxer
-        // -c copy: pure remux — no re-encode, very fast, no quality loss
-        // -movflags +faststart: moves moov atom to front for progressive playback
-        // -loglevel warning: suppress verbose segment-by-segment noise
-        "-protocol_whitelist file,http,https,tcp,tls,crypto " +
-        "-allowed_extensions ALL " +
-        "-i \"${localM3u8.absolutePath}\" " +
-        "-c copy " +
-        "-movflags +faststart " +
-        "-loglevel warning " +
-        "\"${outputMp4.absolutePath}\""
+    private fun isKeyError(msg: String): Boolean =
+        KEY_FETCH_ERRORS.any { msg.contains(it) }
 
-    // ── Log classifiers ───────────────────────────────────────────────────────
-
-    private fun isKeyExpired(logs: String): Boolean =
-        KEY_FETCH_ERRORS.any { logs.contains(it, ignoreCase = true) }
-
-    private fun isTransient(logs: String, rc: ReturnCode?): Boolean {
-        // FFmpeg killed by OS signal (SIGKILL from OOM killer, etc.)
-        if (ReturnCode.isCancel(rc)) return true
-        return TRANSIENT_ERRORS.any { logs.contains(it, ignoreCase = true) }
-    }
-
-    private fun extractKeyError(logs: String): String =
-        logs.lines()
-            .firstOrNull { line -> KEY_FETCH_ERRORS.any { line.contains(it, ignoreCase = true) } }
-            ?.trim()
-            ?.take(200)
-            ?: "AES key fetch failed"
-
-    private fun extractTransientReason(logs: String, rc: ReturnCode?): String {
-        if (ReturnCode.isCancel(rc)) return "FFmpeg cancelled by OS (signal ${rc?.value})"
-        return logs.lines()
-            .lastOrNull { it.isNotBlank() }
-            ?.trim()
-            ?.take(200)
-            ?: "Transient failure (exit ${rc?.value})"
-    }
-
-    private fun extractFfmpegBugReason(logs: String, rc: ReturnCode?): String =
-        logs.lines()
-            .lastOrNull { it.isNotBlank() }
-            ?.trim()
-            ?.take(200)
-            ?: "FFmpeg failed (exit ${rc?.value})"
+    private fun isTransientError(msg: String): Boolean =
+        TRANSIENT_ERRORS.any { msg.contains(it) }
 }
