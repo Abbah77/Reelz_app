@@ -8,8 +8,6 @@ import android.net.NetworkRequest
 import android.util.Log
 import com.axio.reelz.core.database.DownloadDao
 import com.axio.reelz.data.model.DownloadStatus
-import com.axio.reelz.media.download.HlsRemuxer
-import com.axio.reelz.media.download.RemuxResult
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
@@ -26,88 +24,60 @@ import javax.inject.Singleton
 /**
  * ReelzDownloadEngine — production-grade download engine for MP4 and HLS.
  *
- * Design principles:
+ * Design:
  *   • MP4  → Range-resumable HTTP download with atomic tmp→final rename.
- *   • HLS  → Fetch quality-specific media playlist, download ALL .ts segments
+ *   • HLS  → Fetch quality-specific media playlist, download all .ts segments
  *            in parallel (8 workers), write local index.m3u8 for ExoPlayer offline.
- *   • Network-aware: ConnectivityManager callback auto-resumes paused/failed
- *     downloads when connectivity is restored.
- *   • Cancellation: all segment async jobs share the per-download Job scope so
- *     pause/cancel propagates instantly.
- *   • Progress: DB updated every ~1 MB (MP4) or per completed segment (HLS).
- *   • Speed: measured with a rolling 3-second window, stored as downloadedBytes
- *     growth in DB (the UI can diff timestamps to display KB/s).
- *   • sizeBytes: set correctly for both MP4 (Content-Length) and HLS (sum of
- *     all segment files after completion).
+ *            No remuxing — ExoPlayer reads the local HLS playlist directly.
+ *   • Network-aware: auto-resumes paused/failed downloads when connectivity restores.
+ *   • Cancellation: per-download Job scope propagates pause/cancel instantly.
  *
- * Disk layout (private, not accessible by other apps):
+ * Disk layout:
  *   <externalFilesDir>/reelz_downloads/<downloadId>/
  *     movie.mp4              (MP4 — final)
  *     movie.mp4.tmp          (MP4 — in-progress, renamed on completion)
  *     segments/
- *       index.m3u8           (local playlist — absolute paths to .ts files)
- *       seg000000.ts
- *       seg000001.ts  …
+ *       index.m3u8           (local playlist with absolute .ts paths)
+ *       seg000000.ts  …
  *     subtitles/
  */
 @Singleton
 class ReelzDownloadEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val downloadDao: DownloadDao,
-    val remuxer: HlsRemuxer,   // internal val — DownloadRepository calls it for retry
 ) {
     companion object {
         private const val TAG = "ReelzDownloadEngine"
 
-        // ── Tuning ────────────────────────────────────────────────────────────
-        /** Parallel segment workers.  8 is aggressive but safe; lower to 4 on
-         *  metered connections if you add a preference.  */
-        private const val PARALLEL_SEGMENTS = 8
-
-        /** Per-segment retry attempts with exponential backoff. */
-        private const val SEGMENT_RETRY_MAX = 6
-
-        /** Read/write buffer — 512 KB gives good throughput. */
-        private const val BUFFER_SIZE = 512 * 1024
-
-        /** DB progress flush interval in bytes (MP4 path). */
-        private const val PROGRESS_FLUSH_BYTES = 1 * 1024 * 1024L // 1 MB
-
-        private const val DOWNLOADS_DIR = "reelz_downloads"
+        private const val PARALLEL_SEGMENTS  = 8
+        private const val SEGMENT_RETRY_MAX  = 6
+        private const val BUFFER_SIZE        = 512 * 1024
+        private const val PROGRESS_FLUSH_BYTES = 1 * 1024 * 1024L
+        private const val DOWNLOADS_DIR      = "reelz_downloads"
     }
 
-    // ── OkHttp client ─────────────────────────────────────────────────────────
+    // ── OkHttp ────────────────────────────────────────────────────────────────
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
-        // Large pool — 8 segment workers + MP4 + playlist fetch
         .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
 
     // ── State ─────────────────────────────────────────────────────────────────
-    /** SupervisorJob: one failed download never cancels others. */
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    /** Per-download coroutine jobs. */
     private val activeJobs  = ConcurrentHashMap<String, Job>()
-
-    /** Pause flags — set to true → coroutine throws CancellationException. */
     private val pauseFlags  = ConcurrentHashMap<String, AtomicBoolean>()
-
-    /** IDs that are currently paused (vs fully cancelled). */
     private val pausedIds   = ConcurrentHashMap.newKeySet<String>()
 
-    // ── Network awareness ────────────────────────────────────────────────────
-
+    // ── Network awareness ─────────────────────────────────────────────────────
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     init {
-        // Auto-resume paused downloads when network is restored.
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
@@ -119,8 +89,6 @@ class ReelzDownloadEngine @Inject constructor(
     }
 
     private suspend fun resumePausedByNetwork() {
-        // Only auto-resume downloads that were paused due to network loss,
-        // not ones the user explicitly paused.
         val networkPaused = pausedIds.toSet().filter { id ->
             !activeJobs[id]?.isActive.let { it ?: false }
         }
@@ -140,7 +108,6 @@ class ReelzDownloadEngine @Inject constructor(
     }
 
     // ── Directories ───────────────────────────────────────────────────────────
-
     private fun rootDir(): File {
         val ext = context.getExternalFilesDir(null)
         val dir = if (ext != null) File(ext, DOWNLOADS_DIR) else File(context.filesDir, DOWNLOADS_DIR)
@@ -158,7 +125,6 @@ class ReelzDownloadEngine @Inject constructor(
         File(downloadDir(downloadId), "subtitles").also { it.mkdirs() }
 
     // ── Public API ────────────────────────────────────────────────────────────
-
     fun start(
         downloadId: String,
         url: String,
@@ -166,9 +132,6 @@ class ReelzDownloadEngine @Inject constructor(
         headers: Map<String, String> = emptyMap(),
         title: String = "",
         autoResume: Boolean = false,
-        // Explicit byte offset for MP4 resume (from DownloadRepository.resume when URL refreshed).
-        // When > 0, takes priority over the tmp file length check so we always resume correctly
-        // even when the tmp file size and DB downloadedBytes differ due to a previous error.
         resumeBytes: Long = 0L,
     ) {
         if (activeJobs[downloadId]?.isActive == true) return
@@ -185,11 +148,9 @@ class ReelzDownloadEngine @Inject constructor(
                 }
             } catch (e: CancellationException) {
                 Log.d(TAG, "[$downloadId] cancelled/paused")
-                // Don't mark ERROR — pause/cancel handles status externally.
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "[$downloadId] failed: ${e.message}", e)
-                // If network is down, mark PAUSED for auto-resume; otherwise ERROR.
                 val isNetworkError = e is java.net.UnknownHostException ||
                         e is java.net.ConnectException ||
                         e is java.net.SocketException ||
@@ -223,29 +184,22 @@ class ReelzDownloadEngine @Inject constructor(
     }
 
     // ── MP4 ───────────────────────────────────────────────────────────────────
-
     private suspend fun downloadMp4(
         downloadId: String,
         url: String,
         headers: Map<String, String>,
-        // Explicit byte offset passed from DownloadRepository.resume() when a URL was
-        // refreshed mid-download. When > 0 we skip the tmp-file probe and use this
-        // directly, ensuring we always resume from the correct offset even if the tmp
-        // file was partially written or the sizes diverge after a URL swap.
         explicitResumeBytes: Long = 0L,
     ) = withContext(Dispatchers.IO) {
         val outFile = File(downloadDir(downloadId), "movie.mp4")
         val tmpFile = File(downloadDir(downloadId), "movie.mp4.tmp")
 
-        // Already finished
         if (outFile.exists() && outFile.length() > 1024) {
-            markDone(downloadId, outFile)
+            markDoneMp4(downloadId, outFile)
             return@withContext
         }
 
-        // Determine resume offset — explicit override wins over tmp-file probe.
         val existingBytes = when {
-            explicitResumeBytes > 0 -> explicitResumeBytes   // URL was refreshed; trust DB value
+            explicitResumeBytes > 0 -> explicitResumeBytes
             tmpFile.exists()        -> tmpFile.length()
             else                    -> 0L
         }
@@ -276,7 +230,6 @@ class ReelzDownloadEngine @Inject constructor(
             else -> response.body?.contentLength() ?: 0L
         }
 
-        // Store total size immediately so progress bar is correct from the start
         if (totalSize > 0) {
             downloadDao.updateProgress(
                 id = downloadId, status = DownloadStatus.DOWNLOADING.name,
@@ -298,8 +251,7 @@ class ReelzDownloadEngine @Inject constructor(
                         lastFlush = done
                         downloadDao.updateProgress(
                             id = downloadId, status = DownloadStatus.DOWNLOADING.name,
-                            bytes = done, done = 0,
-                            total = 0, playlist = "",
+                            bytes = done, done = 0, total = 0, playlist = "",
                             sizeBytes = totalSize,
                         )
                     }
@@ -311,13 +263,12 @@ class ReelzDownloadEngine @Inject constructor(
             response.close()
         }
 
-        // Atomic rename
         if (!tmpFile.renameTo(outFile)) {
             tmpFile.copyTo(outFile, overwrite = true)
             tmpFile.delete()
         }
 
-        markDone(downloadId, outFile, totalSizeOverride = outFile.length())
+        markDoneMp4(downloadId, outFile, totalSizeOverride = outFile.length())
         Log.i(TAG, "[$downloadId] MP4 done: ${outFile.absolutePath} (${outFile.length()} bytes)")
     }
 
@@ -332,12 +283,8 @@ class ReelzDownloadEngine @Inject constructor(
     } catch (_: Exception) { false }
 
     // ── HLS ───────────────────────────────────────────────────────────────────
-    //
-    // The backend hands a quality-specific media playlist URL (not a master).
-    // We fetch it, parse all #EXTINF segments, download them ALL in parallel
-    // using a bounded semaphore, then write a local index.m3u8 pointing at the
-    // saved .ts files for ExoPlayer offline playback.
-
+    // Download all segments, write local index.m3u8, mark DONE.
+    // ExoPlayer reads the local HLS playlist directly — no remuxing needed.
     private suspend fun downloadHls(
         downloadId: String,
         mediaPlaylistUrl: String,
@@ -355,26 +302,22 @@ class ReelzDownloadEngine @Inject constructor(
         val total = segments.size
         Log.d(TAG, "[$downloadId] $total segments to download")
 
-        // Count already-completed segments (resume support)
         val completedCount = AtomicLong(
             segments.count { seg ->
                 File(segDir, segFilename(seg.index)).let { it.exists() && it.length() > 0 }
             }.toLong()
         )
 
-        // Flush initial state
         downloadDao.updateProgress(
             id = downloadId, status = DownloadStatus.DOWNLOADING.name,
             bytes = completedCount.get() * estimateSegmentSize(segDir),
             done  = completedCount.get().toInt(),
             total = total,
             playlist = "",
-            sizeBytes = 0L, // unknown until all segments done
+            sizeBytes = 0L,
         )
 
         val semaphore = Semaphore(PARALLEL_SEGMENTS)
-
-        // Use coroutineScope so cancellation of the parent job cancels all children
         val pendingSegments = segments.filter { seg ->
             !File(segDir, segFilename(seg.index)).let { it.exists() && it.length() > 0 }
         }
@@ -396,17 +339,15 @@ class ReelzDownloadEngine @Inject constructor(
                     }
                 }
             }
-            // awaitAll propagates the first failure and cancels siblings
             jobs.awaitAll()
         }
 
-        // Verify all segments present
         val missing = segments.count {
             !File(segDir, segFilename(it.index)).let { f -> f.exists() && f.length() > 0 }
         }
         if (missing > 0) error("$missing HLS segments failed to download")
 
-        // Write local playlist — always kept for ExoPlayer fallback and retry
+        // Write local playlist pointing at absolute .ts paths for ExoPlayer offline
         val localM3u8 = File(segDir, "index.m3u8")
         localM3u8.writeText(buildLocalPlaylist(playlistContent, segments, segDir))
 
@@ -414,85 +355,18 @@ class ReelzDownloadEngine @Inject constructor(
             ?.filter { it.name.endsWith(".ts") }
             ?.sumOf { it.length() } ?: 0L
 
-        // Persist fallback BEFORE FFmpeg starts.
-        // If the process dies mid-remux the next launch finds status=REMUXING +
-        // localPlaylistPath and retries FFmpeg without re-downloading any segment.
-        downloadDao.markSegmentsDone(
+        // Mark done — ExoPlayer plays local m3u8 directly
+        downloadDao.markDoneHls(
             id        = downloadId,
-            status    = DownloadStatus.REMUXING.name,
-            m3u8Path  = localM3u8.absolutePath,
+            status    = DownloadStatus.DONE.name,
+            path      = localM3u8.absolutePath,
+            at        = System.currentTimeMillis(),
+            sizeBytes = totalSegBytes,
             done      = segments.size,
             total     = segments.size,
-            sizeBytes = totalSegBytes,
         )
 
-        val outputMp4 = File(downloadDir(downloadId), "movie.mp4")
-        val remuxResult = remuxer.remux(localM3u8, outputMp4)
-
-        handleRemuxResult(downloadId, remuxResult, localM3u8, outputMp4)
-    }
-
-    /**
-     * Handles a [RemuxResult] and writes the appropriate DB state.
-     * Called both from the post-download flow and from [DownloadRepository.retryPendingRemux].
-     *
-     * Segments are NEVER deleted here — they are kept for ExoPlayer fallback
-     * and future retry attempts.
-     */
-    suspend fun handleRemuxResult(
-        downloadId: String,
-        result: RemuxResult,
-        localM3u8: File,
-        outputMp4: File,
-    ) {
-        val totalSegBytes = localM3u8.parentFile
-            ?.listFiles()
-            ?.filter { it.name.endsWith(".ts") }
-            ?.sumOf { it.length() } ?: 0L
-
-        when (result) {
-            is RemuxResult.Success -> {
-                downloadDao.markRemuxSuccess(
-                    id        = downloadId,
-                    mp4Path   = result.mp4File.absolutePath,
-                    at        = System.currentTimeMillis(),
-                    sizeBytes = result.mp4File.length(),
-                )
-                Log.i(TAG, "[$downloadId] HLS→MP4 remux done: ${result.mp4File.absolutePath}")
-            }
-
-            is RemuxResult.TransientFailure -> {
-                // Status stays REMUXING — markSegmentsDone already wrote it.
-                // markRemuxTransientFail only updates remuxAttempted + reason.
-                downloadDao.markRemuxTransientFail(
-                    id     = downloadId,
-                    reason = result.reason,
-                )
-                Log.w(TAG, "[$downloadId] Transient remux fail — will retry on next launch: ${result.reason}")
-            }
-
-            is RemuxResult.KeyExpired -> {
-                // Local m3u8 references a dead CDN key URI — ExoPlayer fallback
-                // is also broken. Mark ERROR so the UI tells the user to re-download.
-                downloadDao.markKeyExpired(
-                    id = downloadId,
-                    at = System.currentTimeMillis(),
-                )
-                Log.w(TAG, "[$downloadId] AES key expired — unrecoverable: ${result.reason}")
-            }
-
-            is RemuxResult.FfmpegBug -> {
-                // FFmpeg can't handle it, but ExoPlayer's HLS decoder might.
-                downloadDao.markRemuxFallback(
-                    id        = downloadId,
-                    m3u8Path  = result.fallbackM3u8.absolutePath,
-                    at        = System.currentTimeMillis(),
-                    sizeBytes = totalSegBytes,
-                    reason    = result.reason,
-                )
-                Log.w(TAG, "[$downloadId] FFmpeg bug — ExoPlayer m3u8 fallback: ${result.reason}")
-            }
-        }
+        Log.i(TAG, "[$downloadId] HLS done: ${localM3u8.absolutePath} ($totalSegBytes bytes)")
     }
 
     private fun estimateSegmentSize(segDir: File): Long =
@@ -501,7 +375,6 @@ class ReelzDownloadEngine @Inject constructor(
             ?: 512_000L
 
     // ── HLS helpers ───────────────────────────────────────────────────────────
-
     data class Segment(val index: Int, val url: String)
 
     private fun parseSegments(content: String, baseUrl: String): List<Segment> {
@@ -513,7 +386,6 @@ class ReelzDownloadEngine @Inject constructor(
         while (i < lines.size) {
             val line = lines[i].trim()
             if (line.startsWith("#EXTINF")) {
-                // Scan forward past any intermediate tags to find the URI line
                 var j = i + 1
                 while (j < lines.size && lines[j].trimStart().startsWith("#")) j++
                 if (j < lines.size) {
@@ -548,7 +420,7 @@ class ReelzDownloadEngine @Inject constructor(
         headers: Map<String, String>,
     ) {
         val outFile = File(segDir, segFilename(seg.index))
-        if (outFile.exists() && outFile.length() > 0) return   // already done
+        if (outFile.exists() && outFile.length() > 0) return
 
         var lastError: Exception? = null
         for (attempt in 0 until SEGMENT_RETRY_MAX) {
@@ -573,13 +445,12 @@ class ReelzDownloadEngine @Inject constructor(
                         throw e
                     }
                 }
-                return   // success
+                return
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 lastError = e
                 Log.w(TAG, "Seg ${seg.index} attempt $attempt failed: ${e.message}")
                 if (attempt < SEGMENT_RETRY_MAX - 1) {
-                    // Exponential backoff: 300 ms, 600, 1200, 2400, 4800
                     delay(300L * (1L shl attempt.coerceAtMost(4)))
                 }
             }
@@ -587,7 +458,6 @@ class ReelzDownloadEngine @Inject constructor(
         throw lastError ?: IOException("Segment ${seg.index} failed after $SEGMENT_RETRY_MAX attempts")
     }
 
-    /** Rewrite the m3u8 replacing remote segment URIs with local absolute file paths. */
     private fun buildLocalPlaylist(
         original: String,
         segments: List<Segment>,
@@ -620,8 +490,6 @@ class ReelzDownloadEngine @Inject constructor(
     }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
-
-    /** Execute a request with exponential retry on network errors. */
     private fun executeWithRetry(request: Request, maxAttempts: Int = 4): Response {
         var lastError: Exception? = null
         for (attempt in 0 until maxAttempts) {
@@ -663,17 +531,11 @@ class ReelzDownloadEngine @Inject constructor(
         }
 
     // ── Lifecycle helpers ─────────────────────────────────────────────────────
-
     private fun checkPause(downloadId: String) {
         if (pauseFlags[downloadId]?.get() == true) throw CancellationException("paused")
     }
 
-    /**
-     * Mark an MP4 download done.
-     * [totalSizeOverride] lets us pass the actual file size even when
-     * Content-Length was missing during download.
-     */
-    private suspend fun markDone(
+    private suspend fun markDoneMp4(
         downloadId: String,
         file: File,
         totalSizeOverride: Long = 0L,
@@ -706,24 +568,15 @@ class ReelzDownloadEngine @Inject constructor(
     }
 
     /**
-     * Returns the best local path for offline ExoPlayer playback:
-     *   1. movie.mp4     — produced by a successful FFmpeg remux
-     *   2. index.m3u8    — fallback if FFmpeg had a bug (remuxAttempted = -3)
-     *   3. null          — key expired or remux still in progress
-     *
-     * The type parameter is kept for MP4-only downloads (no remux needed).
+     * Returns the local path for offline ExoPlayer playback:
+     *   • MP4 downloads → movie.mp4
+     *   • HLS downloads → segments/index.m3u8 (ExoPlayer reads it natively)
      */
     fun getLocalPlaybackPath(downloadId: String, type: String): String? {
-        if (type.lowercase() != "hls") {
-            return File(downloadDir(downloadId), "movie.mp4").takeIf { it.exists() }?.absolutePath
+        return if (type.lowercase() != "hls") {
+            File(downloadDir(downloadId), "movie.mp4").takeIf { it.exists() }?.absolutePath
+        } else {
+            File(segmentsDir(downloadId), "index.m3u8").takeIf { it.exists() }?.absolutePath
         }
-        // Prefer MP4 produced by successful remux
-        val mp4 = File(downloadDir(downloadId), "movie.mp4")
-        if (mp4.exists() && mp4.length() > 0) return mp4.absolutePath
-        // Fallback — FFmpeg bug case, ExoPlayer reads HLS locally
-        val m3u8 = File(segmentsDir(downloadId), "index.m3u8")
-        if (m3u8.exists()) return m3u8.absolutePath
-        // key_expired or remux still running
-        return null
     }
 }

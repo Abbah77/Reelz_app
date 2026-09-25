@@ -120,7 +120,7 @@ class AdEngine @Inject constructor(
         UnityAds.initialize(
             context.applicationContext,
             UNITY_GAME_ID,
-            false,   // testMode — flip to true during development
+            true,   // testMode — flip to true during development
             object : IUnityAdsInitializationListener {
                 override fun onInitializationComplete() {
                     Log.d(TAG, "Unity Ads initialised")

@@ -7,34 +7,27 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.axio.reelz.R
 import com.axio.reelz.core.database.DownloadDao
-import com.axio.reelz.data.repository.DownloadRepository
+import com.axio.reelz.data.model.DownloadStatus
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import javax.inject.Inject
 
 /**
- * ReelzDownloadService — Foreground service keeping downloads alive.
+ * ReelzDownloadService — Foreground service that keeps downloads alive.
  *
- * KEY FIXES:
- *  1. Uses START_STICKY so Android restarts the service after process death —
- *     downloads are NOT paused when the user switches apps.
- *  2. Notification is live: progress observer updates it every time the DB
- *     changes, and the notification is fully dismissed (cancelNotification)
- *     when all downloads are done or when a user cancels the last download.
- *  3. Cancelled downloads: engine.cancel() deletes the DB row via the DAO,
- *     which triggers the Flow to re-emit without that row. When activeJobs
- *     becomes empty the notification is cancelled and stopSelf() is called.
+ * START_STICKY: Android restarts the service after process death so downloads
+ * survive app switching and memory pressure.
+ *
+ * Notification is live: updated from a DB Flow observer and dismissed when
+ * all downloads complete or are cancelled.
  */
 @AndroidEntryPoint
 class ReelzDownloadService : Service() {
 
     @Inject lateinit var engine: ReelzDownloadEngine
     @Inject lateinit var downloadDao: DownloadDao
-    @Inject lateinit var downloadRepository: DownloadRepository
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    // Track whether we have started observing — only start one observer loop.
     private var observing = false
 
     companion object {
@@ -60,9 +53,6 @@ class ReelzDownloadService : Service() {
             type: String,
             headers: Map<String, String> = emptyMap(),
             title: String = "",
-            // Byte offset to resume an MP4 download from. 0 = start from beginning.
-            // The engine uses this to set Range: bytes=<resumeBytes>- on the request.
-            // For HLS downloads pass 0 — the engine resumes from segmentsDone instead.
             resumeBytes: Long = 0L,
         ) {
             val intent = Intent(ctx, ReelzDownloadService::class.java).apply {
@@ -101,20 +91,17 @@ class ReelzDownloadService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        // Must call startForeground immediately on creation.
         startForeground(NOTIFICATION_ID, buildNotification("Starting downloads…", 0, false))
-        // Auto-retry any HLS downloads that were mid-remux when the process last died.
-        scope.launch { downloadRepository.retryPendingRemux() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                val id      = intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: return START_STICKY
-                val url     = intent.getStringExtra(EXTRA_URL)         ?: return START_STICKY
-                val type    = intent.getStringExtra(EXTRA_TYPE)        ?: "mp4"
-                val title   = intent.getStringExtra(EXTRA_TITLE)       ?: ""
-                val headers = parseHeaders(intent.getStringExtra(EXTRA_HEADERS))
+                val id          = intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: return START_STICKY
+                val url         = intent.getStringExtra(EXTRA_URL)         ?: return START_STICKY
+                val type        = intent.getStringExtra(EXTRA_TYPE)        ?: "mp4"
+                val title       = intent.getStringExtra(EXTRA_TITLE)       ?: ""
+                val headers     = parseHeaders(intent.getStringExtra(EXTRA_HEADERS))
                 val resumeBytes = intent.getLongExtra(EXTRA_RESUME_BYTES, 0L)
                 engine.start(id, url, type, headers, title, resumeBytes = resumeBytes)
                 ensureObserving()
@@ -125,12 +112,8 @@ class ReelzDownloadService : Service() {
             }
             ACTION_CANCEL -> {
                 val id = intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: ""
-                // Cancel engine job and delete the DB row so the observer
-                // re-emits without it — this triggers cleanup automatically.
                 engine.cancel(id)
-                scope.launch {
-                    downloadDao.delete(id)
-                }
+                scope.launch { downloadDao.delete(id) }
                 ensureObserving()
             }
             ACTION_RESUME_ALL -> {
@@ -138,8 +121,6 @@ class ReelzDownloadService : Service() {
                 ensureObserving()
             }
         }
-        // START_STICKY: Android will restart this service if the process is killed,
-        // which means downloads survive app switching and memory pressure.
         return START_STICKY
     }
 
@@ -147,10 +128,7 @@ class ReelzDownloadService : Service() {
         scope.launch {
             val paused = downloadDao.getByStatus("PAUSED") + downloadDao.getByStatus("QUEUED")
             paused.forEach { row ->
-                val type = when {
-                    row.streamUrl.contains(".m3u8", ignoreCase = true) -> "hls"
-                    else -> "mp4"
-                }
+                val type = if (row.streamUrl.contains(".m3u8", ignoreCase = true)) "hls" else "mp4"
                 @Suppress("UNCHECKED_CAST")
                 val headers = runCatching {
                     com.google.gson.Gson().fromJson(row.headersJson, Map::class.java) as Map<String, String>
@@ -160,46 +138,37 @@ class ReelzDownloadService : Service() {
         }
     }
 
-    /**
-     * Start the DB observer exactly once. The observer drives the notification
-     * and decides when to stop the service.
-     */
     private fun ensureObserving() {
         if (observing) return
         observing = true
         scope.launch {
             downloadDao.observeAll().collect { rows ->
-                val active   = rows.filter { it.status == "DOWNLOADING" }
-                val remuxing = rows.filter { it.status == "REMUXING" }
-                val paused   = rows.filter { it.status == "PAUSED" }
-                val queued   = rows.filter { it.status == "QUEUED" }
-                val done     = rows.count  { it.status == "DONE" }
-                val hasAny   = rows.isNotEmpty()
+                val active   = rows.filter { it.status == DownloadStatus.DOWNLOADING.name }
+                val paused   = rows.filter { it.status == DownloadStatus.PAUSED.name }
+                val queued   = rows.filter { it.status == DownloadStatus.QUEUED.name }
+                val done     = rows.count  { it.status == DownloadStatus.DONE.name }
 
                 val totalSeg = active.sumOf { it.totalSegments }
                 val doneSeg  = active.sumOf { it.segmentsDone }
                 val progress = if (totalSeg > 0) (doneSeg * 100 / totalSeg) else 0
 
                 val msg = when {
-                    active.isNotEmpty()   -> {
+                    active.isNotEmpty() -> {
                         val pct = if (active.size == 1) " ($progress%)" else ""
                         "${active.size} downloading$pct"
                     }
-                    remuxing.isNotEmpty() -> "Remuxing to MP4…"
-                    queued.isNotEmpty()   -> "${queued.size} queued"
-                    paused.isNotEmpty()   -> "${paused.size} paused"
-                    done > 0              -> "$done download(s) complete"
-                    else                  -> "Downloads ready"
+                    queued.isNotEmpty() -> "${queued.size} queued"
+                    paused.isNotEmpty() -> "${paused.size} paused"
+                    done > 0            -> "$done download(s) complete"
+                    else                -> "Downloads ready"
                 }
 
-                val isActive = active.isNotEmpty() || queued.isNotEmpty() || remuxing.isNotEmpty()
+                val isActive = active.isNotEmpty() || queued.isNotEmpty()
 
-                if (!hasAny) {
-                    // No rows at all (all cancelled/cleared) → dismiss notification and stop.
+                if (rows.isEmpty()) {
                     cancelNotification()
                     stopSelf()
                 } else if (!isActive && paused.isEmpty()) {
-                    // Everything is done — update notification once then dismiss after delay.
                     updateNotification(msg, 100, false)
                     delay(3_000)
                     cancelNotification()
@@ -248,7 +217,7 @@ class ReelzDownloadService : Service() {
             .setContentTitle("Reelz Downloads")
             .setContentText(text)
             .setProgress(100, progress, isActive && progress == 0)
-            .setOngoing(isActive)          // sticky only while actively downloading
+            .setOngoing(isActive)
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
@@ -258,7 +227,6 @@ class ReelzDownloadService : Service() {
     private fun updateNotification(text: String, progress: Int, isActive: Boolean) {
         runCatching {
             val notification = buildNotification(text, progress, isActive)
-            // Keep startForeground in sync so the foreground state matches.
             if (isActive) {
                 startForeground(NOTIFICATION_ID, notification)
             } else {
@@ -268,7 +236,6 @@ class ReelzDownloadService : Service() {
         }
     }
 
-    /** Fully dismiss the notification — called when all downloads are gone. */
     private fun cancelNotification() {
         runCatching {
             stopForeground(STOP_FOREGROUND_REMOVE)

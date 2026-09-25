@@ -334,14 +334,6 @@ data class DownloadRow(
     // Unix timestamp in ms when streamUrl expires (0 = unknown / doesn't expire).
     // Used by DownloadRepository.resume() to decide if a fresh URL is needed.
     val expiresAtMs: Long = 0L,
-    // Remux state — see architecture doc §2 for full semantics.
-    //   0  = not yet attempted (segments downloading or not started)
-    //   1  = success   → filePath = movie.mp4,   status = DONE
-    //  -1  = transient → filePath = "",           status = REMUXING (retry on launch)
-    //  -2  = key expired → filePath = "",         status = ERROR (user must re-download)
-    //  -3  = FFmpeg bug  → filePath = index.m3u8, status = DONE (ExoPlayer fallback)
-    val remuxAttempted: Int = 0,
-    val remuxFailReason: String = "",
 )
 
 @Dao
@@ -453,102 +445,6 @@ interface DownloadDao {
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: String)
 
-    // ── Remux DAO queries (added in v8 migration) ─────────────────────────────
-
-    /**
-     * Persist the fallback state BEFORE FFmpeg starts.
-     * If the process dies mid-remux the next launch finds REMUXING +
-     * localPlaylistPath and retries FFmpeg without re-downloading segments.
-     */
-    @Query("""
-        UPDATE downloads
-        SET status            = :status,
-            localPlaylistPath = :m3u8Path,
-            segmentsDone      = :done,
-            totalSegments     = :total,
-            sizeBytes         = :sizeBytes,
-            downloadedBytes   = :sizeBytes,
-            remuxAttempted    = 0
-        WHERE id = :id
-    """)
-    suspend fun markSegmentsDone(
-        id: String,
-        status: String,
-        m3u8Path: String,
-        done: Int,
-        total: Int,
-        sizeBytes: Long,
-    )
-
-    /** Happy path — movie.mp4 produced by FFmpeg. */
-    @Query("""
-        UPDATE downloads
-        SET status          = 'DONE',
-            filePath        = :mp4Path,
-            completedAt     = :at,
-            sizeBytes       = :sizeBytes,
-            downloadedBytes = :sizeBytes,
-            remuxAttempted  = 1,
-            remuxFailReason = ''
-        WHERE id = :id
-    """)
-    suspend fun markRemuxSuccess(id: String, mp4Path: String, at: Long, sizeBytes: Long)
-
-    /**
-     * Transient fail — keep status REMUXING so the auto-retry on next launch
-     * finds it. The engine marks -1 rather than re-using 0 so the UI can show
-     * "Remux paused" instead of "Remuxing…".
-     */
-    @Query("""
-        UPDATE downloads
-        SET remuxAttempted  = -1,
-            remuxFailReason = :reason
-        WHERE id = :id
-    """)
-    suspend fun markRemuxTransientFail(id: String, reason: String)
-
-    /**
-     * AES key expired — the local m3u8 still references a dead CDN key URI.
-     * ExoPlayer would hit the same 403/404 — nothing is playable.
-     * Mark ERROR so the UI prompts the user to re-download.
-     */
-    @Query("""
-        UPDATE downloads
-        SET status          = 'ERROR',
-            completedAt     = :at,
-            remuxAttempted  = -2,
-            remuxFailReason = 'key_expired'
-        WHERE id = :id
-    """)
-    suspend fun markKeyExpired(id: String, at: Long)
-
-    /**
-     * FFmpeg bug (corrupt segment, unsupported codec) — fall back to ExoPlayer
-     * reading the local HLS playlist directly. Still marks DONE so the UI
-     * shows the download as available.
-     */
-    @Query("""
-        UPDATE downloads
-        SET status          = 'DONE',
-            filePath        = :m3u8Path,
-            completedAt     = :at,
-            sizeBytes       = :sizeBytes,
-            downloadedBytes = :sizeBytes,
-            remuxAttempted  = -3,
-            remuxFailReason = :reason
-        WHERE id = :id
-    """)
-    suspend fun markRemuxFallback(
-        id: String,
-        m3u8Path: String,
-        at: Long,
-        sizeBytes: Long,
-        reason: String,
-    )
-
-    /** Returns all rows with status=REMUXING for auto-retry on app launch. */
-    @Query("SELECT * FROM downloads WHERE status = 'REMUXING'")
-    suspend fun getRemuxing(): List<DownloadRow>
 }
 
 // ── Download subtitles ────────────────────────────────────────────────────────
@@ -749,11 +645,54 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
-// Migration 7→8: add remuxAttempted and remuxFailReason to downloads table
-val MIGRATION_7_8 = object : Migration(7, 8) {
+// Migration 8→9: drop remux columns and reset any stuck REMUXING rows to ERROR.
+// SQLite doesn't support DROP COLUMN before 3.35, so we recreate the downloads table
+// without remuxAttempted / remuxFailReason and copy existing data across.
+val MIGRATION_8_9 = object : Migration(8, 9) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("ALTER TABLE downloads ADD COLUMN remuxAttempted INTEGER NOT NULL DEFAULT 0")
-        db.execSQL("ALTER TABLE downloads ADD COLUMN remuxFailReason TEXT NOT NULL DEFAULT ''")
+        // 1. Recreate downloads without remux columns
+        db.execSQL("""
+            CREATE TABLE downloads_new (
+                id               TEXT    NOT NULL PRIMARY KEY,
+                mediaId          TEXT    NOT NULL,
+                title            TEXT    NOT NULL,
+                posterUrl        TEXT,
+                mediaType        TEXT    NOT NULL,
+                season           INTEGER NOT NULL DEFAULT 0,
+                episode          INTEGER NOT NULL DEFAULT 0,
+                episodeName      TEXT    NOT NULL DEFAULT '',
+                quality          TEXT    NOT NULL DEFAULT '720p',
+                filePath         TEXT    NOT NULL DEFAULT '',
+                sizeBytes        INTEGER NOT NULL DEFAULT 0,
+                downloadedBytes  INTEGER NOT NULL DEFAULT 0,
+                status           TEXT    NOT NULL DEFAULT 'QUEUED',
+                streamUrl        TEXT    NOT NULL DEFAULT '',
+                headersJson      TEXT    NOT NULL DEFAULT '{}',
+                createdAt        INTEGER NOT NULL DEFAULT 0,
+                completedAt      INTEGER NOT NULL DEFAULT 0,
+                segmentsDone     INTEGER NOT NULL DEFAULT 0,
+                totalSegments    INTEGER NOT NULL DEFAULT 0,
+                watchProgressMs  INTEGER NOT NULL DEFAULT 0,
+                durationMs       INTEGER NOT NULL DEFAULT 0,
+                lastPlayedAt     INTEGER NOT NULL DEFAULT 0,
+                localPlaylistPath TEXT   NOT NULL DEFAULT '',
+                expiresAtMs      INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        // 2. Copy data — rows stuck in REMUXING become ERROR
+        db.execSQL("""
+            INSERT INTO downloads_new
+            SELECT id, mediaId, title, posterUrl, mediaType, season, episode, episodeName,
+                   quality, filePath, sizeBytes, downloadedBytes,
+                   CASE WHEN status = 'REMUXING' THEN 'ERROR' ELSE status END,
+                   streamUrl, headersJson, createdAt, completedAt, segmentsDone,
+                   totalSegments, watchProgressMs, durationMs, lastPlayedAt,
+                   localPlaylistPath, expiresAtMs
+            FROM downloads
+        """)
+        // 3. Swap tables
+        db.execSQL("DROP TABLE downloads")
+        db.execSQL("ALTER TABLE downloads_new RENAME TO downloads")
     }
 }
 
@@ -771,7 +710,7 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         DownloadSubtitleRow::class,
         TransferRecord::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {

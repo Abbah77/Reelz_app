@@ -159,7 +159,6 @@ class DownloadsViewModel @Inject constructor(
         .map { list ->
             list.filter {
                 it.status == DownloadStatus.DOWNLOADING
-                    || it.status == DownloadStatus.REMUXING
                     || it.status == DownloadStatus.QUEUED
                     || it.status == DownloadStatus.PAUSED
                     || it.status == DownloadStatus.ERROR
@@ -1564,7 +1563,6 @@ fun StatusPill(status: DownloadStatus) {
     val (color, label) = when (status) {
         DownloadStatus.DONE        -> Success to "Ready"
         DownloadStatus.DOWNLOADING -> Brand to "Downloading"
-        DownloadStatus.REMUXING    -> Brand to "Converting"
         DownloadStatus.QUEUED      -> White60 to "Queued"
         DownloadStatus.PAUSED      -> White40 to "Paused"
         DownloadStatus.ERROR       -> Error to "Failed"
