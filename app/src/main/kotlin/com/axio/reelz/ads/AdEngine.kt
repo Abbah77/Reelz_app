@@ -11,12 +11,6 @@ import com.unity3d.ads.IUnityAdsLoadListener
 import com.unity3d.ads.IUnityAdsShowListener
 import com.unity3d.ads.UnityAds
 import com.unity3d.ads.UnityAdsShowOptions
-import com.unity3d.mediation.banner.BannerAdLoadOptions
-import com.unity3d.mediation.banner.BannerAdPosition
-import com.unity3d.mediation.banner.BannerAdSize
-import com.unity3d.mediation.banner.BannerView
-import com.unity3d.mediation.banner.IBannerAdLoadListener
-import com.unity3d.mediation.banner.IBannerAdShowListener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,19 +22,17 @@ import javax.inject.Singleton
 private const val TAG = "AdEngine"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Unity Ads IDs — these are the active placement IDs.
-// The backend DTO fields (bannerId, interstitialId, rewardedId) take priority
-// when non-blank, so you can override these remotely without an app update.
+// Unity Ads IDs — backend DTO fields take priority when non-blank so you can
+// override remotely without a new release.
 // ─────────────────────────────────────────────────────────────────────────────
-private const val UNITY_GAME_ID          = "800380914"
-private const val UNITY_BANNER_ID        = "BP_Banner_Android"
-private const val UNITY_INTERSTITIAL_ID  = "BP_Interstitial_Android"
-private const val UNITY_REWARDED_ID      = "BP_Rewarded_Android"
+private const val UNITY_GAME_ID         = "800380914"
+private const val UNITY_BANNER_ID       = "BP_Banner_Android"
+private const val UNITY_INTERSTITIAL_ID = "BP_Interstitial_Android"
+private const val UNITY_REWARDED_ID     = "BP_Rewarded_Android"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Native ad state — kept for NativeAdCard / HeroBannerAd composables.
-// Unity Ads has no native format; these composables will silently collapse
-// via NativeAdState.Failed until you add a native-capable network.
+// Unity has no native format; composables silently collapse via Failed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 sealed class NativeAdState {
@@ -57,24 +49,14 @@ sealed class NativeAdState {
     object Failed : NativeAdState()
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Mid-roll schedule (kept for future use with a VAST/IMA-capable network)
-// ─────────────────────────────────────────────────────────────────────────────
-
 data class MidRollSchedule(
     val shouldInsert: Boolean,
     val breakpointsMs: List<Long>,
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AdEngine — Unity Ads implementation.
-//
-// Supported formats : Banner · Interstitial · Rewarded
-// Stubbed formats   : Native · App-Open · Preroll/VAST
-//   (stubs are no-ops / silent failures so no existing call site breaks)
-//
-// To add AppLovin MAX or another network alongside Unity, wire them in here
-// using the same mediationProvider flag in the backend DTO.
+// AdEngine — Unity Ads (banner · interstitial · rewarded)
+// Unsupported formats (native, app-open, preroll) are no-op stubs.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Singleton
@@ -86,7 +68,7 @@ class AdEngine @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // ── Session-level counters ───────────────────────────────────────────────
+    // ── Session counters ─────────────────────────────────────────────────────
     var interstitialShownCount: Int = 0
     private var backgroundedAtMs: Long = 0L
 
@@ -107,10 +89,10 @@ class AdEngine @Inject constructor(
         }
     }
 
-    // ── Unity ad ready flags ─────────────────────────────────────────────────
+    // ── Ready flags ──────────────────────────────────────────────────────────
     var isInterstitialReady: Boolean = false; private set
     var isRewardedReady: Boolean     = false; private set
-    val isAppOpenReady: Boolean      = false            // Unity has no app-open format
+    val isAppOpenReady: Boolean      = false   // Unity has no app-open format
 
     private var cachedActivity: Activity? = null
 
@@ -120,20 +102,13 @@ class AdEngine @Inject constructor(
 
     private fun ads() = configRepo.adsConfig()
 
-    /** Single master gate — every placement checks this first. */
     fun adsEnabled(): Boolean = configRepo.areAdsEnabled(isPremiumUser = sessionRepo.isPremium)
 
     fun shouldShowRemoveAdsBanner(): Boolean = adsEnabled()
 
-    /**
-     * Returns the effective placement ID — remote DTO value wins over the
-     * hard-coded Unity fallback so you can A/B test or override without a
-     * new release.
-     */
     private fun bannerAdUnitId()       = ads().bannerId.takeIf { it.isNotBlank() } ?: UNITY_BANNER_ID
     private fun interstitialAdUnitId() = ads().interstitialId.takeIf { it.isNotBlank() } ?: UNITY_INTERSTITIAL_ID
     private fun rewardedAdUnitId()     = ads().rewardedId.takeIf { it.isNotBlank() } ?: UNITY_REWARDED_ID
-    private fun nativeAdUnitId()       = ads().nativeId.orEmpty()     // no Unity native
 
     // ─────────────────────────────────────────────────────────────────────────
     // Initialisation
@@ -142,8 +117,10 @@ class AdEngine @Inject constructor(
     fun initialize(context: Context) {
         if (!adsEnabled()) { Log.d(TAG, "Ads disabled — skip init"); return }
 
-        val testMode = false   // set true during development
-        UnityAds.initialize(context.applicationContext, UNITY_GAME_ID, testMode,
+        UnityAds.initialize(
+            context.applicationContext,
+            UNITY_GAME_ID,
+            false,   // testMode — flip to true during development
             object : IUnityAdsInitializationListener {
                 override fun onInitializationComplete() {
                     Log.d(TAG, "Unity Ads initialised")
@@ -155,13 +132,14 @@ class AdEngine @Inject constructor(
                 ) {
                     Log.w(TAG, "Unity Ads init failed: $error — $message")
                 }
-            })
+            }
+        )
     }
 
     private fun preloadAll() {
         if (ads().placements.interstitialEnabled) preloadInterstitial()
         if (ads().placements.rewardedEnabled)     preloadRewarded()
-        // Banner loads on demand inside ReelzBannerAd composable — no pre-load needed.
+        // Banner loads on-demand inside ReelzBannerAd — no pre-load needed.
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -170,9 +148,7 @@ class AdEngine @Inject constructor(
 
     private fun preloadInterstitial() {
         if (!adsEnabled() || !ads().placements.interstitialEnabled) return
-        val id = interstitialAdUnitId()
-
-        UnityAds.load(id, object : IUnityAdsLoadListener {
+        UnityAds.load(interstitialAdUnitId(), object : IUnityAdsLoadListener {
             override fun onUnityAdsAdLoaded(placementId: String) {
                 Log.d(TAG, "Interstitial loaded: $placementId")
                 isInterstitialReady = true
@@ -184,10 +160,7 @@ class AdEngine @Inject constructor(
             ) {
                 Log.w(TAG, "Interstitial load failed: $error — $message")
                 isInterstitialReady = false
-                scope.launch {
-                    delay(ads().frequency.retryDelayMs)
-                    preloadInterstitial()
-                }
+                scope.launch { delay(ads().frequency.retryDelayMs); preloadInterstitial() }
             }
         })
     }
@@ -203,9 +176,7 @@ class AdEngine @Inject constructor(
 
     private fun preloadRewarded() {
         if (!adsEnabled() || !ads().placements.rewardedEnabled) return
-        val id = rewardedAdUnitId()
-
-        UnityAds.load(id, object : IUnityAdsLoadListener {
+        UnityAds.load(rewardedAdUnitId(), object : IUnityAdsLoadListener {
             override fun onUnityAdsAdLoaded(placementId: String) {
                 Log.d(TAG, "Rewarded loaded: $placementId")
                 isRewardedReady = true
@@ -217,20 +188,17 @@ class AdEngine @Inject constructor(
             ) {
                 Log.w(TAG, "Rewarded load failed: $error — $message")
                 isRewardedReady = false
-                scope.launch {
-                    delay(ads().frequency.retryDelayMs)
-                    preloadRewarded()
-                }
+                scope.launch { delay(ads().frequency.retryDelayMs); preloadRewarded() }
             }
         })
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // App-open — Unity has no app-open format; these are no-ops.
+    // App-open — Unity has no app-open format, no-ops.
     // ─────────────────────────────────────────────────────────────────────────
 
     fun onAppBackground() { backgroundedAtMs = System.currentTimeMillis() }
-    fun onAppForeground(activity: Activity) { /* no-op: Unity has no app-open */ }
+    fun onAppForeground(activity: Activity) { /* no-op */ }
     fun showAppOpenIfReady(activity: Activity) { /* no-op */ }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -253,28 +221,19 @@ class AdEngine @Inject constructor(
         if (!isInterstitialReady || !adsEnabled() || !ads().placements.interstitialEnabled) {
             onFailed(); return
         }
-        val id = interstitialAdUnitId()
         isInterstitialReady = false
         recordInterstitialShown()
-
-        UnityAds.show(activity, id, UnityAdsShowOptions(),
+        UnityAds.show(activity, interstitialAdUnitId(), UnityAdsShowOptions(),
             object : IUnityAdsShowListener {
                 override fun onUnityAdsShowComplete(
                     placementId: String,
                     state: UnityAds.UnityAdsShowCompletionState,
-                ) {
-                    onDismissed()
-                    preloadInterstitial()
-                }
+                ) { onDismissed(); preloadInterstitial() }
                 override fun onUnityAdsShowFailure(
                     placementId: String,
                     error: UnityAds.UnityAdsShowError,
                     message: String,
-                ) {
-                    Log.w(TAG, "Interstitial show failed: $error — $message")
-                    onFailed()
-                    preloadInterstitial()
-                }
+                ) { onFailed(); preloadInterstitial() }
                 override fun onUnityAdsShowStart(placementId: String)  {}
                 override fun onUnityAdsShowClick(placementId: String)  {}
             })
@@ -288,20 +247,15 @@ class AdEngine @Inject constructor(
         if (!isRewardedReady || !adsEnabled() || !ads().placements.rewardedEnabled) {
             onSkipped(); return
         }
-        val id = rewardedAdUnitId()
         isRewardedReady = false
         var earned = false
-
-        UnityAds.show(activity, id, UnityAdsShowOptions(),
+        UnityAds.show(activity, rewardedAdUnitId(), UnityAdsShowOptions(),
             object : IUnityAdsShowListener {
                 override fun onUnityAdsShowComplete(
                     placementId: String,
                     state: UnityAds.UnityAdsShowCompletionState,
                 ) {
-                    // COMPLETED = user watched to end = rewarded
-                    if (state == UnityAds.UnityAdsShowCompletionState.COMPLETED) {
-                        earned = true
-                    }
+                    if (state == UnityAds.UnityAdsShowCompletionState.COMPLETED) earned = true
                     if (earned) onRewarded() else onSkipped()
                     preloadRewarded()
                 }
@@ -309,18 +263,14 @@ class AdEngine @Inject constructor(
                     placementId: String,
                     error: UnityAds.UnityAdsShowError,
                     message: String,
-                ) {
-                    Log.w(TAG, "Rewarded show failed: $error — $message")
-                    onSkipped()
-                    preloadRewarded()
-                }
+                ) { onSkipped(); preloadRewarded() }
                 override fun onUnityAdsShowStart(placementId: String)  {}
                 override fun onUnityAdsShowClick(placementId: String)  {}
             })
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Banner helpers (used by ReelzBannerAd composable)
+    // Banner helpers (used by ReelzBannerAd)
     // ─────────────────────────────────────────────────────────────────────────
 
     fun bannerAdUnitIdOrNull(): String? {
@@ -330,32 +280,26 @@ class AdEngine @Inject constructor(
 
     // ─────────────────────────────────────────────────────────────────────────
     // Native — Unity has no native format; always returns null/Failed.
-    // Composables (HeroBannerAd, NativeAdCard) silently collapse on Failed.
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun nativeAdUnitIdOrNull(): String? = null   // no Unity native
-
-    fun shouldShowCardAdAtRow(rowIndex: Int): Boolean = false  // native not available
-
+    fun nativeAdUnitIdOrNull(): String? = null
+    fun shouldShowCardAdAtRow(rowIndex: Int): Boolean = false
     fun loadNativeAd(onLoaded: (NativeAdState.Loaded) -> Unit, onFailed: () -> Unit) {
-        scope.launch(Dispatchers.Main) { onFailed() }  // native not available
+        scope.launch(Dispatchers.Main) { onFailed() }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // VAST / Preroll — stubbed; Unity has no VAST/IMA support.
+    // Preroll / VAST — not supported by Unity Ads.
     // ─────────────────────────────────────────────────────────────────────────
 
-    fun vastTagUrlOrNull(): String? = null  // not supported
-
+    fun vastTagUrlOrNull(): String? = null
     fun prerollConfig() = AdPrerollConfig(
         skipOnResume        = true,
         skipOnQualitySwitch = true,
         showOnMoviesOnly    = false,
         minMinutesBetween   = 30L,
     )
-
-    fun midRollSchedule(durationMs: Long): MidRollSchedule =
-        MidRollSchedule(false, emptyList())   // not supported
+    fun midRollSchedule(durationMs: Long): MidRollSchedule = MidRollSchedule(false, emptyList())
 
     // ─────────────────────────────────────────────────────────────────────────
     // Counters
@@ -374,8 +318,6 @@ class AdEngine @Inject constructor(
     private fun recordInterstitialShown() {
         _lastInterstitialTimeMs = System.currentTimeMillis()
         interstitialShownCount++
-        scope.launch(Dispatchers.IO) {
-            appPrefs.setLastInterstitialTimeMs(_lastInterstitialTimeMs)
-        }
+        scope.launch(Dispatchers.IO) { appPrefs.setLastInterstitialTimeMs(_lastInterstitialTimeMs) }
     }
 }

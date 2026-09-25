@@ -1,6 +1,7 @@
 package com.axio.reelz.ads
 
 import android.util.Log
+import android.widget.FrameLayout
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -18,12 +19,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.unity3d.mediation.banner.BannerAdLoadOptions
-import com.unity3d.mediation.banner.BannerAdPosition
-import com.unity3d.mediation.banner.BannerAdSize
-import com.unity3d.mediation.banner.BannerView
-import com.unity3d.mediation.banner.IBannerAdLoadListener
-import com.unity3d.mediation.banner.IBannerAdShowListener
+import com.unity3d.services.banners.BannerErrorInfo
+import com.unity3d.services.banners.BannerView
+import com.unity3d.services.banners.UnityBannerSize
 import com.axio.reelz.ui.theme.*
 
 private const val TAG = "ReelzBannerAd"
@@ -31,12 +29,11 @@ private const val TAG = "ReelzBannerAd"
 private enum class BannerAdState { LOADING, LOADED, FAILED }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ReelzBannerAd — adaptive banner using Unity Ads BannerView.
+// ReelzBannerAd — Unity Ads BannerView wrapped in a Compose AndroidView.
 //
-// Design principle is unchanged from the AppLovin version:
-//   • Blends with the host screen's surface colour
-//   • Silent failure (FAILED = zero height, no dead whitespace)
-//   • Silent loading strip while the ad fills in
+// BannerView is an Android View that self-loads; we just create it, attach
+// a listener, call load(), and let it render inside the AndroidView slot.
+// Silent failure: FAILED = zero height, no dead whitespace.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -46,12 +43,13 @@ fun ReelzBannerAd(
     height: Dp = 50.dp,
 ) {
     var state by remember(adUnitId) { mutableStateOf(BannerAdState.LOADING) }
-    var bannerRef: BannerView? = null
+    // Hold a reference so we can call destroy() on dispose
+    val bannerRef = remember(adUnitId) { mutableStateOf<BannerView?>(null) }
 
     DisposableEffect(adUnitId) {
         onDispose {
-            bannerRef?.destroy()
-            bannerRef = null
+            bannerRef.value?.destroy()
+            bannerRef.value = null
         }
     }
 
@@ -90,27 +88,33 @@ fun ReelzBannerAd(
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory  = { context ->
+                    // FrameLayout container — BannerView attaches itself as a child
+                    val container = FrameLayout(context)
+
                     val banner = BannerView(
                         context,
                         adUnitId,
-                        BannerAdSize.BANNER,    // 320×50 — standard Unity banner
+                        UnityBannerSize(320, 50),
                     )
-                    banner.setListener(object : IBannerAdLoadListener {
+                    banner.listener = object : BannerView.IListener {
                         override fun onBannerLoaded(bannerAdView: BannerView) {
                             Log.d(TAG, "Banner loaded: $adUnitId")
                             state = BannerAdState.LOADED
                         }
                         override fun onBannerFailedToLoad(
                             bannerAdView: BannerView,
-                            error: com.unity3d.mediation.banner.BannerAdLoadError,
+                            errorInfo: BannerErrorInfo,
                         ) {
-                            Log.w(TAG, "Banner failed: $adUnitId — $error")
+                            Log.w(TAG, "Banner failed: $adUnitId — ${errorInfo.errorMessage}")
                             state = BannerAdState.FAILED
                         }
-                    })
+                        override fun onBannerClick(bannerAdView: BannerView)           {}
+                        override fun onBannerLeftApplication(bannerAdView: BannerView) {}
+                    }
                     banner.load()
-                    bannerRef = banner
-                    banner
+                    bannerRef.value = banner
+                    container.addView(banner)
+                    container
                 },
             )
         }
@@ -118,7 +122,7 @@ fun ReelzBannerAd(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SearchResultsBanner — unchanged placement logic, new ad implementation.
+// SearchResultsBanner — horizontal strip at end of search results.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -143,7 +147,7 @@ fun SearchResultsBanner(adEngine: AdEngine, modifier: Modifier = Modifier) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FilesScreenBanner — unchanged placement logic, new ad implementation.
+// FilesScreenBanner — shown in the files screen when no active downloads.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
