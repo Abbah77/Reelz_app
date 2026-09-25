@@ -1,5 +1,6 @@
 package com.axio.reelz.ads
 
+import android.app.Activity
 import android.util.Log
 import android.widget.FrameLayout
 import androidx.compose.animation.*
@@ -14,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -43,8 +45,9 @@ fun ReelzBannerAd(
     height: Dp = 50.dp,
 ) {
     var state by remember(adUnitId) { mutableStateOf(BannerAdState.LOADING) }
-    // Hold a reference so we can call destroy() on dispose
     val bannerRef = remember(adUnitId) { mutableStateOf<BannerView?>(null) }
+    // BannerView requires an Activity — get it from the composition context
+    val activity = LocalContext.current as? Activity
 
     DisposableEffect(adUnitId) {
         onDispose {
@@ -52,6 +55,9 @@ fun ReelzBannerAd(
             bannerRef.value = null
         }
     }
+
+    // No Activity context available — nothing to show
+    if (activity == null) return
 
     AnimatedVisibility(
         visible = state != BannerAdState.FAILED,
@@ -88,11 +94,10 @@ fun ReelzBannerAd(
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory  = { context ->
-                    // FrameLayout container — BannerView attaches itself as a child
                     val container = FrameLayout(context)
-
+                    // BannerView requires an Activity — we confirmed above it's non-null
                     val banner = BannerView(
-                        context,
+                        activity,
                         adUnitId,
                         UnityBannerSize(320, 50),
                     )
@@ -108,6 +113,7 @@ fun ReelzBannerAd(
                             Log.w(TAG, "Banner failed: $adUnitId — ${errorInfo.errorMessage}")
                             state = BannerAdState.FAILED
                         }
+                        override fun onBannerShown(bannerAdView: BannerView)           {}
                         override fun onBannerClick(bannerAdView: BannerView)           {}
                         override fun onBannerLeftApplication(bannerAdView: BannerView) {}
                     }
