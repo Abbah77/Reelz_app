@@ -858,7 +858,7 @@ fun PlayerScreen(
                 ) {
                     CinematicSpinner(size = d.spaceXxl * 1.75f)
                     Text(
-                        if (ui.state is PlayerState.Resolving) "Finding best stream…" else "Buffering…",
+                        if (ui.state is PlayerState.Resolving) "Connecting…" else "Loading…",
                         color = White60, fontSize = d.textLg,
                     )
                 }

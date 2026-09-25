@@ -986,7 +986,6 @@ class PlayerViewModel @Inject constructor(
         p.prepare()
         p.seekTo(savedPos)
         p.playWhenReady = wasPlaying
-        Log.d("PlayerVM", "swapStream: resumed at ${savedPos}ms with fresh URL")
 
         // Arm a new expiry watcher for the fresh result.
         startExpiryWatcher(result)
@@ -1017,7 +1016,6 @@ class PlayerViewModel @Inject constructor(
 
         // Fire the refresh 60 s before expiry (or immediately if < 70 s left)
         val delayMs = (msUntil - 60_000L).coerceAtLeast(0L)
-        Log.d("PlayerVM", "URL expiry watcher: refresh in ${delayMs / 1000}s")
 
         urlExpiryJob = viewModelScope.launch {
             delay(delayMs)
@@ -1030,15 +1028,12 @@ class PlayerViewModel @Inject constructor(
 
     /** Fetches a fresh stream and swaps it in. Fully silent — no UI state change. */
     private suspend fun silentRefreshStream() {
-        Log.d("PlayerVM", "silentRefreshStream: fetching fresh URL for $currentId")
         val freshResult = streamRepo.freshResolveStream(currentId, currentType, currentSeason, currentEpisode)
         if (freshResult is NetworkResult.Success) {
             val newStream = freshResult.data
             lastResult = newStream
             withContext(Dispatchers.Main) { swapStream(newStream) }
-            Log.d("PlayerVM", "silentRefreshStream: swap done")
         } else {
-            Log.w("PlayerVM", "silentRefreshStream: fresh resolve failed — leaving current URL in place")
             // Don't show an error; let the existing error handler deal with it if the URL truly dies.
         }
     }
@@ -1113,7 +1108,6 @@ class PlayerViewModel @Inject constructor(
     }
 
     private suspend fun handleErrorInternal(error: PlaybackException) {
-        Log.w("PlayerVM", "Playback error: ${error.errorCodeName} — ${error.message}")
         val netOk = _ui.value.networkState is NetworkState.Connected
         if (!netOk && !_ui.value.isOfflinePlayback) {
             _ui.update { it.copy(state = PlayerState.Error(

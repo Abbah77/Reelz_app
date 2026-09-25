@@ -186,7 +186,6 @@ class ShortsViewModel @Inject constructor(
     val deadIds: StateFlow<Set<String>> = _deadIds.asStateFlow()
 
     fun markDead(id: String) { _deadIds.update { it + id } }
-    fun logFromUi(msg: String) { android.util.Log.d("ShortsVM", msg) }
 
     init {
         _ui.update { it.copy(forYouLoading = true) }
@@ -681,7 +680,6 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     }
 
     val pool = rememberShortsPlayerPool(httpFactory) { videoId, poolIdx, msg ->
-        vm.logFromUi("✗ EXO[$poolIdx] err=$msg")
         if (videoId != "unknown") vm.markDead(videoId)
     }
 

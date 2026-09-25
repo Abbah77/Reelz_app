@@ -626,7 +626,7 @@ private fun IdlePage(
                         Icon(IconFilm, null, tint = White40, modifier = Modifier.size(36.dp))
                     }
                     Text("No downloads yet", color = White60, fontSize = d.textMd, fontWeight = FontWeight.SemiBold)
-                    Text("Download movies first, then use Beam to share.", color = White40, fontSize = d.textSm, textAlign = TextAlign.Center,
+                    Text("Download movies first, then use Share to send them.", color = White40, fontSize = d.textSm, textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = d.spaceXxl))
                 }
             }
@@ -885,9 +885,9 @@ private fun PermissionPage(
                 Icon(IconShield, null, tint = Brand, modifier = Modifier.size(24.dp))
             }
             Column {
-                Text("Permissions needed", color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
+                Text("Permissions required", color = Color.White, fontWeight = FontWeight.Bold, fontSize = d.textLg)
                 Text(
-                    "All permissions are required to guarantee ${if (intent == TransferIntent.SEND) "sending" else "receiving"} works.",
+                    "Allow the required permissions to start ${if (intent == TransferIntent.SEND) "sending" else "receiving"} files.",
                     color = White60, fontSize = d.textSm,
                 )
             }
@@ -1199,7 +1199,7 @@ private fun BrowsePage(
             BrandButton(
                 text    = when {
                     isSending     -> "Sending…"
-                    selCount == 0 -> "Tap posters to select"
+                    selCount == 0 -> "Select files to send"
                     selCount == 1 -> "Send 1 file"
                     else          -> "Send $selCount files"
                 },
@@ -1240,7 +1240,7 @@ private fun BeamHeader(
             Spacer(Modifier.width(d.spaceMd - d.spaceXxs))
         }
         Column {
-            Text("Reelz Beam",
+            Text("Reelz Share",
                 style = MaterialTheme.typography.headlineMedium.copy(
                     color = Color.White, fontWeight = FontWeight.Black, letterSpacing = (-0.5).sp))
             Text(
@@ -1941,7 +1941,7 @@ private fun ScannerConnectingOverlay() {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(d.spaceMd)) {
             CinematicSpinner(size = d.spinnerMd + d.spaceXl)
             Text("Connecting…", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = d.textLg)
-            Text("Hold still — establishing link", color = White60, fontSize = d.textSm)
+            Text("Establishing secure connection…", color = White60, fontSize = d.textSm)
         }
     }
 }
@@ -2013,7 +2013,7 @@ private fun QrCard(
             val inf = rememberInfiniteTransition(label = "wt")
             val dots by inf.animateFloat(0f, 3f, infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart), "wd")
             val dotStr = ".".repeat((dots.toInt() % 3) + 1)
-            Text("Waiting for receiver$dotStr", color = White40, fontSize = d.textXs)
+            Text("Awaiting connection$dotStr", color = White40, fontSize = d.textXs)
 
             GhostButton("Reset", onClick = onReset, modifier = Modifier.fillMaxWidth())
         }

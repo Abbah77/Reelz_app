@@ -633,7 +633,6 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
                             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                                 val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
                                 val idToken = googleCred.idToken
-                                android.util.Log.d("ReelzAuth", "signed in as: id=${googleCred.id} name=${googleCred.displayName} hasToken=${idToken.isNotBlank()}")
                                 withContext(Dispatchers.Main) {
                                     isLoading = false
                                     onSignedIn(idToken, googleCred.displayName ?: "", googleCred.id, googleCred.profilePictureUri?.toString())
@@ -658,9 +657,7 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
                             handleCredentialResult(result)
                             return@launch
                         } catch (e: androidx.credentials.exceptions.NoCredentialException) {
-                            android.util.Log.w("ReelzAuth", "One Tap failed (${e.message}), falling back")
                         } catch (e: androidx.credentials.exceptions.GetCredentialCancellationException) {
-                            android.util.Log.d("ReelzAuth", "Sign-in cancelled by user")
                             withContext(Dispatchers.Main) { isLoading = false }
                             return@launch
                         }
@@ -673,10 +670,8 @@ fun GoogleSignInButton(ctx: Context, onSignedIn: (String?, String, String, Strin
                             val result = credManager.getCredential(activity, req)
                             handleCredentialResult(result)
                         } catch (e: androidx.credentials.exceptions.GetCredentialCancellationException) {
-                            android.util.Log.d("ReelzAuth", "Sign-in cancelled by user")
                             withContext(Dispatchers.Main) { isLoading = false }
                         } catch (e: Exception) {
-                            android.util.Log.e("ReelzAuth", "Sign-in fallback error: ${e.javaClass.name}: ${e.message}")
                             withContext(Dispatchers.Main) {
                                 isLoading = false
                                 errorMsg = "Sign-in failed. Please try again."
