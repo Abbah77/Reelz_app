@@ -7,8 +7,6 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-
     <!-- ── Wi-Fi Direct / P2P Transfer ──────────────────────────────────── -->
     <!--
         Permission strategy (see TransferScreen.buildRequiredPermItems for runtime logic):

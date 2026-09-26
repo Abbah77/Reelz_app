@@ -546,7 +546,7 @@ class P2pEngine @Inject constructor(
             ).encode()
         }
 
-        return suspendCancellableCoroutine { cont ->
+        return try { suspendCancellableCoroutine<String?> { cont ->
             val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
                 ?: run { cont.resume(null, null); return@suspendCancellableCoroutine }
 
@@ -588,22 +588,22 @@ class P2pEngine @Inject constructor(
                 }
                 override fun onStopped() { Log.d(TAG, "Hotspot stopped") }
             }, null)
-            } catch (se: SecurityException) {
-                // Permission was revoked between the permission page and this call,
-                // or the OEM enforces an undocumented permission. Never crash.
-                Log.e(TAG, "startLocalOnlyHotspot SecurityException: ${se.message}")
-                _state.value = EngineState.Error(
-                    msg       = "Permission was denied for hotspot creation. Please grant Nearby Devices access and try again.",
-                    retryable = false,
-                    kind      = "PERMISSION",
-                )
-                if (cont.isActive) cont.resume(null, null)
-            }
 
             cont.invokeOnCancellation {
                 try { hotspotReservation?.close() } catch (_: Exception) {}
                 hotspotReservation = null
             }
+        } } catch (se: SecurityException) {
+            // Permission was revoked between the permission page and this call,
+            // or the OEM enforces an undocumented permission. Never crash — surface
+            // a clear PERMISSION error so the UI can show the permission page again.
+            Log.e(TAG, "startLocalOnlyHotspot SecurityException: ${se.message}")
+            _state.value = EngineState.Error(
+                msg       = "Permission was denied for hotspot creation. Please grant Nearby Devices access and try again.",
+                retryable = false,
+                kind      = "PERMISSION",
+            )
+            null
         }
     }
 
