@@ -115,6 +115,19 @@ private object ShortsDiskCache {
             instance = null
         }
     }
+
+    /**
+     * Bug #11 fix: release the cache immediately when the Shorts screen is destroyed.
+     * Previously this only happened via releaseIfStale() on app foreground, leaking
+     * a file handle and native memory if the screen was popped without a foreground event.
+     * ShortsScreen's DisposableEffect calls this on onDispose.
+     */
+    fun release() {
+        synchronized(this) {
+            try { instance?.release() } catch (_: Exception) {}
+            instance = null
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -188,12 +201,13 @@ class ShortsViewModel @Inject constructor(
     fun markDead(id: String) { _deadIds.update { it + id } }
 
     init {
+        // Load immediately — do not gate on configRepo.config.
+        // If config never emits (network error on cold start) the old code left
+        // the screen stuck in the loading spinner forever with no error shown.
+        // Shorts need no config value to function, so we just kick off the fetch
+        // directly and let the normal error path handle any failures.
         _ui.update { it.copy(forYouLoading = true) }
-        viewModelScope.launch {
-            configRepo.config.filterNotNull().collect {
-                if (_ui.value.forYouVideos.isEmpty() && !_ui.value.forYouLoadingMore) loadForYou()
-            }
-        }
+        viewModelScope.launch { loadForYou() }
     }
 
     fun refresh() {
@@ -670,6 +684,14 @@ fun ShortsScreen(nav: NavController, adEngine: AdEngine, vm: ShortsViewModel = h
     val liked   by vm.liked.collectAsState()
     val saved   by vm.saved.collectAsState()
     val deadIds by vm.deadIds.collectAsState()
+
+    // Bug #11 fix: release the ShortsDiskCache when this screen leaves composition.
+    // Without this the SimpleCache file handle and native memory leaked until the next
+    // app foreground event (when releaseIfStale() was previously the only release path).
+    val ctx = LocalContext.current
+    DisposableEffect(Unit) {
+        onDispose { ShortsDiskCache.release() }
+    }
 
     val httpFactory = remember {
         DefaultHttpDataSource.Factory()

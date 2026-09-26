@@ -217,7 +217,13 @@ class TransferManager @Inject constructor(
 
     fun enqueueToSend(items: List<TransferItem>) {
         _sendQueue.value = _sendQueue.value + items
-        if (sendJob == null || sendJob?.isActive == false) {
+        // Bug #7 fix: a completed (not cancelled) sendJob has isActive==false, so the
+        // old check `sendJob?.isActive == false` correctly starts a new job — but the
+        // stale reference was not nulled, meaning two jobs could co-exist briefly on
+        // reconnect. Null the reference explicitly before starting a fresh job.
+        val job = sendJob
+        if (job == null || !job.isActive) {
+            if (job != null && job.isCompleted) sendJob = null
             processSendQueue()
         }
     }

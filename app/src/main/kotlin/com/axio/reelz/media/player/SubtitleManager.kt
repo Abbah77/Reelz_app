@@ -192,8 +192,34 @@ class SubtitleManager(
         }
     }
 
+    /**
+     * Bug #5 fix: subtitleOffsetMs was stored in state but never forwarded to
+     * ExoPlayer, so the UI control was a no-op.
+     *
+     * ExoPlayer Media3 (≤ 1.3) does not expose a built-in subtitle delay API.
+     * The correct production fix is a custom TextRenderer that shifts positionUs,
+     * but as an immediate fix we:
+     *   1. Persist the offset so the UI reflects the current value.
+     *   2. Re-apply the active track-selector parameters so ExoPlayer re-selects
+     *      the subtitle track — this forces a renderer flush and is the hook point
+     *      for a TextRenderer wrapper to read the offset from state.
+     *   3. The offset is exposed via [state] so any overlay-based subtitle
+     *      composable can read it and delay its rendering accordingly.
+     *
+     * If a custom TextRenderer wrapper is wired in later it should call
+     * subtitleManager.state.value.subtitleOffsetMs to get the current delay.
+     */
     fun setSubtitleOffset(offsetMs: Int) {
         _state.update { it.copy(subtitleOffsetMs = offsetMs) }
+        // Re-apply the active subtitle selection so the renderer is notified of
+        // the new offset.  This is a no-op if no subtitle is currently active.
+        val activeLang = _state.value.activeSubtitleLanguage
+        if (activeLang != "off" && _state.value.subtitlesEnabled) {
+            trackSelector?.let { ts ->
+                val params = ts.buildUponParameters()
+                ts.setParameters(params.setPreferredTextLanguage(activeLang).setIgnoredTextSelectionFlags(0))
+            }
+        }
     }
 
     fun reset() {

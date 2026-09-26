@@ -107,3 +107,11 @@
 # dependency not bundled in ffmpeg-kit-min. Tell R8 to ignore it.
 -dontwarn com.arthenica.smartexception.**
 -keep class com.arthenica.smartexception.** { *; }
+
+# ── Bug #13 fix: Transfer + Media classes ────────────────────────────────────
+# P2pEngine, TransferManager, BeamPayload, EngineState sealed subclasses, and
+# FileMetadata were not kept. EngineState sealed subclasses are used in `when`
+# expressions and FileMetadata uses a hand-rolled regex JSON parser — both
+# are vulnerable to R8 renaming in release builds.
+-keep class com.axio.reelz.transfer.** { *; }
+-keep class com.axio.reelz.media.** { *; }

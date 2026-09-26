@@ -444,7 +444,12 @@ class TransferViewModel @Inject constructor(
 
     val completedDownloads: StateFlow<List<DownloadItem>> = downloadDao.observeAll()
         .map { list ->
-            list.filter { it.status == DownloadStatus.DONE.name && it.filePath.isNotBlank() }
+            // Bug #1 fix: HLS downloads have filePath="" and path in localPlaylistPath.
+            // Include rows where either filePath or localPlaylistPath is non-blank.
+            list.filter {
+                it.status == DownloadStatus.DONE.name &&
+                (it.filePath.isNotBlank() || it.localPlaylistPath.isNotBlank())
+            }
                 .map { it.toDownloadItem() }
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -455,12 +460,15 @@ class TransferViewModel @Inject constructor(
     fun sendSelected(items: List<DownloadItem>) {
         val queueItems = mutableListOf<TransferItem>()
         items.forEach { dl ->
-            val isHls = dl.filePath.endsWith(".m3u8", ignoreCase = true)
+            // Bug #2 fix: For HLS downloads filePath is blank; the playlist lives in
+            // localPlaylistPath. Check both fields to correctly identify HLS items.
+            val isHls = dl.filePath.endsWith(".m3u8", ignoreCase = true) ||
+                        dl.localPlaylistPath.endsWith(".m3u8", ignoreCase = true)
             if (isHls) {
-                // HLS: the filePath points to segments/index.m3u8.
+                // HLS: the playlist path points to segments/index.m3u8.
                 // We must send ALL .ts segment files + a rewritten m3u8 with
                 // relative paths so the receiver can play it offline.
-                val m3u8File   = java.io.File(dl.filePath)
+                val m3u8File   = java.io.File(dl.localPlaylistPath.ifBlank { dl.filePath })
                 val segmentsDir = m3u8File.parentFile ?: return@forEach
                 val tsFiles = segmentsDir.listFiles()
                     ?.filter { it.name.endsWith(".ts") && it.length() > 0 }

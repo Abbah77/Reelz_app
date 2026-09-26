@@ -375,7 +375,8 @@ class ReelzDownloadEngine @Inject constructor(
             ?: 512_000L
 
     // ── HLS helpers ───────────────────────────────────────────────────────────
-    data class Segment(val index: Int, val url: String)
+    // Bug #8: byteRange is "start-end" (inclusive, 0-based) when EXT-X-BYTERANGE is present.
+    data class Segment(val index: Int, val url: String, val byteRange: String? = null)
 
     private fun parseSegments(content: String, baseUrl: String): List<Segment> {
         val base = baseUrl.substringBeforeLast('/')
@@ -383,17 +384,49 @@ class ReelzDownloadEngine @Inject constructor(
         val segments = mutableListOf<Segment>()
         var idx = 0
         var i = 0
+        // Bug #8 fix: EXT-X-BYTERANGE segments share a URL across multiple EXTINF entries.
+        // Previously the parser ignored the byte-range tag and added the same URL N times,
+        // producing N identical downloads and an unplayable playlist on byte-range CDNs.
+        // Track the pending byte-range so each segment gets the correct Range header.
+        var pendingByteRange: String? = null   // "length[@offset]" from EXT-X-BYTERANGE
+        var lastByteRangeOffset = 0L           // running offset when @offset is omitted
         while (i < lines.size) {
             val line = lines[i].trim()
-            if (line.startsWith("#EXTINF")) {
-                var j = i + 1
-                while (j < lines.size && lines[j].trimStart().startsWith("#")) j++
-                if (j < lines.size) {
-                    val uri = lines[j].trim()
-                    if (uri.isNotBlank() && !uri.startsWith("#")) {
-                        segments.add(Segment(idx++, resolveUrl(uri, base, baseUrl)))
-                        i = j + 1
-                        continue
+            when {
+                line.startsWith("#EXT-X-BYTERANGE:") -> {
+                    // Format: #EXT-X-BYTERANGE:<length>[@<offset>]
+                    val spec = line.removePrefix("#EXT-X-BYTERANGE:").trim()
+                    val parts = spec.split("@")
+                    val length = parts[0].toLongOrNull() ?: 0L
+                    val offset = if (parts.size > 1) parts[1].toLongOrNull() ?: lastByteRangeOffset
+                                 else lastByteRangeOffset
+                    pendingByteRange = "$offset-${offset + length - 1}"
+                    lastByteRangeOffset = offset + length
+                }
+                line.startsWith("#EXTINF") -> {
+                    var j = i + 1
+                    while (j < lines.size && lines[j].trimStart().startsWith("#")) {
+                        // Consume an inline EXT-X-BYTERANGE that appears between EXTINF and the URI
+                        val inner = lines[j].trim()
+                        if (inner.startsWith("#EXT-X-BYTERANGE:")) {
+                            val spec   = inner.removePrefix("#EXT-X-BYTERANGE:").trim()
+                            val parts  = spec.split("@")
+                            val length = parts[0].toLongOrNull() ?: 0L
+                            val offset = if (parts.size > 1) parts[1].toLongOrNull() ?: lastByteRangeOffset
+                                         else lastByteRangeOffset
+                            pendingByteRange      = "$offset-${offset + length - 1}"
+                            lastByteRangeOffset   = offset + length
+                        }
+                        j++
+                    }
+                    if (j < lines.size) {
+                        val uri = lines[j].trim()
+                        if (uri.isNotBlank() && !uri.startsWith("#")) {
+                            segments.add(Segment(idx++, resolveUrl(uri, base, baseUrl), byteRange = pendingByteRange))
+                            pendingByteRange = null   // consumed
+                            i = j + 1
+                            continue
+                        }
                     }
                 }
             }
@@ -427,6 +460,9 @@ class ReelzDownloadEngine @Inject constructor(
             try {
                 val request = Request.Builder().url(seg.url)
                     .apply { headers.forEach { (k, v) -> addHeader(k, v) } }
+                    // Bug #8 fix: add Range header for byte-range segments so each
+                    // segment downloads only its slice of the shared URL.
+                    .apply { seg.byteRange?.let { addHeader("Range", "bytes=$it") } }
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code} for segment ${seg.index}")

@@ -818,7 +818,9 @@ class P2pEngine @Inject constructor(
         network:           Network?,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!sessionValid) return@withContext false
-        repeat(2) { attempt ->
+        // Bug #3 fix: repeat{} lambda returns do not exit withContext — use for loop so
+        // return@withContext true correctly short-circuits tcpConnect on first success.
+        for (attempt in 0 until 2) {
             try {
                 val sock: Socket = if (network != null) {
                     // CRITICAL: bind to the hotspot Network so OS routes correctly
@@ -834,7 +836,7 @@ class P2pEngine @Inject constructor(
                     Log.w(TAG, "Session mismatch from $ip — ignoring stale server")
                     sock.closeQuietly()
                     delay(1_500L)
-                    return@repeat
+                    continue
                 }
                 activeSocket = sock
                 _state.value = EngineState.Connected(tier, peerName, isHost = false, socket = sock)
@@ -845,7 +847,7 @@ class P2pEngine @Inject constructor(
                 delay(800L * (attempt + 1))
             }
         }
-        false
+        return@withContext false
     }
 
     private fun initStreams(sock: Socket) {
@@ -1114,20 +1116,34 @@ class P2pEngine @Inject constructor(
                             var tLast = System.currentTimeMillis()
                             var bLast = 0L
 
-                            FileOutputStream(outFile).use { fos ->
+                            // Bug #6 fix: FileOutputStream(outFile) truncates-on-create, so
+                            // opening it unconditionally left a 0-byte file in the media library
+                            // when the receive was already cancelled before bytes arrived.
+                            // Only open the stream when we know we're not cancelled.
+                            if (fileCancelled) {
+                                // Drain bytes without writing to keep stream in sync with sender
                                 while (received < total) {
                                     val toRead = minOf(buf.size.toLong(), total - received).toInt()
                                     val n = inn.read(buf, 0, toRead)
                                     if (n == -1) break
-                                    if (!fileCancelled && !cancelledReceive) fos.write(buf, 0, n)
                                     received += n
-                                    val now = System.currentTimeMillis()
-                                    if (now - tLast >= 200) {
-                                        val bps = (received - bLast) * 1000L / (now - tLast).coerceAtLeast(1)
-                                        tLast = now; bLast = received
-                                        if (!fileCancelled && !cancelledReceive) {
-                                            withContext(Dispatchers.Main) { onProgress(received, total, bps, fileName) }
-                                            _state.value = EngineState.Transferring(tier, peerName, fileName, "RECEIVE", received, total, bps)
+                                }
+                            } else {
+                                FileOutputStream(outFile).use { fos ->
+                                    while (received < total) {
+                                        val toRead = minOf(buf.size.toLong(), total - received).toInt()
+                                        val n = inn.read(buf, 0, toRead)
+                                        if (n == -1) break
+                                        if (!cancelledReceive) fos.write(buf, 0, n)
+                                        received += n
+                                        val now = System.currentTimeMillis()
+                                        if (now - tLast >= 200) {
+                                            val bps = (received - bLast) * 1000L / (now - tLast).coerceAtLeast(1)
+                                            tLast = now; bLast = received
+                                            if (!cancelledReceive) {
+                                                withContext(Dispatchers.Main) { onProgress(received, total, bps, fileName) }
+                                                _state.value = EngineState.Transferring(tier, peerName, fileName, "RECEIVE", received, total, bps)
+                                            }
                                         }
                                     }
                                 }
