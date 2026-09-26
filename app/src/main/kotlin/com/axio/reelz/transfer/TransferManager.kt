@@ -27,6 +27,7 @@ package com.axio.reelz.transfer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import android.content.Context
+import android.util.Log
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -98,7 +99,11 @@ class TransferManager @Inject constructor(
 
     private var sendJob: Job? = null
     private var peerName      = ""
-    private var peerSessionId = ""   // sessionId used as stable peer identifier for duplicate-send check
+    private var peerSessionId = ""
+
+    companion object {
+        private const val TAG = "TransferManager"
+    }   // sessionId used as stable peer identifier for duplicate-send check
 
     @Volatile private var receiveLoopStarted = false
 
