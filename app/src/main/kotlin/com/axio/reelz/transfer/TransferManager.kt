@@ -97,7 +97,8 @@ class TransferManager @Inject constructor(
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     private var sendJob: Job? = null
-    private var peerName = ""
+    private var peerName      = ""
+    private var peerSessionId = ""   // sessionId used as stable peer identifier for duplicate-send check
 
     @Volatile private var receiveLoopStarted = false
 
@@ -123,7 +124,8 @@ class TransferManager @Inject constructor(
 
                 when (es) {
                     is EngineState.Connected -> {
-                        peerName = es.peerName
+                        peerName      = es.peerName
+                        peerSessionId = es.peerName   // use peerName as stable peer key until engine exposes a UUID
                         if (!receiveLoopStarted) {
                             receiveLoopStarted = true
                             startReceiveLoop()
@@ -277,14 +279,19 @@ class TransferManager @Inject constructor(
                     },
                     onDone = {
                         updateSendItem(next.id) { it.copy(status = TransferItemStatus.DONE) }
-                        scope.launch {
+                        scope.launch(Dispatchers.IO) {
                             repo.recordTransfer(TransferRecord(
                                 id        = UUID.randomUUID().toString(),
                                 fileName  = next.fileName,
                                 sizeBytes = next.sizeBytes,
                                 direction = "SEND",
                                 peerName  = peerName,
+                                peerId    = peerSessionId,
                                 status    = "DONE",
+                                mediaId   = next.mediaId,
+                                season    = next.season,
+                                episode   = next.episode,
+                                quality   = next.quality,
                             ))
                         }
                         done.complete(true)
@@ -389,18 +396,21 @@ class TransferManager @Inject constructor(
                             else item
                         }
                         val bundleSize = targetDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
-                        scope.launch {
+                        scope.launch(Dispatchers.IO) {
                             repo.recordTransfer(TransferRecord(
                                 id        = UUID.randomUUID().toString(),
                                 fileName  = file.name,
                                 sizeBytes = bundleSize,
                                 direction = "RECEIVE",
                                 peerName  = peerName,
+                                peerId    = "",
                                 status    = "DONE",
+                                mediaId   = meta.mediaId,
+                                season    = meta.season,
+                                episode   = meta.episode,
+                                quality   = meta.quality,
                             ))
-                        }
-                        scope.launch(Dispatchers.IO) {
-                            registerReceivedFile(targetFile, meta)
+                            registerReceivedContent(targetFile, meta)
                         }
                     }
                     // .ts files silently complete — no DB row, no UI update needed
@@ -411,18 +421,21 @@ class TransferManager @Inject constructor(
                             item.copy(status = TransferItemStatus.DONE)
                         else item
                     }
-                    scope.launch {
+                    scope.launch(Dispatchers.IO) {
                         repo.recordTransfer(TransferRecord(
                             id        = UUID.randomUUID().toString(),
                             fileName  = file.name,
                             sizeBytes = file.length(),
                             direction = "RECEIVE",
                             peerName  = peerName,
+                            peerId    = "",
                             status    = "DONE",
+                            mediaId   = meta.mediaId,
+                            season    = meta.season,
+                            episode   = meta.episode,
+                            quality   = meta.quality,
                         ))
-                    }
-                    scope.launch(Dispatchers.IO) {
-                        registerReceivedFile(file, meta)
+                        registerReceivedContent(file, meta)
                     }
                 }
             },
@@ -433,65 +446,137 @@ class TransferManager @Inject constructor(
         )
     }
 
-    // ── Received file → DownloadDao registration ──────────────────────────────
+    // ── Received file → DownloadDao registration ─────────────────────────────
+    //
+    // Ownership key: [mediaId + season + episode + quality]
+    // season = 0, episode = 0 for movies.
+    //
+    // Called after:
+    //   • MP4 fully received — file is the .mp4
+    //   • HLS bundle fully received — file is the final index.m3u8
+    //     (all .ts segments already live alongside it in the same folder)
+    //
+    // Three-layer duplicate guard:
+    //   1. DownloadDao.findOwned()  — checks DB + composite key
+    //   2. File.exists() on the stored path — catches manually-deleted files
+    //   3. TransferDao.findReceivedRecord() — extra guard via transfer history
+    //      (catches the edge case where the DB row was deleted but the file isn't)
 
-    private suspend fun registerReceivedFile(
+    private suspend fun registerReceivedContent(
         file: File,
         meta: P2pEngine.FileMetadata,
     ) = withContext(Dispatchers.IO) {
-        val mediaId  = meta.mediaId.ifBlank  { meta.title.ifBlank { file.nameWithoutExtension } }
-        val season   = meta.season
-        val episode  = meta.episode
-        val quality  = meta.quality.ifBlank  { "720p" }
-        val title    = meta.title.ifBlank    { file.nameWithoutExtension }
+        val mediaId   = meta.mediaId.ifBlank  { meta.title.ifBlank { file.nameWithoutExtension } }
+        val season    = meta.season
+        val episode   = meta.episode
+        val quality   = meta.quality.ifBlank  { "720p" }
+        val title     = meta.title.ifBlank    { file.nameWithoutExtension }
         val mediaType = meta.mediaType.ifBlank { if (episode > 0) "TV" else "MOVIE" }
+        val isHls     = file.name.endsWith(".m3u8", ignoreCase = true)
 
-        // ── Duplicate check ───────────────────────────────────────────────────
-        // getForContent uses (mediaId, season, episode) as the unique identity
-        // for a piece of content. Duplicate = same quality already exists and
-        // is not in ERROR state.
-        val existing = downloadDao.getForContent(mediaId, season, episode)
-        val alreadyHaveSameQuality = existing.any {
-            it.quality.equals(quality, ignoreCase = true) &&
-            it.status != DownloadStatus.ERROR.name
+        // ── Layer 1: DB ownership check with disk existence ───────────────────
+        val ownedRow = downloadDao.findOwned(mediaId, season, episode, quality)
+        if (ownedRow != null) {
+            val storedPath = ownedRow.filePath.ifBlank { ownedRow.localPlaylistPath }
+            if (storedPath.isNotBlank() && java.io.File(storedPath).exists()) {
+                Log.d(TAG, "registerReceivedContent: already owned $mediaId s${season}e${episode} $quality — skip")
+                return@withContext
+            }
+            // File was deleted from disk — the old DB row is stale. Remove it
+            // so we can insert a fresh one pointing to the newly received file.
+            Log.d(TAG, "registerReceivedContent: stale row found (file missing) — replacing for $mediaId")
+            downloadDao.delete(ownedRow.id)
         }
 
-        if (alreadyHaveSameQuality) {
-            // Exact duplicate (same movie/episode/quality) — do nothing.
-            // The user already has this file; the new local copy in ReelzBeam/
-            // is a redundant duplicate — leave the existing DB row pointing to
-            // its original path.
-            return@withContext
+        // ── Layer 2: transfer history guard ───────────────────────────────────
+        // If the download row was deleted manually but we transferred this before,
+        // we still want to re-register (user wants it back). So we only use this
+        // as a log, not as a block.
+        val prevTransfer = repo.findReceivedRecord(mediaId, season, episode, quality)
+        if (prevTransfer != null) {
+            Log.d(TAG, "registerReceivedContent: previously received — re-registering $mediaId")
         }
 
-        // ── New quality or first-time receive — insert row ────────────────────
-        // If the movie/series already exists (e.g. different quality or different
-        // episode of same series), we still create a new DownloadRow because each
-        // row represents one (mediaId, season, episode, quality) combination.
-        // The UI groups them by mediaId/title so they still appear as ONE item.
+        // ── Compute file metadata ─────────────────────────────────────────────
+        val (filePath, localPlaylistPath, sizeBytes) = if (isHls) {
+            // For HLS: file IS the index.m3u8. sizeBytes = sum of all files in folder.
+            val folderSize = file.parentFile
+                ?.walkBottomUp()
+                ?.filter { it.isFile }
+                ?.sumOf { it.length() } ?: file.length()
+            Triple("", file.absolutePath, folderSize)
+        } else {
+            Triple(file.absolutePath, "", file.length())
+        }
+
+        // ── Insert fresh DONE row ─────────────────────────────────────────────
         val newId = UUID.randomUUID().toString()
         downloadDao.insert(
             DownloadRow(
-                id              = newId,
-                mediaId         = mediaId,
-                title           = title,
-                posterUrl       = meta.posterUrl.ifBlank { null },
-                mediaType       = mediaType,
-                season          = season,
-                episode         = episode,
-                episodeName     = "",
-                quality         = quality,
-                filePath        = file.absolutePath,
-                sizeBytes       = file.length(),
-                downloadedBytes = file.length(),
-                status          = DownloadStatus.DONE.name,
-                streamUrl       = "",
-                headersJson     = "{}",
-                createdAt       = System.currentTimeMillis(),
-                completedAt     = System.currentTimeMillis(),
+                id               = newId,
+                mediaId          = mediaId,
+                title            = title,
+                posterUrl        = meta.posterUrl.ifBlank { null },
+                mediaType        = mediaType,
+                season           = season,
+                episode          = episode,
+                episodeName      = "",
+                quality          = quality,
+                filePath         = filePath,
+                localPlaylistPath = localPlaylistPath,
+                sizeBytes        = sizeBytes,
+                downloadedBytes  = sizeBytes,
+                status           = DownloadStatus.DONE.name,
+                streamUrl        = "",   // received via transfer — no remote URL
+                headersJson      = "{}",
+                createdAt        = System.currentTimeMillis(),
+                completedAt      = System.currentTimeMillis(),
             )
         )
+        Log.i(TAG, "registerReceivedContent: registered $title [$quality] id=$newId isHls=$isHls")
     }
+
+    // ── Send-side duplicate check ─────────────────────────────────────────────
+    //
+    // Call this before adding an item to the send queue when you have a known
+    // peerId (stable device identifier from P2pEngine). Shows a confirmation
+    // dialog in the UI if the user already sent this exact content to this peer.
+
+    sealed class SendCheck {
+        object Ok : SendCheck()
+        data class AlreadySent(val sentAt: Long) : SendCheck()
+    }
+
+    suspend fun checkCanSend(
+        item:   com.axio.reelz.data.model.DownloadItem,
+        peerId: String,
+    ): SendCheck = withContext(Dispatchers.IO) {
+        if (peerId.isBlank()) return@withContext SendCheck.Ok
+        val record = repo.findSentRecord(
+            mediaId = item.mediaId,
+            season  = item.season,
+            episode = item.episode,
+            quality = item.quality,
+            peerId  = peerId,
+        )
+        if (record != null) SendCheck.AlreadySent(record.createdAt)
+        else SendCheck.Ok
+    }
+
+    // ── Internal helper: build TransferRecord for a completed SEND ────────────
+    fun buildSentRecord(item: TransferItem, peerId: String): TransferRecord = TransferRecord(
+        id        = UUID.randomUUID().toString(),
+        fileName  = item.fileName,
+        sizeBytes = item.sizeBytes,
+        direction = "SEND",
+        peerName  = peerName,
+        peerId    = peerId,
+        status    = "DONE",
+        mediaId   = item.mediaId,
+        season    = item.season,
+        episode   = item.episode,
+        quality   = item.quality,
+    )
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

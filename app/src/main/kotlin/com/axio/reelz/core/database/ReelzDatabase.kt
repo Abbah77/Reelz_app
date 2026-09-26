@@ -445,6 +445,32 @@ interface DownloadDao {
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: String)
 
+    /**
+     * Ownership check — single query for [mediaId + season + episode + quality].
+     *
+     * Returns the first non-ERROR row for this exact composite key.
+     * Callers should also verify the file exists on disk (DownloadRepository does this).
+     *
+     * Used by:
+     *   • DownloadRepository.enqueue()         — skip if already downloading/done
+     *   • TransferManager.registerReceivedContent() — skip if already owned
+     */
+    @Query("""
+        SELECT * FROM downloads
+        WHERE mediaId = :mediaId
+          AND season  = :season
+          AND episode = :episode
+          AND quality = :quality
+          AND status != 'ERROR'
+        LIMIT 1
+    """)
+    suspend fun findOwned(
+        mediaId: String,
+        season: Int,
+        episode: Int,
+        quality: String,
+    ): DownloadRow?
+
 }
 
 // ── Download subtitles ────────────────────────────────────────────────────────
@@ -488,15 +514,25 @@ interface DownloadSubtitleDao {
 }
 
 // ── Transfer types ─────────────────────────────────────────────────────────────
-@Entity(tableName = "transfer_history")
+// ── Ownership key composite index so findTransfer is O(log n) ────────────────
+@Entity(
+    tableName = "transfer_history",
+    indices = [Index("mediaId", "season", "episode", "quality", "direction")],
+)
 data class TransferRecord(
     @PrimaryKey val id: String,
     val fileName: String,
     val sizeBytes: Long,
-    val direction: String,
+    val direction: String,   // "SEND" | "RECEIVE"
     val peerName: String,
+    val peerId: String = "", // stable device identifier for duplicate-send check
     val status: String,
-    val createdAt: Long = System.currentTimeMillis(),
+    // Content identity — lets us query "did we already send/receive this?"
+    val mediaId: String  = "",
+    val season: Int      = 0,
+    val episode: Int     = 0,
+    val quality: String  = "",
+    val createdAt: Long  = System.currentTimeMillis(),
 )
 
 @Dao
@@ -512,6 +548,50 @@ interface TransferDao {
 
     @Query("DELETE FROM transfer_history")
     suspend fun clear()
+
+    /**
+     * Check if we already sent this exact content to a specific peer device.
+     * Used by TransferManager.canSend() to warn before re-sending.
+     * peerId = stable device identifier from P2pEngine (MAC or derived string).
+     */
+    @Query("""
+        SELECT * FROM transfer_history
+        WHERE mediaId = :mediaId
+          AND season   = :season
+          AND episode  = :episode
+          AND quality  = :quality
+          AND direction = 'SEND'
+          AND peerId   = :peerId
+        LIMIT 1
+    """)
+    suspend fun findSentRecord(
+        mediaId: String,
+        season: Int,
+        episode: Int,
+        quality: String,
+        peerId: String,
+    ): TransferRecord?
+
+    /**
+     * Check if we have already received this exact content from anyone.
+     * Used as a secondary guard in registerReceivedContent().
+     */
+    @Query("""
+        SELECT * FROM transfer_history
+        WHERE mediaId  = :mediaId
+          AND season   = :season
+          AND episode  = :episode
+          AND quality  = :quality
+          AND direction = 'RECEIVE'
+          AND status   = 'DONE'
+        LIMIT 1
+    """)
+    suspend fun findReceivedRecord(
+        mediaId: String,
+        season: Int,
+        episode: Int,
+        quality: String,
+    ): TransferRecord?
 }
 
 // ── Supplemental view types ───────────────────────────────────────────────────
@@ -645,6 +725,15 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+// Migration 7→8: add localPlaylistPath and expiresAtMs to downloads table.
+// These columns were added when HLS download support landed (DB v8).
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE downloads ADD COLUMN localPlaylistPath TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN expiresAtMs INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 // Migration 8→9: drop remux columns and reset any stuck REMUXING rows to ERROR.
 // SQLite doesn't support DROP COLUMN before 3.35, so we recreate the downloads table
 // without remuxAttempted / remuxFailReason and copy existing data across.
@@ -696,6 +785,23 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
     }
 }
 
+// Migration 9→10: expand transfer_history with content-identity columns + peerId.
+// SQLite can't ADD a column with a non-constant default, so we add with DEFAULT ''/0.
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE transfer_history ADD COLUMN peerId    TEXT    NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE transfer_history ADD COLUMN mediaId   TEXT    NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE transfer_history ADD COLUMN season    INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE transfer_history ADD COLUMN episode   INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE transfer_history ADD COLUMN quality   TEXT    NOT NULL DEFAULT ''")
+        // Composite index for fast duplicate-send / duplicate-receive lookups
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_transfer_content
+            ON transfer_history (mediaId, season, episode, quality, direction)
+        """.trimIndent())
+    }
+}
+
 @Database(
     entities = [
         CachedFeedRow::class,
@@ -710,7 +816,7 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         DownloadSubtitleRow::class,
         TransferRecord::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class ReelzDatabase : RoomDatabase() {

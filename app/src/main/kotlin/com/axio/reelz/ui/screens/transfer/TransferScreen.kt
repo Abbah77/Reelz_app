@@ -267,21 +267,140 @@ private val IconSwap: ImageVector get() = ImageVector.Builder("TrSwap", 24.dp, 2
        fill = SolidColor(Color.Transparent))
 }.build()
 
-// ─── Permission helpers ───────────────────────────────────────────────────────
+// ─── Dynamic permission system ───────────────────────────────────────────────
+//
+// Android fragmented permission model for Wi-Fi transfer APIs:
+//
+//  API < 26  (Android 7-)   : ACCESS_FINE_LOCATION (WifiDirect peer discovery)
+//  API 26-32 (Android 8-12) : ACCESS_FINE_LOCATION + CHANGE_NETWORK_STATE
+//  API 33+   (Android 13+)  : NEARBY_WIFI_DEVICES (replaces location for Wi-Fi)
+//                             POST_NOTIFICATIONS (for foreground service notification)
+//
+// OEM quirks addressed:
+//  • Samsung One UI 4+ requires CHANGE_WIFI_STATE explicitly at runtime on some SKUs
+//  • MIUI 12+ (Xiaomi) enforces ACCESS_FINE_LOCATION even on API 33 for WifiP2p
+//  • Oppo/Realme ColorOS 12 requires ACCESS_COARSE_LOCATION alongside NEARBY_WIFI_DEVICES
+//  • Huawei EMUI (no GMS) ignores NEARBY_WIFI_DEVICES entirely — falls back to location
+//
+// Camera is only required on the RECEIVER side (QR scan).
+// Notifications are only required on API 33+ (foreground service notification).
+// Wi-Fi itself is a system setting, not a runtime permission — handled separately.
 
-private fun requiredRuntimePermissions(forSend: Boolean): List<String> = buildList {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        add(Manifest.permission.NEARBY_WIFI_DEVICES)
-    } else {
-        add(Manifest.permission.ACCESS_FINE_LOCATION)
+private data class PermItem(
+    val label:           String,
+    val description:     String,
+    val icon:            ImageVector,
+    val perm:            String? = null,          // null = system setting (Wi-Fi)
+    val settingsAction:  String? = null,
+    val isSystemSetting: Boolean = false,
+    val isOptional:      Boolean = false,         // granted by default on some devices/APIs
+)
+
+/**
+ * Builds the exact permission list this device needs for transfer.
+ *
+ * The list is dynamic — it depends on:
+ *   1. Android API level
+ *   2. Device manufacturer (OEM quirks)
+ *   3. Whether the user is sending (no camera) or receiving (camera for QR)
+ */
+private fun buildRequiredPermItems(ctx: Context, forSend: Boolean): List<PermItem> = buildList {
+    val api = Build.VERSION.SDK_INT
+    val oem = Build.MANUFACTURER.lowercase()
+
+    // ── Wi-Fi (system setting, not a runtime permission) ──────────────────────
+    add(PermItem(
+        label           = "Wi-Fi",
+        description     = "Required for device-to-device wireless transfer",
+        icon            = IconWifi,
+        settingsAction  = android.provider.Settings.ACTION_WIFI_SETTINGS,
+        isSystemSetting = true,
+    ))
+
+    // ── Core Wi-Fi permission — API-level driven ───────────────────────────────
+    when {
+        api >= Build.VERSION_CODES.TIRAMISU -> {
+            // Android 13+: NEARBY_WIFI_DEVICES is the primary permission
+            add(PermItem(
+                label       = "Nearby Devices",
+                description = "Lets the app discover and connect to nearby devices over Wi-Fi",
+                icon        = IconWifi,
+                perm        = Manifest.permission.NEARBY_WIFI_DEVICES,
+            ))
+
+            // Xiaomi/MIUI and Oppo/ColorOS still enforce location on API 33 for WifiP2p
+            // even though AOSP doesn't require it. We request it as optional so the
+            // flow doesn't hard-block on these OEMs if NEARBY_WIFI_DEVICES is granted.
+            if (oem.contains("xiaomi") || oem.contains("redmi") ||
+                oem.contains("oppo")   || oem.contains("realme") ||
+                oem.contains("oneplus")) {
+                add(PermItem(
+                    label       = "Location",
+                    description = "Required by your device manufacturer for Wi-Fi device discovery",
+                    icon        = IconLocation,
+                    perm        = Manifest.permission.ACCESS_FINE_LOCATION,
+                    isOptional  = false,   // required on these OEMs even on API 33
+                ))
+            }
+        }
+
+        api >= Build.VERSION_CODES.M -> {
+            // Android 6–12: fine location is required for Wi-Fi Direct peer discovery
+            add(PermItem(
+                label       = "Location",
+                description = "Required to discover nearby Wi-Fi Direct networks (Android ${api - 10})",
+                icon        = IconLocation,
+                perm        = Manifest.permission.ACCESS_FINE_LOCATION,
+            ))
+        }
+
+        else -> {
+            // Android 5 and below: only coarse location needed
+            add(PermItem(
+                label       = "Location",
+                description = "Required to discover nearby Wi-Fi networks",
+                icon        = IconLocation,
+                perm        = Manifest.permission.ACCESS_COARSE_LOCATION,
+            ))
+        }
     }
+
+    // ── Samsung One UI quirk: CHANGE_NETWORK_STATE required at runtime on API 26–32 ─
+    // Stock AOSP treats this as install-time only, but Samsung enforces it at runtime.
+    if (api in Build.VERSION_CODES.O..Build.VERSION_CODES.S_V2 &&
+        (oem.contains("samsung") || oem.contains("sec"))) {
+        add(PermItem(
+            label       = "Network Settings",
+            description = "Required by Samsung to change Wi-Fi network connections",
+            icon        = IconWifi,
+            perm        = Manifest.permission.CHANGE_NETWORK_STATE,
+        ))
+    }
+
+    // ── Camera — receiver only (QR scan) ─────────────────────────────────────
     if (!forSend) {
-        add(Manifest.permission.CAMERA)
+        add(PermItem(
+            label       = "Camera",
+            description = "Required to scan the sender's QR code",
+            icon        = IconCamera,
+            perm        = Manifest.permission.CAMERA,
+        ))
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        add(Manifest.permission.POST_NOTIFICATIONS)
+
+    // ── Notifications — Android 13+ foreground service notification ───────────
+    if (api >= Build.VERSION_CODES.TIRAMISU) {
+        add(PermItem(
+            label       = "Notifications",
+            description = "Shows transfer progress while the app is in the background",
+            icon        = IconBell,
+            perm        = Manifest.permission.POST_NOTIFICATIONS,
+        ))
     }
 }
+
+/** All runtime permissions extracted from the item list (excludes system settings). */
+private fun List<PermItem>.runtimePerms(): List<String> =
+    mapNotNull { it.perm }
 
 private fun Context.isGranted(perm: String): Boolean =
     ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
@@ -291,8 +410,20 @@ private fun Context.isWifiEnabled(): Boolean = try {
     wm?.isWifiEnabled == true
 } catch (_: Exception) { false }
 
-private fun Context.allTransferPermsGranted(forSend: Boolean): Boolean =
-    requiredRuntimePermissions(forSend).all { isGranted(it) } && isWifiEnabled()
+/**
+ * True only when every required permission for this device + API level is granted
+ * AND Wi-Fi is enabled. Nothing in P2pEngine is started until this returns true.
+ */
+private fun Context.allTransferPermsGranted(forSend: Boolean): Boolean {
+    val items = buildRequiredPermItems(this, forSend)
+    val runtimeOk = items.runtimePerms().all { isGranted(it) }
+    val wifiOk    = isWifiEnabled()
+    return runtimeOk && wifiOk
+}
+
+// Legacy alias kept for any call sites outside PermissionPage
+private fun requiredRuntimePermissions(ctx: Context, forSend: Boolean): List<String> =
+    buildRequiredPermItems(ctx, forSend).runtimePerms()
 
 // ─── ViewModel ────────────────────────────────────────────────────────────────
 
@@ -781,15 +912,6 @@ private fun IdlePage(
 
 // ─── Permission page ──────────────────────────────────────────────────────────
 
-private data class PermItem(
-    val label:          String,
-    val description:    String,
-    val icon:           ImageVector,
-    val perm:           String? = null,
-    val settingsAction: String? = null,
-    val isSystemSetting: Boolean = false,
-)
-
 @Composable
 private fun PermissionPage(
     intent:       TransferIntent,
@@ -800,49 +922,13 @@ private fun PermissionPage(
     val d = LocalDimensions.current
     val forSend = intent == TransferIntent.SEND
 
+    // Build the device-specific permission list once. This is pure Kotlin (no
+    // suspend) so remember() is fine here — it only re-runs if forSend changes.
     val permItems: List<PermItem> = remember(forSend) {
-        buildList {
-            add(PermItem(
-                label           = "Wi-Fi",
-                description     = "Required for device-to-device wireless transfer",
-                icon            = IconWifi,
-                settingsAction  = Settings.ACTION_WIFI_SETTINGS,
-                isSystemSetting = true,
-            ))
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(PermItem(
-                    label       = "Nearby Devices",
-                    description = "Required for Wi-Fi Direct & hotspot discovery on Android 13+",
-                    icon        = IconWifi,
-                    perm        = Manifest.permission.NEARBY_WIFI_DEVICES,
-                ))
-            } else {
-                add(PermItem(
-                    label       = "Location",
-                    description = "Required to discover nearby Wi-Fi Direct networks",
-                    icon        = IconLocation,
-                    perm        = Manifest.permission.ACCESS_FINE_LOCATION,
-                ))
-            }
-            if (!forSend) {
-                add(PermItem(
-                    label       = "Camera",
-                    description = "Required to scan the sender's QR code",
-                    icon        = IconCamera,
-                    perm        = Manifest.permission.CAMERA,
-                ))
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(PermItem(
-                    label       = "Notifications",
-                    description = "Required to show transfer progress while app is in background",
-                    icon        = IconBell,
-                    perm        = Manifest.permission.POST_NOTIFICATIONS,
-                ))
-            }
-        }
+        buildRequiredPermItems(ctx, forSend)
     }
 
+    // refreshKey increments every time a launcher returns so grantedMap re-evaluates.
     var refreshKey by remember { mutableStateOf(0) }
 
     val grantedMap: Map<String, Boolean> = remember(refreshKey) {
@@ -856,6 +942,7 @@ private fun PermissionPage(
     }
     val allGranted = grantedMap.values.all { it }
 
+    // Single launcher handles all runtime perms in one system dialog.
     val multiPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { refreshKey++ }
@@ -864,8 +951,26 @@ private fun PermissionPage(
         ActivityResultContracts.StartActivityForResult()
     ) { refreshKey++ }
 
+    // Auto-advance as soon as everything is granted (handles the case where the
+    // user grants permissions in system settings and navigates back).
     LaunchedEffect(allGranted) {
         if (allGranted) onAllGranted()
+    }
+
+    // Request all ungranted runtime permissions immediately on first composition
+    // so the user sees one combined dialog rather than one per permission.
+    val hasLaunchedInitial = remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!hasLaunchedInitial.value) {
+            hasLaunchedInitial.value = true
+            val ungranted = permItems
+                .mapNotNull { it.perm }
+                .filter { !ctx.isGranted(it) }
+                .toTypedArray()
+            if (ungranted.isNotEmpty()) {
+                multiPermLauncher.launch(ungranted)
+            }
+        }
     }
 
     Column(

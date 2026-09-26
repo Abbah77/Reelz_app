@@ -43,17 +43,7 @@ class DownloadRepository @Inject constructor(
         rows.map { it.toModel() }
     }
 
-    // ── Check if already downloaded ───────────────────────────────────────────
-    suspend fun isAlreadyDownloaded(
-        id:      String,
-        season:  Int    = 0,
-        episode: Int    = 0,
-        quality: String = "",
-    ): Boolean = withContext(Dispatchers.IO) {
-        dao.getForContent(id, season, episode)
-            .any { it.quality == quality || quality.isBlank() }
-    }
-
+    // ── Get all downloaded items for a piece of content ─────────────────────
     suspend fun getDownloadedItems(
         id:      String,
         season:  Int = 0,
@@ -69,6 +59,27 @@ class DownloadRepository @Inject constructor(
      * @param headers       Effective headers (referer/origin/ua already merged by DTO layer)
      * @param expiresAtMs   Unix timestamp in ms when the URL expires (0 = unknown)
      */
+    // ── Ownership check — single source of truth ─────────────────────────────
+    //
+    // Composite key: [mediaId + season + episode + quality]
+    // season = 0, episode = 0 for movies.
+    // Same mediaId + different quality = different row (allowed).
+    // Source (download vs transfer received) is irrelevant — the content is identical.
+    //
+    // The disk existence check is critical: a user who manually deletes the file
+    // from their device would otherwise be permanently blocked from re-downloading.
+    suspend fun isAlreadyOwned(
+        mediaId: String,
+        season:  Int    = 0,
+        episode: Int    = 0,
+        quality: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val row = dao.findOwned(mediaId, season, episode, quality) ?: return@withContext false
+        // Verify the file actually exists on disk
+        val filePath = row.filePath.ifBlank { row.localPlaylistPath }
+        filePath.isNotBlank() && java.io.File(filePath).exists()
+    }
+
     suspend fun enqueue(
         ctx:          Context,
         id:           String,
@@ -84,9 +95,12 @@ class DownloadRepository @Inject constructor(
         headers:      Map<String, String> = emptyMap(),
         expiresAtMs:  Long   = 0L,
     ): String = withContext(Dispatchers.IO) {
-        val existing = dao.getForContent(id, season, episode)
-            .firstOrNull { it.quality == quality && it.status != DownloadStatus.ERROR.name }
-        if (existing != null) return@withContext existing.id
+        // Use isAlreadyOwned so the disk-existence check is always applied —
+        // prevents a deleted file from permanently blocking a re-download.
+        if (isAlreadyOwned(id, season, episode, quality)) {
+            // Return the existing download id so callers can track it
+            return@withContext dao.findOwned(id, season, episode, quality)!!.id
+        }
 
         val downloadId = UUID.randomUUID().toString()
         dao.insert(

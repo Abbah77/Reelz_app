@@ -9,13 +9,35 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
-    <!-- ── Wi-Fi Direct ───────────────────────────────────────────────── -->
+    <!-- ── Wi-Fi Direct / P2P Transfer ──────────────────────────────────── -->
+    <!--
+        Permission strategy (see TransferScreen.buildRequiredPermItems for runtime logic):
+
+        Android 13+ (API 33+)
+          • NEARBY_WIFI_DEVICES   — primary; replaces location for Wi-Fi APIs
+          • neverForLocation flag  — tells system this is NOT used to infer location
+          • ACCESS_FINE_LOCATION  — still required at runtime on Xiaomi/MIUI, Oppo/ColorOS,
+                                    OnePlus OxygenOS even on API 33 (OEM policy)
+
+        Android 6–12 (API 23–32)
+          • ACCESS_FINE_LOCATION  — required for WifiP2p peer discovery (AOSP + all OEMs)
+          • CHANGE_NETWORK_STATE  — required at runtime on Samsung One UI for hotspot join
+
+        Android < 6 (API < 23)
+          • ACCESS_COARSE_LOCATION — sufficient for pre-M (install-time grant)
+
+        All versions
+          • CHANGE_WIFI_STATE     — create/destroy Wi-Fi P2P groups and hotspot
+          • ACCESS_WIFI_STATE     — read Wi-Fi state
+          • CHANGE_WIFI_MULTICAST_STATE — peer discovery multicast
+    -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
 
     <!-- ── Storage ──────────────────────────────────────────────────────── -->

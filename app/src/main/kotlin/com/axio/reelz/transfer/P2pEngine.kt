@@ -312,6 +312,18 @@ class P2pEngine @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private suspend fun tryCreateWifiDirectGroup(): String? = withContext(Dispatchers.Main) {
+        // Permission guard — prevents SecurityException on devices that revoke
+        // permissions between the permission page and this call.
+        val neededPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            android.Manifest.permission.NEARBY_WIFI_DEVICES
+        else
+            android.Manifest.permission.ACCESS_FINE_LOCATION
+        if (android.content.pm.PackageManager.PERMISSION_GRANTED !=
+            androidx.core.content.ContextCompat.checkSelfPermission(ctx, neededPerm)) {
+            Log.e(TAG, "tryCreateWifiDirectGroup: missing $neededPerm — skipping WD, will try hotspot")
+            return@withContext null   // fall through to hotspot in prepareAsSender
+        }
+
         try {
             val mgr = ctx.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
                 ?: return@withContext null
@@ -500,6 +512,24 @@ class P2pEngine @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private suspend fun tryCreateHotspot(): String? {
+        // Hard permission guard — if NEARBY_WIFI_DEVICES (API 33+) or
+        // ACCESS_FINE_LOCATION (API <33) is missing, fail gracefully instead
+        // of crashing with SecurityException from startLocalOnlyHotspot().
+        val neededPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            android.Manifest.permission.NEARBY_WIFI_DEVICES
+        else
+            android.Manifest.permission.ACCESS_FINE_LOCATION
+        if (android.content.pm.PackageManager.PERMISSION_GRANTED !=
+            androidx.core.content.ContextCompat.checkSelfPermission(ctx, neededPerm)) {
+            Log.e(TAG, "tryCreateHotspot: missing $neededPerm — aborting to avoid SecurityException")
+            _state.value = EngineState.Error(
+                msg       = "Nearby devices permission was not granted. Please allow it and try again.",
+                retryable = false,
+                kind      = "PERMISSION",
+            )
+            return null
+        }
+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             // Pre-O: no LocalOnlyHotspot API; use current WiFi IP
             val ip = getLocalIp()
@@ -558,6 +588,17 @@ class P2pEngine @Inject constructor(
                 }
                 override fun onStopped() { Log.d(TAG, "Hotspot stopped") }
             }, null)
+            } catch (se: SecurityException) {
+                // Permission was revoked between the permission page and this call,
+                // or the OEM enforces an undocumented permission. Never crash.
+                Log.e(TAG, "startLocalOnlyHotspot SecurityException: ${se.message}")
+                _state.value = EngineState.Error(
+                    msg       = "Permission was denied for hotspot creation. Please grant Nearby Devices access and try again.",
+                    retryable = false,
+                    kind      = "PERMISSION",
+                )
+                if (cont.isActive) cont.resume(null, null)
+            }
 
             cont.invokeOnCancellation {
                 try { hotspotReservation?.close() } catch (_: Exception) {}
