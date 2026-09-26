@@ -133,7 +133,17 @@ class ReelzDownloadService : Service() {
                 val headers = runCatching {
                     com.google.gson.Gson().fromJson(row.headersJson, Map::class.java) as Map<String, String>
                 }.getOrDefault(emptyMap())
-                engine.start(row.id, row.streamUrl, type, headers, row.title)
+                // Pass the saved byte offset so MP4 downloads resume from where they
+                // stopped rather than restarting from byte 0. HLS ignores resumeBytes
+                // and resumes from segmentsDone instead (handled inside the engine).
+                engine.start(
+                    downloadId  = row.id,
+                    url         = row.streamUrl,
+                    type        = type,
+                    headers     = headers,
+                    title       = row.title,
+                    resumeBytes = if (type == "mp4") row.downloadedBytes else 0L,
+                )
             }
         }
     }

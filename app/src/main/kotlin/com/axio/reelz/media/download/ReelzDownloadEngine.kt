@@ -233,7 +233,7 @@ class ReelzDownloadEngine @Inject constructor(
         if (totalSize > 0) {
             downloadDao.updateProgress(
                 id = downloadId, status = DownloadStatus.DOWNLOADING.name,
-                bytes = resumeFrom, done = 0, total = 0, playlist = "",
+                bytes = resumeFrom, done = 0, total = 1, playlist = "",
                 sizeBytes = totalSize,
             )
         }
@@ -251,7 +251,7 @@ class ReelzDownloadEngine @Inject constructor(
                         lastFlush = done
                         downloadDao.updateProgress(
                             id = downloadId, status = DownloadStatus.DOWNLOADING.name,
-                            bytes = done, done = 0, total = 0, playlist = "",
+                            bytes = done, done = 0, total = 1, playlist = "",
                             sizeBytes = totalSize,
                         )
                     }
@@ -486,22 +486,27 @@ class ReelzDownloadEngine @Inject constructor(
             }
             i++
         }
-        return sb.toString().trimEnd()
+        // Ensure the playlist ends with a newline (required by HLS spec; some ExoPlayer
+        // versions warn/fail if #EXT-X-ENDLIST has no trailing newline).
+        val result = sb.toString().trimEnd()
+        return if (result.endsWith('\n')) result else "$result\n"
     }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
-    private fun executeWithRetry(request: Request, maxAttempts: Int = 4): Response {
-        var lastError: Exception? = null
-        for (attempt in 0 until maxAttempts) {
-            try {
-                return client.newCall(request).execute()
-            } catch (e: Exception) {
-                lastError = e
-                if (attempt < maxAttempts - 1) Thread.sleep(500L * (1L shl attempt))
+    private suspend fun executeWithRetry(request: Request, maxAttempts: Int = 4): Response =
+        withContext(Dispatchers.IO) {
+            var lastError: Exception? = null
+            for (attempt in 0 until maxAttempts) {
+                try {
+                    return@withContext client.newCall(request).execute()
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    lastError = e
+                    if (attempt < maxAttempts - 1) delay(500L * (1L shl attempt))
+                }
             }
+            throw lastError ?: IOException("Request failed after $maxAttempts attempts")
         }
-        throw lastError ?: IOException("Request failed after $maxAttempts attempts")
-    }
 
     private suspend fun fetchTextWithRetry(url: String, headers: Map<String, String>): String? =
         withContext(Dispatchers.IO) {

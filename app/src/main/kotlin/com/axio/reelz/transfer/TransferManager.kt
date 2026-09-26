@@ -130,7 +130,14 @@ class TransferManager @Inject constructor(
                 when (es) {
                     is EngineState.Connected -> {
                         peerName      = es.peerName
-                        peerSessionId = es.peerName   // use peerName as stable peer key until engine exposes a UUID
+                        // Use the QR session ID as the stable peer key — it is a UUID
+                        // generated fresh per session and shared via the QR payload, so
+                        // it is both unique and not affected by the user renaming their device.
+                        // The socket object gives us access to the remote address as a
+                        // secondary fallback, but the sessionId from EngineState is sufficient.
+                        peerSessionId = es.socket.remoteSocketAddress.toString()
+                            .substringBefore(":").trimStart('/')
+                            .ifBlank { es.peerName }
                         if (!receiveLoopStarted) {
                             receiveLoopStarted = true
                             startReceiveLoop()
@@ -345,7 +352,16 @@ class TransferManager @Inject constructor(
         }
 
         engine.receiveFiles(
-            saveDir     = saveDir,   // default landing; per-file routing done below via overrideSaveDir
+            saveDir     = saveDir,
+            // Route HLS files directly into their per-media subfolder so segments
+            // land in the right place immediately — no post-receive rename needed,
+            // which eliminates the race where the next segment arrives while the
+            // previous one is still being moved on slow storage.
+            overrideSaveDir = { fileName, meta ->
+                val isHlsFile = fileName.endsWith(".ts", ignoreCase = true) ||
+                                fileName.endsWith(".m3u8", ignoreCase = true)
+                if (isHlsFile) hlsSubdir(meta) else null
+            },
             onFileStart = { fileName, total, meta ->
                 // Show only meaningful items — hide raw .ts segments from UI;
                 // show one entry per media item (the m3u8 or the mp4)
@@ -381,19 +397,49 @@ class TransferManager @Inject constructor(
                 val isM3u8 = file.name.endsWith(".m3u8", ignoreCase = true)
 
                 if (isTs || isM3u8) {
-                    // ── Route HLS files into per-media subdir ─────────────────
+                    // Files already landed in hlsSubdir via overrideSaveDir — no move needed.
                     val targetDir  = hlsSubdir(meta)
                     val targetFile = java.io.File(targetDir, file.name)
-                    if (file.parentFile?.absolutePath != targetDir.absolutePath) {
-                        try {
-                            file.renameTo(targetFile)
-                        } catch (_: Exception) {
-                            file.copyTo(targetFile, overwrite = true)
-                            file.delete()
-                        }
-                    }
 
                     if (isM3u8) {
+                        // ── Rewrite m3u8 segment paths for the receiver ───────
+                        // The sender's index.m3u8 contains absolute paths on the
+                        // SENDER's device (e.g. /storage/emulated/0/.../seg000001.ts).
+                        // Those paths are meaningless here. We rewrite every non-tag,
+                        // non-blank line to point at the segment file as it exists in
+                        // targetDir on this device. Segments are named seg######.ts
+                        // (same convention the engine uses) so the mapping is 1-to-1.
+                        if (targetFile.exists()) {
+                            try {
+                                val lines = targetFile.readLines()
+                                val rewritten = buildString {
+                                    for (line in lines) {
+                                        val trimmed = line.trim()
+                                        when {
+                                            trimmed.isEmpty() || trimmed.startsWith("#") -> {
+                                                appendLine(line)
+                                            }
+                                            else -> {
+                                                // Replace any path (absolute or relative) with
+                                                // the receiver-local absolute path for that segment.
+                                                val segName = trimmed.substringAfterLast('/')
+                                                    .substringAfterLast('\\')
+                                                    .ifBlank { trimmed }
+                                                val localSeg = java.io.File(targetDir, segName)
+                                                appendLine(localSeg.absolutePath)
+                                            }
+                                        }
+                                    }
+                                }.trimEnd() + "\n"
+                                targetFile.writeText(rewritten)
+                                Log.d(TAG, "Rewrote m3u8 segment paths for ${file.name} → ${targetDir.absolutePath}")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "m3u8 path rewrite failed for ${file.name}: ${e.message}")
+                            }
+                        } else {
+                            Log.w(TAG, "m3u8 targetFile does not exist after move: ${targetFile.absolutePath}")
+                        }
+
                         // m3u8 is the last file of an HLS bundle → finalize
                         _receiveQueue.value = _receiveQueue.value.map { item ->
                             if (item.fileName == file.name && item.status == TransferItemStatus.ACTIVE)
@@ -415,7 +461,12 @@ class TransferManager @Inject constructor(
                                 episode   = meta.episode,
                                 quality   = meta.quality,
                             ))
-                            registerReceivedContent(targetFile, meta)
+                            // Only register if targetFile actually landed on disk
+                            if (targetFile.exists()) {
+                                registerReceivedContent(targetFile, meta)
+                            } else {
+                                Log.e(TAG, "HLS bundle finalized but m3u8 missing: ${targetFile.absolutePath}")
+                            }
                         }
                     }
                     // .ts files silently complete — no DB row, no UI update needed

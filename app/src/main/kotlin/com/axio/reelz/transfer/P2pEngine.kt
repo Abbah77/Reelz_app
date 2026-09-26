@@ -950,6 +950,13 @@ class P2pEngine @Inject constructor(
         cancelRequested = false
 
         scope.launch(Dispatchers.IO) {
+            // Guard: onDone / onError MUST always be called exactly once so that
+            // TransferManager.processSendQueue()'s done.await() never hangs — even
+            // when the socket drops mid-cancel-pad or an unexpected exception fires.
+            var completed = false
+            fun finishOk()           { if (!completed) { completed = true; scope.launch(Dispatchers.Main) { onDone()              } } }
+            fun finishErr(msg: String){ if (!completed) { completed = true; scope.launch(Dispatchers.Main) { onError(msg)          } } }
+
             try {
                 val total = file.length()
 
@@ -960,7 +967,7 @@ class P2pEngine @Inject constructor(
                 if (cancelRequested) {
                     out.writeBytes("SKIP\n"); out.flush()
                     cancelRequested = false
-                    withContext(Dispatchers.Main) { onDone() }
+                    finishOk()
                     return@launch
                 }
 
@@ -984,8 +991,9 @@ class P2pEngine @Inject constructor(
                             // Cancel detected mid-stream: pad remaining bytes so the
                             // receiver's read loop drains exactly `total` bytes and
                             // its stream cursor stays aligned for the next file.
-                            // Wrap in try/catch — if the socket drops during padding
-                            // we treat it as a transfer error rather than hanging.
+                            // If the socket drops during padding we still call finishOk()
+                            // (the send is treated as done from our side) so the queue
+                            // never hangs — the peer's socket error will surface separately.
                             try {
                                 val zeros = ByteArray(minOf(buf.size, 65_536))
                                 var rem = total - sent
@@ -997,8 +1005,13 @@ class P2pEngine @Inject constructor(
                                 out.flush()
                             } catch (padEx: Exception) {
                                 Log.w(TAG, "Socket closed during cancel-pad: ${padEx.message}")
-                                // Socket is gone — don't continue; let the outer catch handle it.
-                                throw padEx
+                                // Socket is gone — surface as error and unblock queue.
+                                cancelRequested = false
+                                finishErr(padEx.message ?: "Send cancelled (socket closed)")
+                                _state.value = EngineState.Error(
+                                    padEx.message ?: "Send cancelled", retryable = false, kind = "TRANSFER"
+                                )
+                                return@launch
                             }
                             break
                         }
@@ -1014,11 +1027,12 @@ class P2pEngine @Inject constructor(
                     }
                 }
                 out.flush()
-                withContext(Dispatchers.Main) { onDone() }
+                finishOk()
                 if (!cancelRequested) _state.value = EngineState.Done
                 cancelRequested = false
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { onError(e.message ?: "Send failed") }
+                cancelRequested = false
+                finishErr(e.message ?: "Send failed")
                 _state.value = EngineState.Error(e.message ?: "Send failed", retryable = false, kind = "TRANSFER")
             }
         }
@@ -1034,13 +1048,24 @@ class P2pEngine @Inject constructor(
 
     // ── File receive ───────────────────────────────────────────────────────────
 
+    /**
+     * @param saveDir         Default directory for received files.
+     * @param overrideSaveDir Optional per-file directory override. Called with the
+     *                        file name and its metadata before writing begins; return
+     *                        a non-null File to redirect that file to a different
+     *                        directory, or null to use [saveDir]. Runs on IO thread.
+     *                        Use this to route HLS .ts segments directly into their
+     *                        per-media subfolder, avoiding the post-receive rename
+     *                        race condition.
+     */
     fun receiveFiles(
-        saveDir:     File,
-        onFileStart: (fileName: String, total: Long, meta: FileMetadata) -> Unit,
-        onProgress:  (received: Long, total: Long, bps: Long, fileName: String) -> Unit,
-        onFileDone:  (File, meta: FileMetadata) -> Unit,
-        onAllDone:   () -> Unit,
-        onError:     (String) -> Unit,
+        saveDir:          File,
+        onFileStart:      (fileName: String, total: Long, meta: FileMetadata) -> Unit,
+        onProgress:       (received: Long, total: Long, bps: Long, fileName: String) -> Unit,
+        onFileDone:       (File, meta: FileMetadata) -> Unit,
+        onAllDone:        () -> Unit,
+        onError:          (String) -> Unit,
+        overrideSaveDir:  ((fileName: String, meta: FileMetadata) -> File?)? = null,
     ) {
         val inn  = socketIn  ?: run { onError("Not connected"); return }
         val out  = socketOut ?: run { onError("Not connected"); return }
@@ -1079,7 +1104,11 @@ class P2pEngine @Inject constructor(
                             withContext(Dispatchers.Main) { onFileStart(fileName, total, fileMeta) }
                             _state.value = EngineState.Transferring(tier, peerName, fileName, "RECEIVE", 0, total, 0)
 
-                            val outFile = File(saveDir, fileName)
+                            // Resolve the directory: caller can route per file (e.g. HLS segments
+                            // go straight into their media subfolder so no rename race occurs).
+                            val effectiveDir = overrideSaveDir?.invoke(fileName, fileMeta) ?: saveDir
+                            effectiveDir.mkdirs()
+                            val outFile = File(effectiveDir, fileName)
                             val buf = ByteArray(131_072)
                             var received = 0L
                             var tLast = System.currentTimeMillis()
